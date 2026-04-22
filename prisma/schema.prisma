@@ -1,0 +1,134 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model AppSettings {
+  id                        String  @id @default("global")
+  paymentCycle              String  @default("BI_WEEKLY") // WEEKLY, BI_WEEKLY, MONTHLY
+  eddActive                 Boolean @default(true)
+  eddRemainingBalance       Float   @default(7200.00) 
+  baseEddWeeklyAmount       Float   @default(450.00)
+  
+  w2Active                  Boolean @default(false)
+  w2Amount                  Float   @default(0.00)
+  
+  upworkActive              Boolean @default(true)
+  upworkTaxProvisionPercent Float   @default(0.25)
+  upworkExpensesHoldActive  Boolean @default(false)
+  upworkExpensesHoldAmount  Float   @default(0.00)
+  upworkMinWithdrawalAmount Float   @default(0.00)
+  wifeMonthlyAmount         Float   @default(0.00)
+}
+
+model Earning {
+  id          String   @id @default(cuid())
+  amount      Float
+  date        DateTime @default(now())
+  description String?
+  isWithdrawn Boolean  @default(false)
+}
+
+model Withdrawal {
+  id          String   @id @default(cuid())
+  amount      Float
+  date        DateTime @default(now())
+  description String?
+}
+
+model DeductibleExpense {
+  id          String   @id @default(cuid())
+  amount      Float
+  date        DateTime @default(now())
+  description String?
+}
+
+model EddPayment {
+  id        String   @id @default(cuid())
+  amount    Float
+  date      DateTime @default(now())
+}
+
+model Client {
+  id        String    @id @default(cuid())
+  name      String
+  contracts Contract[]
+}
+
+model Contract {
+  id            String   @id @default(cuid())
+  name          String
+  status        String   @default("ACTIVE") // ACTIVE, COMPLETED, ON_HOLD
+  type          String   @default("HOURLY") // HOURLY, FIXED
+  grossRate     Float    @default(0.00)
+  netRate       Float    @default(0.00)
+  feePercent    Float    @default(10.0) // Percentage UpWork takes (e.g. 10.0 for 10%)
+  weeklyHours   Int      @default(0)
+  startDate     DateTime @default(now())
+  endDate       DateTime?
+  completedDate DateTime?
+  
+  clientId      String
+  client        Client   @relation(fields: [clientId], references: [id])
+  blocks        PlannedBlock[]
+  entries       ContractEntry[]
+}
+
+model ContractEntry {
+  id         String   @id @default(cuid())
+  date       DateTime @default(now())
+  grossPay   Float
+  netPay     Float
+  hours      Float    @default(0.0)
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+}
+
+model Bill {
+  id              String   @id @default(cuid())
+  name            String
+  amount          Float
+  dueDate         Int      @default(1)
+  withdrawalCycle String   @default("Q1") // Q1, Q2, Q3, Q4, MONTH
+  isAutoPay       Boolean  @default(true)
+}
+
+model Personal {
+  id              String   @id @default(cuid())
+  name            String
+  amount          Float
+  dueDate         Int      @default(1)
+  withdrawalCycle String   @default("Q1")
+}
+
+model YearlyCost {
+  id     String @id @default(cuid())
+  name   String
+  amount Float
+  month  Int    // 1-12
+  day    Int    @default(1)
+}
+
+model JobReported {
+  id           String   @id @default(cuid())
+  employerName String
+  date         DateTime @default(now())
+}
+
+model PlannedBlock {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  startTime   DateTime 
+  endTime     DateTime 
+  allDay      Boolean  @default(false)
+  color       String?  @default("#818cf8")
+  isRecurring Boolean  @default(false)
+  frequency   String?  // e.g., 'WEEKLY'
+  contractId  String?  
+  contract    Contract? @relation(fields: [contractId], references: [id])
+}

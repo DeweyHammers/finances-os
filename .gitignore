@@ -1,0 +1,19 @@
+# dependencies
+node_modules
+
+# next.js
+.next
+next-env.d.ts
+
+# build
+/app
+/dist
+
+/generated/prisma
+
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+/prisma/dev.db
+/prisma/dev.db-journal

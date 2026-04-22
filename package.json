@@ -1,0 +1,53 @@
+{
+  "private": true,
+  "name": "finances-os",
+  "description": "Finances OS Desktop Application",
+  "version": "1.0.0",
+  "author": "Richard Dewey Hammers",
+  "type": "module",
+  "main": "app/main.js",
+  "scripts": {
+    "dev": "nextron",
+    "build": "nextron build",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@hookform/resolvers": "^5.2.2",
+    "@mui/icons-material": "^9.0.0",
+    "@mui/material": "^9.0.0",
+    "@mui/material-nextjs": "^9.0.0",
+    "@mui/x-data-grid": "^9.0.1",
+    "@mui/x-date-pickers": "^9.0.0",
+    "@prisma/adapter-libsql": "^7.7.0",
+    "@refinedev/core": "^5.0.12",
+    "@refinedev/kbar": "^2.0.1",
+    "@refinedev/mui": "^8.0.2",
+    "@refinedev/nextjs-router": "^7.0.5",
+    "@refinedev/react-hook-form": "^5.0.4",
+    "@refinedev/simple-rest": "^6.0.1",
+    "date-fns": "^4.1.0",
+    "electron-serve": "^3.0.0",
+    "electron-store": "^11.0.2",
+    "libsql": "^0.5.29",
+    "react-big-calendar": "^1.19.4",
+    "react-hook-form": "^7.72.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@prisma/client": "^6.19.3",
+    "@types/node": "^20.11.16",
+    "@types/react": "^19.2.14",
+    "@types/react-big-calendar": "^1.16.3",
+    "electron": "^41.2.0",
+    "electron-builder": "^26.8.1",
+    "next": "^16.2.1",
+    "nextron": "^10.0.0",
+    "prisma": "^6.19.3",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
