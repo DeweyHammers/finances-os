@@ -36,7 +36,7 @@ export const ContractList: FC = () => {
         renderCell: (params: any) => (
           <Button
             component={Link}
-            href={`/Contract/${params.row.id}`}
+            href={`/Contract/details?id=${params.row.id}`}
             variant="contained"
             size="small"
             sx={{

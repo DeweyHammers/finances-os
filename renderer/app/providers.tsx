@@ -34,7 +34,7 @@ import PaymentsIcon from "@mui/icons-material/Payments";
 import CalculateIcon from "@mui/icons-material/Calculate";
 import { COLORS } from "../lib/constants";
 
-const API_URL = "http://localhost:8888/api";
+const API_URL = "http://localhost:5858/api";
 
 const theme = createTheme({
   palette: {
@@ -324,21 +324,23 @@ function App({ children }: { children: ReactNode }) {
   const memoizedDataProvider = useMemo(() => dataProvider(API_URL), []);
 
   return (
-    <Refine
-      routerProvider={routerProvider}
-      dataProvider={memoizedDataProvider}
-      notificationProvider={notificationProvider}
-      resources={resources}
-      options={{
-        syncWithLocation: true,
-        warnWhenUnsavedChanges: false,
-      }}
-    >
-      <ThemedLayout Header={CustomHeader} Sider={CustomSider}>
-        <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>
-      </ThemedLayout>
-      <RefineKbar />
-    </Refine>
+    <Suspense fallback={<div>Loading...</div>}>
+      <Refine
+        routerProvider={routerProvider}
+        dataProvider={memoizedDataProvider}
+        notificationProvider={notificationProvider}
+        resources={resources}
+        options={{
+          syncWithLocation: true,
+          warnWhenUnsavedChanges: false,
+        }}
+      >
+        <ThemedLayout Header={CustomHeader} Sider={CustomSider}>
+          {children}
+        </ThemedLayout>
+        <RefineKbar />
+      </Refine>
+    </Suspense>
   );
 }
 

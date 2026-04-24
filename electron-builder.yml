@@ -10,11 +10,17 @@ files:
       - package.json
       - app
       - prisma/dev.db
+asarUnpack:
+  - prisma/**
+extraResources:
+  - from: node_modules/.prisma/client/query_engine-windows.dll.node
+    to: prisma/query_engine-windows.dll.node
 publish: null
 win:
   icon: resources/icon.ico
   target:
     - target: nsis
+    - target: portable
 nsis:
   oneClick: true
   perMachine: false

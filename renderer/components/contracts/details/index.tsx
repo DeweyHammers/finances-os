@@ -18,7 +18,7 @@ import { AdapterDateFns } from "@mui/x-date-pickers/AdapterDateFns";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import { useParams, useRouter } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import {
   useShow,
   useCreate,
@@ -34,7 +34,8 @@ import { EntryTable } from "./EntryTable";
 import { EntryForm } from "./EntryForm";
 
 export const ContractDetailsView: FC = () => {
-  const { id } = useParams();
+  const searchParams = useSearchParams();
+  const id = searchParams.get("id");
   const router = useRouter();
   const [editingEntry, setEditingEntry] = useState<any>(null);
 

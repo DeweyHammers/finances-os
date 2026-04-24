@@ -5,53 +5,60 @@ A comprehensive financial operating system and desktop workstation built for fre
 ## Core Features
 
 ### 💼 Contract & Client Management
-
 - **Smart Contracts:** Manage both hourly and fixed-rate contracts with automated net/gross rate calculations.
 - **Upwork Integration:** Built-in support for platform fees (e.g., 10%) and tax provision tracking.
 - **Client CRM:** Centralized database linking clients to their respective active and historical contracts.
 
 ### 💰 Comprehensive Financial Tracking
-
 - **Income & Earnings:** Track every dollar from various sources including contract pay, W2 income, and EDD payments.
 - **Withdrawal Management:** Organize funds into specific withdrawal cycles (Weekly, Bi-weekly, Monthly) or quarterly buckets (Q1-Q4).
 - **Expense Optimization:** Dedicated tracking for deductible business expenses to simplify tax season.
 - **Tax Provisions:** Automated calculation of tax holdings based on configurable percentages.
 
 ### 📅 Advanced Budgeting & Planning
-
 - **Bill Tracking:** Manage recurring monthly bills and personal expenses with automated status tracking.
 - **Yearly Cost Planning:** Forecast and prepare for annual expenses distributed across the calendar year.
 - **EDD Dashboard:** Monitor unemployment benefits, remaining balances, and weekly reporting status.
 - **Cash Flow Analysis:** Real-time dashboards for income gap analysis and bidding strategy planning.
 
-### 🛠 Technical Architecture
+## 🛠 Technical Architecture
 
 - **Desktop Core:** Built on **Nextron** (Electron + Next.js) for a high-performance, native desktop experience.
+- **Backend:** Self-contained **Express API** running within the Electron main process (Port 5858).
 - **UI Framework:** Leverages **Refine** and **Material UI (MUI)** for a data-heavy, professional interface.
-- **Data Layer:** Powered by **Prisma** with a local **SQLite/LibSQL** database for speed and offline-first reliability.
-- **Type Safety:** Full TypeScript implementation with **Zod** schema validation and **React Hook Form**.
+- **Data Layer:** Powered by **Prisma** with a local **SQLite** database.
+- **Production Storage:** Data is stored in your Windows user profile at `%APPDATA%\finances-os\database.db`, ensuring your data survives application updates.
 
-## Project Structure
+## 🚀 Running the App
 
-- `/main`: Electron main process and system-level integrations.
-- `/renderer`: Next.js frontend application containing all UI components and business logic.
+### Production Mode (Recommended)
+The app is now optimized for a standalone native experience.
+
+1. **Build the Application:**
+   ```bash
+   npm run build
+   ```
+2. **Launch:**
+   - Run the executable directly from: `dist\win-unpacked\Finances OS.exe`
+   - Use the Desktop shortcut created via the setup script.
+
+3. **Shortcut Setup (Bypassing Windows Smart App Control):**
+   Windows 11 may block local unsigned executables. To bypass this safely while using production files, run:
+   ```powershell
+   powershell.exe -ExecutionPolicy Bypass -File setup-desktop-icon.ps1
+   ```
+   This script creates shortcuts that use the **signed Electron host** to load your production code, which Windows trusts.
+
+### Development Mode
+For making changes and testing:
+```bash
+npm run dev
+```
+
+## 📂 Project Structure
+
+- `/main`: Electron main process and built-in Express API server.
+- `/renderer`: Next.js frontend application containing all UI components.
+- `/shared`: Shared logic (Prisma client, constants) used by both Main and Renderer processes.
 - `/prisma`: Database schema and migration management.
-- `/lib`: Shared utilities for date formatting, payment cycles, and financial calculations.
-
-## 🚀 Desktop Experience & Automation
-
-To provide a seamless, OS-like experience on Windows, the project includes several custom automation scripts:
-
-### Instant Launch Sequence
-The application is launched via `launch-dev.bat`, which orchestrates a high-performance startup:
-1. **Booster Splash:** Launches an independent, lightweight Electron splash screen (`resources/pre-splash.cjs`) instantly for immediate visual feedback.
-2. **Environment Cleanup:** Proactively clears lingering Node/Electron processes and releases locked ports to ensure a fresh session.
-3. **Terminal Hider:** Starts a background PowerShell worker (`hide-terminal.ps1`) that automatically hides all terminal and console windows associated with the project, keeping the workspace clean.
-
-### Startup Handshake
-The splash screen and main application communicate through a robust **Signal-File Handshake**:
-- The splash screen creates a "heartbeat" file in the system temp directory and monitors it.
-- Once the main application and Next.js dev server are fully initialized and ready to show, the main process deletes the signal file.
-- The splash screen detects the deletion and self-destructs instantly, providing a smooth transition to the main dashboard.
-- **Manual Override:** The splash screen is clickable; if for any reason it hangs during development, a single click will dismiss it.
-
+- `/resources`: Application icons and platform-specific assets.
