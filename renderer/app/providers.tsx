@@ -78,13 +78,23 @@ const Title = () => (
     sx={{
       display: "flex",
       alignItems: "center",
-      gap: "10px",
+      gap: "12px",
       padding: "24px 16px",
       color: "primary.main",
       overflow: "hidden",
       width: "100%",
     }}
   >
+    <Box
+      component="img"
+      src="/images/logo.png"
+      sx={{
+        width: 32,
+        height: 32,
+        flexShrink: 0,
+        borderRadius: "6px",
+      }}
+    />
     <Typography
       variant="h6"
       sx={{
@@ -171,14 +181,6 @@ function App({ children }: { children: ReactNode }) {
 
   const resources = useMemo(() => {
     const allResources = [
-      {
-        name: "PlannedBlock",
-        list: "/Calendar",
-        meta: {
-          label: "Calendar",
-          icon: <CalendarMonthIcon />,
-        },
-      },
       {
         name: "BillsGroup",
         meta: {

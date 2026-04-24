@@ -85,15 +85,7 @@ export async function PATCH(
   }
 
   // Remove relation fields and id from data to prevent Prisma errors
-  const {
-    client,
-    contracts,
-    plannedBlocks,
-    entries,
-    blocks,
-    id: _,
-    ...updateData
-  } = data;
+  const { client, contracts, entries, id: _, ...updateData } = data;
 
   // Handle Contract specific logic
   if (resource === "Contract") {
@@ -103,13 +95,6 @@ export async function PATCH(
         connect: { id: updateData.clientId },
       };
       delete updateData.clientId;
-    }
-  }
-
-  if (resource === "PlannedBlock") {
-    // If contractId is empty string, make it null
-    if (updateData.contractId === "") {
-      updateData.contractId = null;
     }
   }
 

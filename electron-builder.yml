@@ -1,6 +1,6 @@
-appId: com.example.nextron
-productName: My Nextron App
-copyright: Copyright © 2026 Yoshihide Shiono
+appId: com.richarddeweyhammers.finances-os
+productName: Finances OS
+copyright: Copyright © 2026 Richard Dewey Hammers
 directories:
   output: dist
   buildResources: resources
@@ -9,4 +9,17 @@ files:
     filter:
       - package.json
       - app
+      - prisma/dev.db
 publish: null
+win:
+  icon: resources/icon.ico
+  target:
+    - target: nsis
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Finances OS
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+

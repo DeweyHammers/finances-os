@@ -9,11 +9,15 @@ next-env.d.ts
 /app
 /dist
 
+# database
 /generated/prisma
-
 *.db
 *.db-journal
 *.sqlite
 *.sqlite-journal
 /prisma/dev.db
 /prisma/dev.db-journal
+
+# debugging logs
+/dev-log.txt
+/launch-debug.log

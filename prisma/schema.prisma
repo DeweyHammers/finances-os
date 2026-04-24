@@ -74,7 +74,6 @@ model Contract {
   
   clientId      String
   client        Client   @relation(fields: [clientId], references: [id])
-  blocks        PlannedBlock[]
   entries       ContractEntry[]
 }
 
@@ -117,18 +116,4 @@ model JobReported {
   id           String   @id @default(cuid())
   employerName String
   date         DateTime @default(now())
-}
-
-model PlannedBlock {
-  id          String   @id @default(cuid())
-  title       String
-  description String?
-  startTime   DateTime 
-  endTime     DateTime 
-  allDay      Boolean  @default(false)
-  color       String?  @default("#818cf8")
-  isRecurring Boolean  @default(false)
-  frequency   String?  // e.g., 'WEEKLY'
-  contractId  String?  
-  contract    Contract? @relation(fields: [contractId], references: [id])
 }

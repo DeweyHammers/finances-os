@@ -59,12 +59,6 @@ export async function GET(
       };
     }
 
-    if (resource === "PlannedBlock") {
-      queryOptions.include = {
-        contract: true,
-      };
-    }
-
     // Dynamic Filtering
     searchParams.forEach((value, key) => {
       // Skip known non-filter keys
@@ -149,7 +143,7 @@ export async function POST(
   }
 
   // Remove relation fields and potential extra fields
-  const { client, contracts, plannedBlocks, ...createData } = data;
+  const { client, contracts, ...createData } = data;
 
   if (resource === "Contract") {
     delete (createData as any).estimatedPayDate;
@@ -173,13 +167,6 @@ export async function POST(
         connect: { id: createData.contractId },
       };
       delete createData.contractId;
-    }
-  }
-
-  if (resource === "PlannedBlock") {
-    // If contractId is empty string, make it null
-    if (createData.contractId === "") {
-      createData.contractId = null;
     }
   }
 
