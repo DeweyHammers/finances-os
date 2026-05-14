@@ -48,20 +48,34 @@ export const ResourceEditModal: FC<ResourceEditModalProps> = ({
       // Process all fields to find and format dates for native <input type="date">
       Object.keys(formattedData).forEach((key) => {
         const value = formattedData[key];
-        if (value) {
+        const lowerKey = key.toLowerCase();
+        
+        // Exclude specific numeric fields that contain date-like words but are just numbers
+        const isExcluded = 
+          lowerKey === "duedate" || 
+          lowerKey === "month" || 
+          lowerKey === "day" ||
+          lowerKey === "hours" ||
+          lowerKey === "weeklyhours";
+
+        if (value && !isExcluded) {
           const isDateField =
-            key.toLowerCase().includes("date") ||
-            key.toLowerCase().includes("start") ||
-            key.toLowerCase().includes("end");
+            lowerKey.includes("date") ||
+            lowerKey.includes("start") ||
+            lowerKey.includes("end");
 
           if (isDateField) {
             try {
               const d = new Date(value);
-              if (!isNaN(d.getTime())) {
+              if (!isNaN(d.getTime()) && typeof value === "string") {
+                // Only format if it looks like a valid ISO string or date string
+                // and NOT if it's a small number that could be a timestamp or ID
                 const year = d.getUTCFullYear();
-                const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-                const day = String(d.getUTCDate()).padStart(2, "0");
-                formattedData[key] = `${year}-${month}-${day}`;
+                if (year > 1970) {
+                  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
+                  const day = String(d.getUTCDate()).padStart(2, "0");
+                  formattedData[key] = `${year}-${month}-${day}`;
+                }
               }
             } catch (e) {
               // Ignore parsing errors

@@ -117,3 +117,67 @@ model JobReported {
   employerName String
   date         DateTime @default(now())
 }
+
+model Account {
+  id           String               @id @default(cuid())
+  name         String
+  notes        String?
+  closed       Boolean              @default(false)
+  sortOrder    Int                  @default(0)
+  transactions AccountTransaction[]
+}
+
+model AccountTransaction {
+  id             String              @id @default(cuid())
+  accountId      String
+  account        Account             @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  date           DateTime            @default(now())
+  payeeId        String?
+  payee          Payee?              @relation(fields: [payeeId], references: [id], onDelete: SetNull)
+  categoryItemId String?
+  categoryItem   BudgetCategoryItem? @relation(fields: [categoryItemId], references: [id], onDelete: SetNull)
+  categoryName   String?
+  memo           String?
+  inflowCents    Int                 @default(0)
+  outflowCents   Int                 @default(0)
+  isAdjustment   Boolean             @default(false)
+  cleared        Boolean             @default(true)
+}
+
+model Payee {
+  id           String               @id @default(cuid())
+  name         String               @unique
+  transactions AccountTransaction[]
+}
+
+model BudgetCategoryGroup {
+  id        String               @id @default(cuid())
+  name      String
+  sortOrder Int                  @default(0)
+  items     BudgetCategoryItem[]
+}
+
+model BudgetCategoryItem {
+  id                 String               @id @default(cuid())
+  groupId            String
+  group              BudgetCategoryGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  name               String
+  sortOrder          Int                  @default(0)
+  sourceType         String               // "BILL" | "PERSONAL_NAME" | "CUSTOM"
+  sourceBillId       String?
+  sourcePersonalName String?
+  customAmountCents  Int?
+  customCycle        String?              // Q1-Q4 or null
+  monthAssignments   BudgetMonth[]
+  transactions       AccountTransaction[]
+}
+
+model BudgetMonth {
+  id             String             @id @default(cuid())
+  month          DateTime
+  categoryItemId String
+  categoryItem   BudgetCategoryItem @relation(fields: [categoryItemId], references: [id], onDelete: Cascade)
+  assignedCents  Int                @default(0)
+
+  @@unique([month, categoryItemId])
+}

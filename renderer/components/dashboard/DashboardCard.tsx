@@ -21,21 +21,35 @@ export const DashboardCard: React.FC<DashboardCardProps> = ({
   suffix = "",
   precision = 2,
 }) => {
-  // Aggressive trim to remove standard spaces, non-breaking spaces, and tabs
   const cleanName = name.replace(/^[\s\u00A0]+|[\s\u00A0]+$/g, "");
   const cleanSubtitle = subtitle?.replace(/^[\s\u00A0]+|[\s\u00A0]+$/g, "");
 
   return (
     <Card
+      elevation={0}
       sx={{
-        mb: 1,
-        bgcolor: "rgba(30, 41, 59, 0.4)",
-        borderLeft: "3px solid",
-        borderColor: color,
-        height: "100%",
+        mb: 1.5,
+        bgcolor: "rgba(15, 23, 42, 0.4)",
+        borderRadius: 3,
+        border: "1px solid rgba(255, 255, 255, 0.03)",
+        position: "relative",
+        overflow: "hidden",
       }}
     >
-      <CardContent sx={{ py: 1.25, px: 2, "&:last-child": { pb: 1.25 } }}>
+      {/* Subtle indicator bar */}
+      <Box
+        sx={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 4,
+          bgcolor: color,
+          opacity: 0.8,
+        }}
+      />
+
+      <CardContent sx={{ py: 2, px: 2.5, "&:last-child": { pb: 2 } }}>
         <Box
           sx={{
             display: "flex",
@@ -46,12 +60,11 @@ export const DashboardCard: React.FC<DashboardCardProps> = ({
         >
           <Box sx={{ flex: 1, textAlign: "left" }}>
             <Typography
-              variant="body2"
+              variant="body1"
               sx={{
                 fontWeight: 700,
                 color: "white",
                 display: "block",
-                fontSize: "0.95rem",
                 textAlign: "left",
                 m: 0,
                 p: 0,
@@ -65,10 +78,10 @@ export const DashboardCard: React.FC<DashboardCardProps> = ({
                 sx={{
                   color: "text.secondary",
                   fontSize: "0.75rem",
+                  fontWeight: 600,
                   display: "block",
                   textAlign: "left",
-                  m: 0,
-                  p: 0,
+                  mt: 0.5,
                 }}
               >
                 {cleanSubtitle}
@@ -76,16 +89,20 @@ export const DashboardCard: React.FC<DashboardCardProps> = ({
             )}
           </Box>
           <Typography
-            variant="subtitle1"
+            variant="h6"
             sx={{
-              fontWeight: 800,
+              fontWeight: 900,
               color: color === "primary.main" ? "primary.light" : color,
               ml: 2,
               whiteSpace: "nowrap",
+              letterSpacing: -0.5,
             }}
           >
             {isCurrency ? "$" : ""}
-            {Number(amount).toFixed(precision)}
+            {Number(amount).toLocaleString(undefined, {
+              minimumFractionDigits: precision,
+              maximumFractionDigits: precision,
+            })}
             {suffix}
           </Typography>
         </Box>

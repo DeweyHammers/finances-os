@@ -4,6 +4,7 @@ import { Box, Grid, Chip, Typography, Paper } from "@mui/material";
 import { SummarySection } from "./SummarySection";
 import { DashboardCard } from "./DashboardCard";
 import { getCycleColor, getCyclesForPaymentCycle } from "../../lib/cycle-utils";
+import PersonIcon from "@mui/icons-material/Person";
 
 interface PersonalBill {
   id: string;
@@ -22,8 +23,10 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   settings,
 }) => {
   if (!settings) return null;
-  const paymentCycle = settings.paymentCycle || "BI_WEEKLY";
-  const cycles = getCyclesForPaymentCycle(paymentCycle);
+  const cycles = getCyclesForPaymentCycle();
+  const activeCycles = cycles.filter((cycle) =>
+    personalBills.some((b) => b.withdrawalCycle === cycle),
+  );
 
   const totalPersonal = personalBills.reduce(
     (acc, curr) => acc + (Number(curr.amount) || 0),
@@ -31,9 +34,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   );
 
   const renderCycle = (cycle: string) => {
-    const cycleBills = personalBills.filter((b) =>
-      paymentCycle === "MONTHLY" ? true : b.withdrawalCycle === cycle,
-    );
+    const cycleBills = personalBills.filter((b) => b.withdrawalCycle === cycle);
     if (cycleBills.length === 0) return null;
 
     const subtotal = cycleBills.reduce(
@@ -45,58 +46,55 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
     return (
       <Grid
         key={cycle}
-        size={{ xs: 12, sm: cycles.length > 2 ? 6 : 12 / cycles.length }}
+        size={{
+          xs: 12,
+          sm: activeCycles.length > 1 ? 6 : 12,
+          md: activeCycles.length > 0 ? 12 / activeCycles.length : 12,
+        }}
       >
-        <Box sx={{ mb: 4, textAlign: "center" }}>
-          <Chip
-            label={cycle === "MONTH" ? "FULL MONTH" : `${cycle} CYCLE`}
-            sx={{
-              borderRadius: 1.5,
-              fontSize: "0.75rem",
-              fontWeight: 900,
-              bgcolor: `${cycleColor}25`,
-              color: cycleColor,
-              height: 32,
-              px: 2,
-              mb: 2,
-            }}
-          />
-          <Box
-            sx={{
-              py: 1.5,
-              borderRadius: 2,
-              bgcolor: `${cycleColor}10`,
-              border: `1px solid ${cycleColor}25`,
-              mb: 2,
-            }}
-          >
+        <Box sx={{ mb: 2 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+            <Chip
+              label={`${cycle} CYCLE`}
+              sx={{
+                borderRadius: 1.5,
+                fontSize: "0.65rem",
+                fontWeight: 900,
+                bgcolor: `${cycleColor}15`,
+                color: cycleColor,
+                height: 24,
+                px: 1,
+              }}
+            />
             <Typography
               variant="caption"
               sx={{
-                color: "text.secondary",
-                fontSize: "0.7rem",
-                display: "block",
                 fontWeight: 800,
-                letterSpacing: "1px",
+                color: "text.secondary",
+                letterSpacing: 0.5,
               }}
             >
-              SUBTOTAL
-            </Typography>
-            <Typography
-              variant="h5"
-              sx={{ fontWeight: 900, color: cycleColor }}
-            >
-              ${subtotal.toFixed(2)}
+              SUBTOTAL:{" "}
+              <span style={{ color: "white" }}>
+                $
+                {subtotal.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </span>
             </Typography>
           </Box>
-          {cycleBills.map((bill) => (
-            <DashboardCard
-              key={bill.id}
-              name={bill.name}
-              amount={bill.amount}
-              color={cycleColor}
-            />
-          ))}
+
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+            {cycleBills.map((bill) => (
+              <DashboardCard
+                key={bill.id}
+                name={bill.name}
+                amount={bill.amount}
+                color={cycleColor}
+              />
+            ))}
+          </Box>
         </Box>
       </Grid>
     );
@@ -104,22 +102,24 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
 
   return (
     <SummarySection
-      title="Personal Overview"
-      totalLabel="PERSONAL TOTAL"
+      title="Personal"
+      icon={<PersonIcon />}
+      totalLabel="Personal Total"
       totalAmount={totalPersonal}
     >
-      <Grid container spacing={4}>
+      <Grid container spacing={3}>
         {personalBills.length > 0 ? (
           cycles.map((cycle) => renderCycle(cycle))
         ) : (
           <Grid size={{ xs: 12 }}>
             <Paper
-              variant="outlined"
+              elevation={0}
               sx={{
-                py: 4,
+                py: 6,
                 textAlign: "center",
-                bgcolor: "rgba(255,255,255,0.02)",
-                borderStyle: "dashed",
+                bgcolor: "rgba(15, 23, 42, 0.2)",
+                borderRadius: 3,
+                border: "1px dashed rgba(255,255,255,0.05)",
               }}
             >
               <Typography
@@ -127,7 +127,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
                 color="text.secondary"
                 sx={{ fontStyle: "italic", fontWeight: 600 }}
               >
-                No personal bills recorded
+                No personal items recorded
               </Typography>
             </Paper>
           </Grid>

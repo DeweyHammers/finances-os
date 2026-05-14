@@ -92,6 +92,7 @@ export const BillList = () => {
       columns={columns}
       createModal={BillCreate}
       editModal={BillEdit}
+      initialSorters={[{ field: "dueDate", order: "asc" }]}
     />
   );
 };

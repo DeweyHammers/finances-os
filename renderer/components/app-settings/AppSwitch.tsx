@@ -15,7 +15,7 @@ export const AppSwitch = styled(MuiSwitch)(({ theme }) => ({
       transform: "translateX(18px)",
       color: "#fff",
       "& + .MuiSwitch-track": {
-        backgroundColor: "#23a559",
+        backgroundColor: "#3DBC83",
         opacity: 1,
         border: 0,
       },
