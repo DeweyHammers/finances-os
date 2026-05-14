@@ -2,7 +2,7 @@
 
 import { useState, useMemo, FC, ChangeEvent } from "react";
 import { useDataGrid } from "@refinedev/mui";
-import { DataGrid, GridColDef } from "@mui/x-data-grid";
+import { DataGrid, GridColDef, GridSortModel } from "@mui/x-data-grid";
 import {
   useModalForm,
   UseModalFormReturnType,
@@ -39,11 +39,13 @@ interface ResourceListProps {
     modalProps: UseModalFormReturnType<BaseRecord, HttpError, FieldValues>;
   }>;
   initialFilters?: CrudFilters;
+  initialSorters?: { field: string; order: "asc" | "desc" }[];
   renderExtraFilters?: (
     setFilters: (filters: CrudFilters, behavior?: "merge" | "replace") => void,
     currentFilters: CrudFilters,
   ) => React.ReactNode;
   height?: string;
+  searchField?: string;
 }
 
 export const ResourceList: FC<ResourceListProps> = ({
@@ -53,11 +55,40 @@ export const ResourceList: FC<ResourceListProps> = ({
   createModal: CreateModal,
   editModal: EditModal,
   initialFilters,
+  initialSorters: userInitialSorters,
   renderExtraFilters,
   height = "calc(100vh - 120px)",
+  searchField = "name",
 }) => {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const { mutate: deleteMutate } = useDelete();
+
+  const initialSorters = useMemo(() => {
+    if (userInitialSorters) return userInitialSorters;
+
+    const hasDateField = userColumns.some(
+      (col) => col.field === "date" || col.field === "dueDate",
+    );
+    if (hasDateField) {
+      return [
+        {
+          field: userColumns.some((c) => c.field === "date")
+            ? "date"
+            : "dueDate",
+          order: "desc" as const,
+        },
+      ];
+    }
+    return [];
+  }, [userColumns, userInitialSorters]);
+  const memoizedInitialFilters = useMemo(
+    () => initialFilters,
+    [initialFilters],
+  );
+
+  const [sortModel, setSortModel] = useState<GridSortModel>(() =>
+    initialSorters.map((s) => ({ field: s.field, sort: s.order })),
+  );
 
   const {
     dataGridProps,
@@ -67,12 +98,15 @@ export const ResourceList: FC<ResourceListProps> = ({
     resource: resource,
     syncWithLocation: true,
     sorters: {
-      initial: [{ field: "date", order: "desc" }],
+      mode: "off",
+      initial: initialSorters,
     },
     filters: {
-      initial: initialFilters,
+      initial: memoizedInitialFilters,
     },
   });
+
+  const resourcesWithDate: string[] = [];
 
   const createModalProps = useModalForm<BaseRecord, HttpError, FieldValues>({
     refineCoreProps: {
@@ -80,9 +114,11 @@ export const ResourceList: FC<ResourceListProps> = ({
       action: "create",
     },
     syncWithLocation: true,
-    defaultValues: {
-      date: new Date().toISOString().split("T")[0],
-    },
+    defaultValues: resourcesWithDate.includes(resource)
+      ? {
+          date: new Date().toISOString().split("T")[0],
+        }
+      : {},
   });
 
   const editModalProps = useModalForm<BaseRecord, HttpError, FieldValues>({
@@ -167,7 +203,7 @@ export const ResourceList: FC<ResourceListProps> = ({
     setFilters(
       [
         {
-          field: "name",
+          field: searchField,
           operator: "contains",
           value: e.target.value || undefined,
         },
@@ -294,6 +330,9 @@ export const ResourceList: FC<ResourceListProps> = ({
             disableColumnMenu
             disableColumnFilter
             autoHeight={false}
+            sortingMode="client"
+            sortModel={sortModel}
+            onSortModelChange={(model) => setSortModel(model)}
             sx={{
               border: "none",
               "& .MuiDataGrid-columnSeparator": {

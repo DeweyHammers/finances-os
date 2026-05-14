@@ -45,6 +45,14 @@ export const YearlyCostList = () => {
           if (!row.month || !row.day) return "-";
           return `${SHORT_MONTHS[row.month - 1]} ${row.day}`;
         },
+        sortComparator: (v1, v2, param1, param2) => {
+          const row1 = param1.api.getRow(param1.id);
+          const row2 = param2.api.getRow(param2.id);
+          const m1 = row1.month || 0;
+          const m2 = row2.month || 0;
+          if (m1 !== m2) return m1 - m2;
+          return (row1.day || 0) - (row2.day || 0);
+        },
         renderCell: (params) => (
           <Typography sx={{ color: "text.secondary", fontSize: "1rem" }}>
             {params.value}
@@ -62,6 +70,7 @@ export const YearlyCostList = () => {
       columns={columns}
       createModal={YearlyCostCreate}
       editModal={YearlyCostEdit}
+      initialSorters={[{ field: "month", order: "asc" }]}
     />
   );
 };

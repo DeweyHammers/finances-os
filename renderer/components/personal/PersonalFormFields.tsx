@@ -79,23 +79,6 @@ export const PersonalFormFields = ({
       </Grid>
       <Grid size={{ xs: 12 }}>
         <TextField
-          {...register("dueDate", {
-            required: "Required",
-            valueAsNumber: true,
-            min: 1,
-            max: 31,
-          })}
-          label="Due Day (1-31)"
-          type="number"
-          fullWidth
-          variant="outlined"
-          slotProps={{ inputLabel: { shrink: true } }}
-          error={!!errors.dueDate}
-          helperText={errors.dueDate?.message as any}
-        />
-      </Grid>
-      <Grid size={{ xs: 12 }}>
-        <TextField
           {...register("withdrawalCycle", { required: "Required" })}
           select
           label="Withdrawal Cycle"

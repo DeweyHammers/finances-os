@@ -22,7 +22,7 @@ win:
     - target: nsis
     - target: portable
 nsis:
-  oneClick: true
+  oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   shortcutName: Finances OS

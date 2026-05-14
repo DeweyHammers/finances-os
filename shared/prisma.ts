@@ -32,6 +32,9 @@ if (isProd && app) {
   const actualResourcesPath = path.dirname(appPath);
 
   if (!fs.existsSync(dbPath)) {
+    prismaLog(
+      `Database not found at ${dbPath}, attempting to copy template...`,
+    );
     const templateDbPath = path.join(
       actualResourcesPath,
       "app.asar.unpacked/prisma/dev.db",
@@ -44,14 +47,25 @@ if (isProd && app) {
     try {
       if (fs.existsSync(templateDbPath)) {
         fs.copyFileSync(templateDbPath, dbPath);
+        prismaLog("Database template copied from unpacked resources");
       } else if (fs.existsSync(templateDbPathInAsar)) {
         fs.copyFileSync(templateDbPathInAsar, dbPath);
+        prismaLog("Database template copied from asar resources");
+      } else {
+        prismaLog(
+          "CRITICAL: Database template not found in any expected location",
+        );
       }
     } catch (e: any) {
       prismaLog(`Failed to copy database template: ${e.message}`);
     }
+  } else {
+    prismaLog(`Using existing database at ${dbPath}`);
   }
-  dbUrl = `file:${dbPath}`;
+  // Use forward slashes for SQLite on Windows and ensure it's absolute
+  const absoluteDbPath = path.resolve(dbPath);
+  dbUrl = `file:${absoluteDbPath.replace(/\\/g, "/")}`;
+  prismaLog(`Production Database URL: ${dbUrl}`);
 
   // Handle Query Engine path
   const enginePath = path.join(

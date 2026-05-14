@@ -13,6 +13,17 @@ async function main() {
       baseEddWeeklyAmount: 450.0,
     },
   });
+
+  const groupCount = await prisma.budgetCategoryGroup.count();
+  if (groupCount === 0) {
+    await prisma.budgetCategoryGroup.createMany({
+      data: [
+        { name: "Checking", sortOrder: 0 },
+        { name: "Savings", sortOrder: 1 },
+      ],
+    });
+  }
+
   console.log("Seed complete.");
 }
 

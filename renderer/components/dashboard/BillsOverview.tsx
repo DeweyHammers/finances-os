@@ -4,6 +4,7 @@ import { Box, Grid, Chip, Typography, Paper } from "@mui/material";
 import { SummarySection } from "./SummarySection";
 import { DashboardCard } from "./DashboardCard";
 import { getCycleColor, getCyclesForPaymentCycle } from "../../lib/cycle-utils";
+import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 
 interface Bill {
   id: string;
@@ -23,8 +24,10 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
   settings,
 }) => {
   if (!settings) return null;
-  const paymentCycle = settings.paymentCycle || "BI_WEEKLY";
-  const cycles = getCyclesForPaymentCycle(paymentCycle);
+  const cycles = getCyclesForPaymentCycle();
+  const activeCycles = cycles.filter((cycle) =>
+    bills.some((b) => b.withdrawalCycle === cycle),
+  );
 
   const getOrdinal = (n: number) => {
     const s = ["th", "st", "nd", "rd"];
@@ -38,9 +41,9 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
   );
 
   const renderCycle = (cycle: string) => {
-    const cycleBills = bills.filter((b) =>
-      paymentCycle === "MONTHLY" ? true : b.withdrawalCycle === cycle,
-    );
+    const cycleBills = bills
+      .filter((b) => b.withdrawalCycle === cycle)
+      .sort((a, b) => (Number(a.dueDate) || 0) - (Number(b.dueDate) || 0));
     if (cycleBills.length === 0) return null;
 
     const subtotal = cycleBills.reduce(
@@ -52,59 +55,56 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
     return (
       <Grid
         key={cycle}
-        size={{ xs: 12, sm: cycles.length > 2 ? 6 : 12 / cycles.length }}
+        size={{
+          xs: 12,
+          sm: activeCycles.length > 1 ? 6 : 12,
+          md: activeCycles.length > 0 ? 12 / activeCycles.length : 12,
+        }}
       >
-        <Box sx={{ mb: 4, textAlign: "center" }}>
-          <Chip
-            label={cycle === "MONTH" ? "FULL MONTH" : `${cycle} CYCLE`}
-            sx={{
-              borderRadius: 1.5,
-              fontSize: "0.75rem",
-              fontWeight: 900,
-              bgcolor: `${cycleColor}25`,
-              color: cycleColor,
-              height: 32,
-              px: 2,
-              mb: 2,
-            }}
-          />
-          <Box
-            sx={{
-              py: 1.5,
-              borderRadius: 2,
-              bgcolor: `${cycleColor}10`,
-              border: `1px solid ${cycleColor}25`,
-              mb: 2,
-            }}
-          >
+        <Box sx={{ mb: 2 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
+            <Chip
+              label={`${cycle} CYCLE`}
+              sx={{
+                borderRadius: 1.5,
+                fontSize: "0.65rem",
+                fontWeight: 900,
+                bgcolor: `${cycleColor}15`,
+                color: cycleColor,
+                height: 24,
+                px: 1,
+              }}
+            />
             <Typography
               variant="caption"
               sx={{
-                color: "text.secondary",
-                fontSize: "0.7rem",
-                display: "block",
                 fontWeight: 800,
-                letterSpacing: "1px",
+                color: "text.secondary",
+                letterSpacing: 0.5,
               }}
             >
-              SUBTOTAL
-            </Typography>
-            <Typography
-              variant="h5"
-              sx={{ fontWeight: 900, color: cycleColor }}
-            >
-              ${subtotal.toFixed(2)}
+              SUBTOTAL:{" "}
+              <span style={{ color: "white" }}>
+                $
+                {subtotal.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </span>
             </Typography>
           </Box>
-          {cycleBills.map((bill) => (
-            <DashboardCard
-              key={bill.id}
-              name={bill.name}
-              amount={bill.amount}
-              subtitle={`Due on the ${bill.dueDate}${getOrdinal(bill.dueDate)}`}
-              color={cycleColor}
-            />
-          ))}
+
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+            {cycleBills.map((bill) => (
+              <DashboardCard
+                key={bill.id}
+                name={bill.name}
+                amount={bill.amount}
+                subtitle={`Due on the ${bill.dueDate}${getOrdinal(bill.dueDate)}`}
+                color={cycleColor}
+              />
+            ))}
+          </Box>
         </Box>
       </Grid>
     );
@@ -112,22 +112,24 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
 
   return (
     <SummarySection
-      title="Bills Overview"
-      totalLabel="FULL MONTHLY TOTAL"
+      title="Bills"
+      icon={<ReceiptLongIcon />}
+      totalLabel="Full Month Total"
       totalAmount={totalFullBills}
     >
-      <Grid container spacing={4}>
+      <Grid container spacing={3}>
         {bills.length > 0 ? (
           cycles.map((cycle) => renderCycle(cycle))
         ) : (
           <Grid size={{ xs: 12 }}>
             <Paper
-              variant="outlined"
+              elevation={0}
               sx={{
-                py: 4,
+                py: 6,
                 textAlign: "center",
-                bgcolor: "rgba(255,255,255,0.02)",
-                borderStyle: "dashed",
+                bgcolor: "rgba(15, 23, 42, 0.2)",
+                borderRadius: 3,
+                border: "1px dashed rgba(255,255,255,0.05)",
               }}
             >
               <Typography
