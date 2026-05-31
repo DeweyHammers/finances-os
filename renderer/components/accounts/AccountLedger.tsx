@@ -8,14 +8,10 @@ import {
   CircularProgress,
   Button,
   IconButton,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions,
   TextField,
   InputAdornment,
 } from "@mui/material";
+import { ConfirmDeleteDialog } from "../shared/ConfirmDeleteDialog";
 import { DataGrid, GridColDef } from "@mui/x-data-grid";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -437,37 +433,22 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
         accountId={accountId}
         onClose={() => setEditTxnId(null)}
       />
-      <Dialog
+      <ConfirmDeleteDialog
         open={!!deleteId}
+        title="Delete transaction?"
+        description="Are you sure? This cannot be undone."
+        onConfirm={() => {
+          if (deleteId) {
+            deleteMutate({
+              resource: "AccountTransaction",
+              id: deleteId,
+              successNotification: false,
+            });
+          }
+          setDeleteId(null);
+        }}
         onClose={() => setDeleteId(null)}
-        maxWidth="xs"
-        fullWidth
-      >
-        <DialogTitle>Delete transaction?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Are you sure? This cannot be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteId(null)}>Cancel</Button>
-          <Button
-            color="error"
-            onClick={() => {
-              if (deleteId) {
-                deleteMutate({
-                  resource: "AccountTransaction",
-                  id: deleteId,
-                  successNotification: false,
-                });
-              }
-              setDeleteId(null);
-            }}
-          >
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
+      />
     </Box>
   );
 };

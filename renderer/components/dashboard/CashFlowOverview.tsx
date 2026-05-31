@@ -15,7 +15,7 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
   personalBills,
 }) => {
   if (!settings) return null;
-  const cycles = getCyclesForPaymentCycle();
+  const cycles = getCyclesForPaymentCycle(settings.paymentCycle);
 
   const getCycleIncome = () => Number(settings.w2Amount) || 0;
 
@@ -49,6 +49,7 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
     const integerPart = Math.floor(absAmount).toLocaleString();
     const decimalPart = absAmount.toFixed(2).split(".")[1];
     const isLarge = size === "large";
+    const isNegative = amount < 0;
 
     return (
       <Box
@@ -74,6 +75,18 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
         >
           $
         </Typography>
+        {isNegative && (
+          <Typography
+            sx={{
+              fontSize: isLarge ? "3.2rem" : "2.2rem",
+              fontWeight: 900,
+              letterSpacing: "-1.5px",
+              lineHeight: 1,
+            }}
+          >
+            -
+          </Typography>
+        )}
         <Typography
           sx={{
             fontSize: isLarge ? "3.2rem" : "2.2rem",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogTitle,
@@ -11,6 +11,7 @@ import {
   CircularProgress,
 } from "@mui/material";
 import { useCreate } from "@refinedev/core";
+import { CancelButton } from "../shared/CancelButton";
 
 interface AddGroupModalProps {
   open: boolean;
@@ -27,14 +28,22 @@ export const AddGroupModal = ({
   const [submitting, setSubmitting] = useState(false);
   const { mutate: createGroup } = useCreate();
 
+  // Reset on open only — never on close — so the typed name doesn't flash
+  // back to empty during the close animation.
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setSubmitting(false);
+    }
+  }, [open]);
+
   const handleClose = () => {
     if (submitting) return;
-    setName("");
     onClose();
   };
 
   const handleSubmit = () => {
-    if (!name.trim()) return;
+    if (!name.trim() || submitting) return;
     setSubmitting(true);
     createGroup(
       {
@@ -45,7 +54,6 @@ export const AddGroupModal = ({
       {
         onSettled: () => {
           setSubmitting(false);
-          setName("");
           onClose();
         },
       },
@@ -82,22 +90,30 @@ export const AddGroupModal = ({
         />
       </DialogContent>
       <DialogActions sx={{ p: 3, pt: 1 }}>
-        <Button
-          onClick={handleClose}
-          sx={{ fontWeight: 700 }}
-          disabled={submitting}
-        >
-          Cancel
-        </Button>
+        <CancelButton onClick={handleClose} disabled={submitting} />
         <Button
           variant="contained"
           disableElevation
           onClick={handleSubmit}
-          disabled={submitting || !name.trim()}
-          startIcon={submitting ? <CircularProgress size={16} /> : null}
-          sx={{ fontWeight: 800, borderRadius: 2 }}
+          disabled={!name.trim() || submitting}
+          sx={{
+            fontWeight: 800,
+            borderRadius: 2,
+            position: "relative",
+            ...(submitting && {
+              "&.Mui-disabled": {
+                bgcolor: "primary.main",
+              },
+            }),
+          }}
         >
-          {submitting ? "Saving..." : "Add Group"}
+          Add Group
+          {submitting && (
+            <CircularProgress
+              size={16}
+              sx={{ position: "absolute", right: 12, color: "inherit" }}
+            />
+          )}
         </Button>
       </DialogActions>
     </Dialog>

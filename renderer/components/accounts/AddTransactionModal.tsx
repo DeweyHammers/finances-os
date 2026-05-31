@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogTitle,
@@ -19,6 +19,7 @@ import {
   stateToValues,
   composeTransactionDateIso,
 } from "./TransactionFormFields";
+import { CancelButton } from "../shared/CancelButton";
 
 interface AddTransactionModalProps {
   open: boolean;
@@ -36,100 +37,90 @@ export const AddTransactionModal = ({
   );
   const [submitting, setSubmitting] = useState(false);
   const [creatingPayee, setCreatingPayee] = useState(false);
-  const { mutate: createTxn } = useCreate();
+  const { mutateAsync: createTxn } = useCreate();
   const { query: accountsQuery } = useList({
     resource: "Account",
     pagination: { mode: "off" },
   });
   const accounts = (accountsQuery.data?.data as any[]) || [];
 
+  // Reset form when the modal opens so the previous-session values don't
+  // pre-fill the next entry. Importantly, don't reset on close — that would
+  // make the category/payee/amount visibly flip back to defaults during the
+  // close animation.
+  useEffect(() => {
+    if (open) {
+      setState(emptyTransactionState());
+      setSubmitting(false);
+      setCreatingPayee(false);
+    }
+  }, [open]);
+
   const handleClose = () => {
     if (submitting) return;
-    setState(emptyTransactionState());
     onClose();
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (submitting) return;
     setSubmitting(true);
 
-    if (state.transferAccountId) {
-      const targetAccount = accounts.find(
-        (a) => a.id === state.transferAccountId,
-      );
-      const cents = toCents(state.outflow);
-      if (!targetAccount || cents <= 0) {
-        setSubmitting(false);
-        return;
-      }
-      const sourceAccount = accounts.find((a) => a.id === accountId);
-      const dateIso = composeTransactionDateIso(state.date);
-
-      let remaining = 2;
-      const finalize = () => {
-        remaining -= 1;
-        if (remaining === 0) {
+    try {
+      if (state.transferAccountId) {
+        const targetAccount = accounts.find(
+          (a) => a.id === state.transferAccountId,
+        );
+        const cents = toCents(state.outflow);
+        if (!targetAccount || cents <= 0) {
           setSubmitting(false);
-          setState(emptyTransactionState());
-          onClose();
+          return;
         }
-      };
+        const sourceAccount = accounts.find((a) => a.id === accountId);
+        const dateIso = composeTransactionDateIso(state.date);
 
-      // Outflow on source
-      createTxn(
-        {
+        await Promise.allSettled([
+          createTxn({
+            resource: "AccountTransaction",
+            values: {
+              accountId,
+              date: dateIso,
+              payeeId: null,
+              categoryItemId: null,
+              memo: `Transfer to ${targetAccount.name}${state.memo.trim() ? `: ${state.memo.trim()}` : ""}`,
+              inflowCents: 0,
+              outflowCents: cents,
+              isAdjustment: false,
+              cleared: true,
+            },
+            successNotification: false,
+          }),
+          createTxn({
+            resource: "AccountTransaction",
+            values: {
+              accountId: state.transferAccountId,
+              date: dateIso,
+              payeeId: null,
+              categoryItemId: null,
+              memo: `Transfer from ${sourceAccount?.name ?? "another account"}${state.memo.trim() ? `: ${state.memo.trim()}` : ""}`,
+              inflowCents: cents,
+              outflowCents: 0,
+              isAdjustment: false,
+              cleared: true,
+            },
+            successNotification: false,
+          }),
+        ]);
+      } else {
+        await createTxn({
           resource: "AccountTransaction",
-          values: {
-            accountId,
-            date: dateIso,
-            payeeId: null,
-            categoryItemId: null,
-            memo: `Transfer to ${targetAccount.name}${state.memo.trim() ? `: ${state.memo.trim()}` : ""}`,
-            inflowCents: 0,
-            outflowCents: cents,
-            isAdjustment: false,
-            cleared: true,
-          },
+          values: stateToValues(state, accountId),
           successNotification: false,
-        },
-        { onSettled: finalize },
-      );
-
-      // Inflow on dest
-      createTxn(
-        {
-          resource: "AccountTransaction",
-          values: {
-            accountId: state.transferAccountId,
-            date: dateIso,
-            payeeId: null,
-            categoryItemId: null,
-            memo: `Transfer from ${sourceAccount?.name ?? "another account"}${state.memo.trim() ? `: ${state.memo.trim()}` : ""}`,
-            inflowCents: cents,
-            outflowCents: 0,
-            isAdjustment: false,
-            cleared: true,
-          },
-          successNotification: false,
-        },
-        { onSettled: finalize },
-      );
-      return;
+        });
+      }
+    } finally {
+      setSubmitting(false);
+      onClose();
     }
-
-    createTxn(
-      {
-        resource: "AccountTransaction",
-        values: stateToValues(state, accountId),
-        successNotification: false,
-      },
-      {
-        onSettled: () => {
-          setSubmitting(false);
-          setState(emptyTransactionState());
-          onClose();
-        },
-      },
-    );
   };
 
   return (
@@ -162,22 +153,32 @@ export const AddTransactionModal = ({
         </Box>
       </DialogContent>
       <DialogActions sx={{ p: 4, pt: 1 }}>
-        <Button
-          onClick={handleClose}
-          sx={{ fontWeight: 700, color: "text.secondary" }}
-          disabled={submitting}
-        >
-          Cancel
-        </Button>
+        <CancelButton onClick={handleClose} disabled={submitting} />
         <Button
           onClick={handleSubmit}
           variant="contained"
           disableElevation
-          disabled={submitting || creatingPayee}
-          startIcon={submitting ? <CircularProgress size={16} /> : null}
-          sx={{ px: 4, py: 1, borderRadius: 2, fontWeight: 800 }}
+          disabled={creatingPayee || submitting}
+          sx={{
+            px: 4,
+            py: 1,
+            borderRadius: 2,
+            fontWeight: 800,
+            position: "relative",
+            ...(submitting && {
+              "&.Mui-disabled": {
+                bgcolor: "primary.main",
+              },
+            }),
+          }}
         >
-          {submitting ? "Saving..." : "Save Transaction"}
+          Save Transaction
+          {submitting && (
+            <CircularProgress
+              size={16}
+              sx={{ position: "absolute", right: 12, color: "inherit" }}
+            />
+          )}
         </Button>
       </DialogActions>
     </Dialog>

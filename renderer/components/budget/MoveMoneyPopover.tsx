@@ -11,6 +11,7 @@ import {
   ListSubheader,
 } from "@mui/material";
 import { fromCents, toCents, formatMoney } from "../../lib/cents";
+import { CancelButton } from "../shared/CancelButton";
 
 export interface MoveMoneyOption {
   itemId: string;
@@ -288,9 +289,7 @@ export const MoveMoneyPopover = ({
           }}
         />
         <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end" }}>
-          <Button onClick={onClose} sx={{ fontWeight: 700 }}>
-            Cancel
-          </Button>
+          <CancelButton onClick={onClose} />
           <Button
             variant="contained"
             disableElevation

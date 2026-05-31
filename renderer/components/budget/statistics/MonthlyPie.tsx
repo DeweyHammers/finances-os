@@ -135,10 +135,21 @@ export const MonthlyPie = ({
         display: "grid",
         gridTemplateColumns: { xs: "1fr", md: `${SIZE}px 1fr` },
         gap: 4,
-        alignItems: "center",
+        alignItems: { xs: "stretch", md: "center" },
+        flex: 1,
+        minHeight: 0,
+        overflow: "hidden",
       }}
     >
-      <Box sx={{ position: "relative", width: SIZE, height: SIZE, mx: "auto" }}>
+      <Box
+        sx={{
+          position: "relative",
+          width: SIZE,
+          height: SIZE,
+          mx: "auto",
+          flexShrink: 0,
+        }}
+      >
         <svg width={SIZE} height={SIZE} style={{ display: "block" }}>
           {slices.map(({ item, start, end }) => {
             const isHover = hoverItemId === item.itemId;
@@ -213,7 +224,15 @@ export const MonthlyPie = ({
         </Box>
       </Box>
 
-      <Box sx={{ minWidth: 0 }}>
+      <Box
+        sx={{
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          height: "100%",
+        }}
+      >
         <Typography
           sx={{
             fontSize: "0.75rem",
@@ -221,12 +240,24 @@ export const MonthlyPie = ({
             color: "text.secondary",
             letterSpacing: 1,
             mb: 1.5,
+            flexShrink: 0,
           }}
         >
           {itemsLabel}
         </Typography>
 
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+        <Box
+          sx={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 0.5,
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            overflowX: "hidden",
+            pr: 0.5,
+          }}
+        >
           {month.items.map((it) => {
             const pct = (it.cents / month.totalCents) * 100;
             const isHover = hoverItemId === it.itemId;

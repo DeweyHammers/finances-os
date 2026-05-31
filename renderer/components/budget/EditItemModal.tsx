@@ -14,6 +14,7 @@ import {
 } from "@mui/material";
 import { useUpdate } from "@refinedev/core";
 import type { BudgetItem } from "./BudgetTable";
+import { CancelButton } from "../shared/CancelButton";
 
 interface EditItemModalProps {
   open: boolean;
@@ -39,7 +40,7 @@ export const EditItemModal = ({ open, item, onClose }: EditItemModalProps) => {
   const isBill = item.sourceType === "BILL";
 
   const handleSave = () => {
-    if (!name.trim()) return;
+    if (!name.trim() || submitting) return;
     setSubmitting(true);
     update(
       {
@@ -88,8 +89,8 @@ export const EditItemModal = ({ open, item, onClose }: EditItemModalProps) => {
           {!isCustom && (
             <Alert severity="info" variant="outlined">
               {isBill
-                ? "This item is sourced from a Bill. The amount and cycle are managed on the Bills page."
-                : "This item is sourced from Personal entries. Amount and cycle are managed on the Personal page."}
+                ? "This item is sourced from a Bill. The amount and cycle are managed on the Bills page — this display name stays in sync with the latest Bill name."
+                : "This item is sourced from Personal entries. Amount and cycle are managed on the Personal page — this display name stays in sync with the latest Personal name."}
             </Alert>
           )}
           <TextField
@@ -101,29 +102,38 @@ export const EditItemModal = ({ open, item, onClose }: EditItemModalProps) => {
             slotProps={{ inputLabel: { shrink: true } }}
             helperText={
               isBill
-                ? "The display name was auto-generated from the Bill but can be customized here."
+                ? "Pre-filled from the current Bill name. Edits here override the auto-sync for this category."
                 : ""
             }
           />
         </Box>
       </DialogContent>
       <DialogActions sx={{ p: 4, pt: 1 }}>
-        <Button
-          onClick={onClose}
-          sx={{ fontWeight: 700 }}
-          disabled={submitting}
-        >
-          Cancel
-        </Button>
+        <CancelButton onClick={onClose} disabled={submitting} />
         <Button
           variant="contained"
           disableElevation
           onClick={handleSave}
           disabled={!name.trim() || submitting}
-          startIcon={submitting ? <CircularProgress size={16} /> : null}
-          sx={{ fontWeight: 800, borderRadius: 2, px: 4 }}
+          sx={{
+            fontWeight: 800,
+            borderRadius: 2,
+            px: 4,
+            position: "relative",
+            ...(submitting && {
+              "&.Mui-disabled": {
+                bgcolor: "primary.main",
+              },
+            }),
+          }}
         >
-          {submitting ? "Saving..." : "Save"}
+          Save
+          {submitting && (
+            <CircularProgress
+              size={16}
+              sx={{ position: "absolute", right: 12, color: "inherit" }}
+            />
+          )}
         </Button>
       </DialogActions>
     </Dialog>

@@ -18,6 +18,7 @@ import {
   computeAvailable,
   monthStart,
 } from "../../lib/budget-utils";
+import { resolveItemDisplay } from "../../lib/budget-display";
 
 const availableColor = (cents: number): string => {
   if (cents < 0) return "#f43f5e";
@@ -83,6 +84,11 @@ export const TransactionFormFields = ({
     pagination: { mode: "off" },
     sorters: [{ field: "sortOrder", order: "asc" }],
   });
+  const { query: subsectionsQuery } = useList({
+    resource: "BudgetCategorySubsection",
+    pagination: { mode: "off" },
+    sorters: [{ field: "sortOrder", order: "asc" }],
+  });
   const { query: accountsQuery } = useList({
     resource: "Account",
     pagination: { mode: "off" },
@@ -96,12 +102,23 @@ export const TransactionFormFields = ({
     resource: "AccountTransaction",
     pagination: { mode: "off" },
   });
+  const { query: billsQuery } = useList({
+    resource: "Bill",
+    pagination: { mode: "off" },
+  });
+  const { query: personalsQuery } = useList({
+    resource: "Personal",
+    pagination: { mode: "off" },
+  });
 
   const groups = (groupsQuery.data?.data as any[]) || [];
   const items = (itemsQuery.data?.data as any[]) || [];
+  const subsections = (subsectionsQuery.data?.data as any[]) || [];
   const accounts = (accountsQuery.data?.data as any[]) || [];
   const allMonths = (monthsQuery.data?.data as any[]) || [];
   const allTxns = (txnsQuery.data?.data as any[]) || [];
+  const bills = (billsQuery.data?.data as any[]) || [];
+  const personals = (personalsQuery.data?.data as any[]) || [];
   const otherAccounts = accounts.filter(
     (a) => a.id !== accountId && !a.closed,
   );
@@ -147,18 +164,102 @@ export const TransactionFormFields = ({
     return map;
   }, [items, allMonths, allTxns]);
 
-  const grouped = useMemo(() => {
-    const byGroup = new Map<string, { groupName: string; items: any[] }>();
-    groups.forEach((g) => {
-      byGroup.set(g.id, { groupName: g.name, items: [] });
-    });
+  // Build a nested group → rows structure that interleaves direct items and
+  // subsections by sortOrder, so the dropdown matches the Plan order
+  // (Bills → Personal → Extra Costs etc.) instead of the global-sortOrder
+  // scramble.
+  type GroupedRow =
+    | { kind: "item"; item: any }
+    | { kind: "subsection"; subsection: any; items: any[] };
+  interface GroupedSection {
+    groupId: string;
+    groupName: string;
+    rows: GroupedRow[];
+  }
+  const grouped: GroupedSection[] = useMemo(() => {
+    const itemsByGroup = new Map<string, any[]>();
+    const itemsBySub = new Map<string, any[]>();
     items.forEach((it) => {
-      if (byGroup.has(it.groupId)) {
-        byGroup.get(it.groupId)!.items.push(it);
+      if (it.subsectionId) {
+        const arr = itemsBySub.get(it.subsectionId) ?? [];
+        arr.push(it);
+        itemsBySub.set(it.subsectionId, arr);
+      } else {
+        const arr = itemsByGroup.get(it.groupId) ?? [];
+        arr.push(it);
+        itemsByGroup.set(it.groupId, arr);
       }
     });
-    return Array.from(byGroup.values()).filter((g) => g.items.length > 0);
-  }, [groups, items]);
+    // Each list is already sorted by sortOrder (asc) because the source query
+    // sorts by sortOrder — but sortOrder is scoped to its container, so we
+    // must re-sort within each container.
+    itemsByGroup.forEach((arr) =>
+      arr.sort((a, b) => a.sortOrder - b.sortOrder),
+    );
+    itemsBySub.forEach((arr) =>
+      arr.sort((a, b) => a.sortOrder - b.sortOrder),
+    );
+
+    const subsByGroup = new Map<string, any[]>();
+    subsections.forEach((s) => {
+      const arr = subsByGroup.get(s.groupId) ?? [];
+      arr.push(s);
+      subsByGroup.set(s.groupId, arr);
+    });
+
+    return groups
+      .map((g) => {
+        const directItems = itemsByGroup.get(g.id) ?? [];
+        const groupSubs = subsByGroup.get(g.id) ?? [];
+        const rows: (GroupedRow & { sortOrder: number })[] = [
+          ...directItems.map((item) => ({
+            kind: "item" as const,
+            item,
+            sortOrder: item.sortOrder,
+          })),
+          ...groupSubs.map((sub) => ({
+            kind: "subsection" as const,
+            subsection: sub,
+            items: itemsBySub.get(sub.id) ?? [],
+            sortOrder: sub.sortOrder,
+          })),
+        ];
+        rows.sort((a, b) => {
+          if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+          return a.kind === "item" ? -1 : 1;
+        });
+        return {
+          groupId: g.id,
+          groupName: g.name,
+          rows: rows.map(({ sortOrder, ...row }) => {
+            void sortOrder;
+            return row as GroupedRow;
+          }),
+        };
+      })
+      .filter(
+        (g) =>
+          g.rows.length > 0 &&
+          g.rows.some(
+            (r) =>
+              r.kind === "item" ||
+              (r.kind === "subsection" && r.items.length > 0),
+          ),
+      );
+  }, [groups, items, subsections]);
+
+  const resolveItemLabel = (it: any): string =>
+    resolveItemDisplay(
+      {
+        name: it.name,
+        sourceType: it.sourceType,
+        sourceBillId: it.sourceBillId,
+        sourcePersonalName: it.sourcePersonalName,
+        customCycle: it.customCycle,
+      },
+      bills,
+      personals,
+    ).displayName;
 
   const selectedValue = state.transferAccountId
     ? `${TRANSFER_PREFIX}${state.transferAccountId}`
@@ -244,7 +345,7 @@ export const TransactionFormFields = ({
                   return a ? `Transfer to ${a.name}` : "";
                 }
                 const item = items.find((x) => x.id === val);
-                return item ? item.name : "";
+                return item ? resolveItemLabel(item) : "";
               },
               MenuProps: {
                 slotProps: {
@@ -339,27 +440,8 @@ export const TransactionFormFields = ({
               </Box>
             </MenuItem>
           ))}
-          {grouped.flatMap((g) => [
-            <ListSubheader
-              key={`h-${g.groupName}`}
-              sx={{
-                bgcolor: "#1e293b",
-                top: 0,
-                zIndex: 2,
-                color: "rgba(255,255,255,0.45)",
-                fontWeight: 700,
-                fontSize: "0.75rem",
-                letterSpacing: 0.5,
-                textTransform: "uppercase",
-                lineHeight: 1.5,
-                pt: 1.25,
-                pb: 0.25,
-                px: 2,
-              }}
-            >
-              {g.groupName}
-            </ListSubheader>,
-            ...g.items.map((it) => {
+          {grouped.flatMap((g) => {
+            const renderItemMenu = (it: any, indent: boolean) => {
               const avail = availableByItemId.get(it.id) ?? 0;
               return (
                 <MenuItem
@@ -367,7 +449,8 @@ export const TransactionFormFields = ({
                   value={it.id}
                   sx={{
                     py: 0.85,
-                    px: 2,
+                    pl: indent ? 4 : 2,
+                    pr: 2,
                     display: "flex",
                     justifyContent: "space-between",
                     gap: 2,
@@ -385,7 +468,7 @@ export const TransactionFormFields = ({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {it.name}
+                    {resolveItemLabel(it)}
                   </Typography>
                   <Typography
                     sx={{
@@ -400,8 +483,58 @@ export const TransactionFormFields = ({
                   </Typography>
                 </MenuItem>
               );
-            }),
-          ])}
+            };
+            return [
+              <ListSubheader
+                key={`h-${g.groupId}`}
+                sx={{
+                  bgcolor: "#1e293b",
+                  top: 0,
+                  zIndex: 2,
+                  color: "rgba(255,255,255,0.45)",
+                  fontWeight: 700,
+                  fontSize: "0.75rem",
+                  letterSpacing: 0.5,
+                  textTransform: "uppercase",
+                  lineHeight: 1.5,
+                  pt: 1.25,
+                  pb: 0.25,
+                  px: 2,
+                }}
+              >
+                {g.groupName}
+              </ListSubheader>,
+              ...g.rows.flatMap((row) => {
+                if (row.kind === "item") {
+                  return [renderItemMenu(row.item, false)];
+                }
+                if (row.items.length === 0) return [];
+                return [
+                  <ListSubheader
+                    key={`sh-${row.subsection.id}`}
+                    sx={{
+                      bgcolor: "#1e293b",
+                      top: 0,
+                      zIndex: 1,
+                      color: "primary.light",
+                      fontWeight: 700,
+                      fontSize: "0.7rem",
+                      letterSpacing: 0.5,
+                      textTransform: "uppercase",
+                      lineHeight: 1.5,
+                      pt: 0.75,
+                      pb: 0.25,
+                      pl: 3,
+                      pr: 2,
+                    }}
+                  >
+                    {row.subsection.name}
+                  </ListSubheader>,
+                  ...row.items.map((it: any) => renderItemMenu(it, true)),
+                ];
+              }),
+            ];
+          })}
         </TextField>
       </Grid>
       <Grid size={{ xs: 12 }}>

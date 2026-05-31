@@ -151,23 +151,35 @@ model Payee {
 }
 
 model BudgetCategoryGroup {
-  id        String               @id @default(cuid())
+  id          String                     @id @default(cuid())
+  name        String
+  sortOrder   Int                        @default(0)
+  items       BudgetCategoryItem[]
+  subsections BudgetCategorySubsection[]
+}
+
+model BudgetCategorySubsection {
+  id        String              @id @default(cuid())
+  groupId   String
+  group     BudgetCategoryGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
   name      String
-  sortOrder Int                  @default(0)
+  sortOrder Int                 @default(0)
   items     BudgetCategoryItem[]
 }
 
 model BudgetCategoryItem {
-  id                 String               @id @default(cuid())
+  id                 String                    @id @default(cuid())
   groupId            String
-  group              BudgetCategoryGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group              BudgetCategoryGroup       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  subsectionId       String?
+  subsection         BudgetCategorySubsection? @relation(fields: [subsectionId], references: [id], onDelete: SetNull)
   name               String
-  sortOrder          Int                  @default(0)
-  sourceType         String               // "BILL" | "PERSONAL_NAME" | "CUSTOM"
+  sortOrder          Int                       @default(0)
+  sourceType         String                    // "BILL" | "PERSONAL_NAME" | "CUSTOM"
   sourceBillId       String?
   sourcePersonalName String?
   customAmountCents  Int?
-  customCycle        String?              // Q1-Q4 or null
+  customCycle        String?                   // Q1-Q4 or null
   monthAssignments   BudgetMonth[]
   transactions       AccountTransaction[]
 }

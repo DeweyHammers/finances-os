@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Dialog,
   DialogTitle,
@@ -14,6 +14,7 @@ import {
 } from "@mui/material";
 import { useCreate } from "@refinedev/core";
 import { toCents } from "../../lib/cents";
+import { CancelButton } from "../shared/CancelButton";
 
 interface AddAccountModalProps {
   open: boolean;
@@ -33,21 +34,24 @@ export const AddAccountModal = ({
   const { mutate: createAccount } = useCreate();
   const { mutate: createTxn } = useCreate();
 
-  const reset = () => {
-    setName("");
-    setNotes("");
-    setWorkingBalance("");
-    setSubmitting(false);
-  };
+  // Reset on open only — never on close/save — so typed values don't visibly
+  // flip back to empty during the close animation.
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setNotes("");
+      setWorkingBalance("");
+      setSubmitting(false);
+    }
+  }, [open]);
 
   const handleClose = () => {
     if (submitting) return;
-    reset();
     onClose();
   };
 
   const handleSubmit = () => {
-    if (!name.trim()) return;
+    if (!name.trim() || submitting) return;
     setSubmitting(true);
 
     createAccount(
@@ -62,7 +66,6 @@ export const AddAccountModal = ({
           const startingCents = toCents(workingBalance);
           if (!accountId || startingCents === 0) {
             setSubmitting(false);
-            reset();
             onCreated?.(accountId);
             onClose();
             return;
@@ -87,7 +90,6 @@ export const AddAccountModal = ({
             {
               onSettled: () => {
                 setSubmitting(false);
-                reset();
                 onCreated?.(accountId);
                 onClose();
               },
@@ -160,22 +162,32 @@ export const AddAccountModal = ({
         </Box>
       </DialogContent>
       <DialogActions sx={{ p: 4, pt: 1 }}>
-        <Button
-          onClick={handleClose}
-          sx={{ fontWeight: 700, color: "text.secondary" }}
-          disabled={submitting}
-        >
-          Cancel
-        </Button>
+        <CancelButton onClick={handleClose} disabled={submitting} />
         <Button
           onClick={handleSubmit}
           variant="contained"
           disableElevation
-          disabled={submitting || !name.trim()}
-          startIcon={submitting ? <CircularProgress size={16} /> : null}
-          sx={{ px: 4, py: 1, borderRadius: 2, fontWeight: 800 }}
+          disabled={!name.trim() || submitting}
+          sx={{
+            px: 4,
+            py: 1,
+            borderRadius: 2,
+            fontWeight: 800,
+            position: "relative",
+            ...(submitting && {
+              "&.Mui-disabled": {
+                bgcolor: "primary.main",
+              },
+            }),
+          }}
         >
-          {submitting ? "Saving..." : "Save Account"}
+          Save Account
+          {submitting && (
+            <CircularProgress
+              size={16}
+              sx={{ position: "absolute", right: 12, color: "inherit" }}
+            />
+          )}
         </Button>
       </DialogActions>
     </Dialog>

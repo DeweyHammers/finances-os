@@ -12,6 +12,7 @@ import {
   Button,
 } from "@mui/material";
 import { FieldValues, UseFormRegister } from "react-hook-form";
+import { CancelButton } from "./CancelButton";
 
 interface ResourceCreateModalProps {
   modalProps: UseModalFormReturnType<BaseRecord, HttpError, FieldValues>;
@@ -60,12 +61,7 @@ export const ResourceCreateModal: FC<ResourceCreateModalProps> = ({
         </Box>
       </DialogContent>
       <DialogActions sx={{ p: 4, pt: 1 }}>
-        <Button
-          onClick={close}
-          sx={{ fontWeight: 700, color: "text.secondary" }}
-        >
-          Cancel
-        </Button>
+        <CancelButton onClick={close} />
         <Button
           {...saveButtonProps}
           variant="contained"

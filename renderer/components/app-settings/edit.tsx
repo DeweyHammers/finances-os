@@ -14,10 +14,12 @@ import {
 import CircularProgressIcon from "@mui/material/CircularProgress";
 
 import { W2Section } from "./sections/W2Section";
+import { PaymentCycleSection } from "./sections/PaymentCycleSection";
 
 interface AppSettingsForm {
   w2Amount: number;
   wifeMonthlyAmount: number;
+  paymentCycle?: string;
 }
 
 export const AppSettingsEdit = () => {
@@ -79,21 +81,22 @@ export const AppSettingsEdit = () => {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        height: "calc(100vh - 64px)",
-        p: 3,
-        overflow: "hidden",
+        height: "100%",
+        minHeight: 0,
+        p: 4,
       }}
     >
       <Box
         sx={{
           width: "100%",
-          maxWidth: 800,
-          height: "100%",
+          maxWidth: 1100,
+          flex: 1,
+          minHeight: 0,
           overflow: "hidden",
-          backgroundColor: "#1e293b",
-          borderRadius: 2,
+          backgroundColor: "rgba(30, 41, 59, 0.5)",
+          borderRadius: 4,
           position: "relative",
-          border: `1px solid ${COLORS.gross}33`,
+          border: `1px solid ${COLORS.gross}1a`,
           boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
         }}
       >
@@ -107,6 +110,11 @@ export const AppSettingsEdit = () => {
         <Box sx={{ p: 4, overflowY: "auto", height: "calc(100% - 48px)" }}>
           <form onSubmit={(e) => e.preventDefault()}>
             <W2Section register={register} />
+            <Box sx={{ mt: 5 }}>
+              <PaymentCycleSection
+                currentValue={initialValues?.paymentCycle as string | undefined}
+              />
+            </Box>
           </form>
         </Box>
 

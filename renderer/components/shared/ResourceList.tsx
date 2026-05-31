@@ -16,12 +16,8 @@ import {
   Paper,
   InputAdornment,
   TextField,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions,
 } from "@mui/material";
+import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AddIcon from "@mui/icons-material/Add";
@@ -379,63 +375,13 @@ export const ResourceList: FC<ResourceListProps> = ({
       <CreateModal modalProps={createModalProps} />
       <EditModal modalProps={editModalProps} />
 
-      <Dialog
+      <ConfirmDeleteDialog
         open={!!deleteId}
+        title={`Delete ${title.replace(/s$/, "")}?`}
+        description="Are you sure? This cannot be undone."
+        onConfirm={handleDelete}
         onClose={() => setDeleteId(null)}
-        maxWidth="xs"
-        fullWidth
-        slotProps={{
-          paper: {
-            sx: {
-              borderRadius: 2,
-              bgcolor: "background.paper",
-              backgroundImage: "none",
-              p: 1,
-            },
-          },
-        }}
-      >
-        <DialogTitle sx={{ fontWeight: 800, fontSize: "1.2rem", pb: 1 }}>
-          Delete {title.replace(/s$/, "")}?
-        </DialogTitle>
-        <DialogContent sx={{ pb: 1 }}>
-          <DialogContentText
-            sx={{ color: "text.secondary", fontSize: "0.9rem" }}
-          >
-            Are you sure? This cannot be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions sx={{ p: 2, gap: 1 }}>
-          <Button
-            onClick={() => setDeleteId(null)}
-            size="small"
-            sx={{
-              fontWeight: 700,
-              color: "text.secondary",
-              textTransform: "none",
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={handleDelete}
-            variant="contained"
-            color="error"
-            size="small"
-            disableElevation
-            sx={{
-              px: 2,
-              borderRadius: 1.5,
-              fontWeight: 700,
-              textTransform: "none",
-              bgcolor: "error.main",
-              "&:hover": { bgcolor: "error.dark" },
-            }}
-          >
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
+      />
     </Box>
   );
 };
