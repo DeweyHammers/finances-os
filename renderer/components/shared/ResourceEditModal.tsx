@@ -14,6 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import { FieldValues, UseFormRegister } from "react-hook-form";
+import { CancelButton } from "./CancelButton";
 
 interface ResourceEditModalProps {
   modalProps: UseModalFormReturnType<BaseRecord, HttpError, FieldValues>;
@@ -138,12 +139,7 @@ export const ResourceEditModal: FC<ResourceEditModalProps> = ({
         )}
       </DialogContent>
       <DialogActions sx={{ p: 4, pt: 1 }}>
-        <Button
-          onClick={close}
-          sx={{ fontWeight: 700, color: "text.secondary" }}
-        >
-          Cancel
-        </Button>
+        <CancelButton onClick={close} />
         <Button
           {...saveButtonProps}
           variant="contained"

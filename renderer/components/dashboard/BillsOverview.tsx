@@ -24,7 +24,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
   settings,
 }) => {
   if (!settings) return null;
-  const cycles = getCyclesForPaymentCycle();
+  const cycles = getCyclesForPaymentCycle(settings.paymentCycle);
   const activeCycles = cycles.filter((cycle) =>
     bills.some((b) => b.withdrawalCycle === cycle),
   );

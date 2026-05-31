@@ -19,6 +19,7 @@ import {
 import { useList, useCreate } from "@refinedev/core";
 import { getCycleColor } from "../../lib/cycle-utils";
 import { getOrdinal } from "../../lib/date-utils";
+import { CancelButton } from "../shared/CancelButton";
 
 interface AddItemModalProps {
   open: boolean;
@@ -85,7 +86,7 @@ export const AddItemModal = ({
   };
 
   const handleSubmit = () => {
-    if (!groupId) return;
+    if (!groupId || submitting) return;
     setSubmitting(true);
 
     const buildValues = () => {
@@ -154,12 +155,11 @@ export const AddItemModal = ({
   };
 
   const canSubmit = useMemo(() => {
-    if (submitting) return false;
     if (mode === "BILL") return !!selectedBillId;
     if (mode === "PERSONAL_NAME") return !!selectedPersonalName;
     if (mode === "CUSTOM") return !!customName.trim();
     return false;
-  }, [mode, selectedBillId, selectedPersonalName, customName, submitting]);
+  }, [mode, selectedBillId, selectedPersonalName, customName]);
 
   return (
     <Dialog
@@ -275,22 +275,31 @@ export const AddItemModal = ({
         )}
       </DialogContent>
       <DialogActions sx={{ p: 4, pt: 1 }}>
-        <Button
-          onClick={handleClose}
-          sx={{ fontWeight: 700 }}
-          disabled={submitting}
-        >
-          Cancel
-        </Button>
+        <CancelButton onClick={handleClose} disabled={submitting} />
         <Button
           variant="contained"
           disableElevation
           onClick={handleSubmit}
-          disabled={!canSubmit}
-          startIcon={submitting ? <CircularProgress size={16} /> : null}
-          sx={{ fontWeight: 800, borderRadius: 2, px: 4 }}
+          disabled={!canSubmit || submitting}
+          sx={{
+            fontWeight: 800,
+            borderRadius: 2,
+            px: 4,
+            position: "relative",
+            ...(submitting && {
+              "&.Mui-disabled": {
+                bgcolor: "primary.main",
+              },
+            }),
+          }}
         >
-          {submitting ? "Saving..." : "Add Item"}
+          Add Item
+          {submitting && (
+            <CircularProgress
+              size={16}
+              sx={{ position: "absolute", right: 12, color: "inherit" }}
+            />
+          )}
         </Button>
       </DialogActions>
     </Dialog>

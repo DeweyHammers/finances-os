@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Box,
   Typography,
@@ -17,9 +17,11 @@ import {
   BudgetTable,
   BudgetGroup,
   BudgetItem,
+  BudgetSubsection,
 } from "./BudgetTable";
 import { AddGroupModal } from "./AddGroupModal";
 import { AddItemModal } from "./AddItemModal";
+import { AddSubsectionModal } from "./AddSubsectionModal";
 import { EditItemModal } from "./EditItemModal";
 import {
   MoveMoneyPopover,
@@ -36,6 +38,8 @@ import {
   monthStart,
   resolveAutoAssignAmount,
 } from "../../lib/budget-utils";
+import { resolveItemDisplay } from "../../lib/budget-display";
+import { usePaymentCycle } from "../../lib/usePaymentCycle";
 
 const startOfThisMonth = () => {
   const d = new Date();
@@ -44,8 +48,13 @@ const startOfThisMonth = () => {
 
 export const BudgetPage = () => {
   const month = useMemo(() => startOfThisMonth(), []);
+  const { cycles: paymentCycles } = usePaymentCycle();
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [addItemGroupId, setAddItemGroupId] = useState<string | null>(null);
+  const [addSubsectionGroup, setAddSubsectionGroup] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [editItem, setEditItem] = useState<BudgetItem | null>(null);
   const [moveAnchor, setMoveAnchor] = useState<{
     item: BudgetItem;
@@ -53,6 +62,17 @@ export const BudgetPage = () => {
   } | null>(null);
   const [assignAnchor, setAssignAnchor] = useState<HTMLElement | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // While a multi-step move is in flight (decrement source then increment
+  // destination), the derived Ready-to-Assign value would briefly flash to a
+  // positive amount between those two writes. We snapshot the pre-move RTA
+  // and hold it for a short window to keep the pill visually stable.
+  const [rtaHold, setRtaHold] = useState<number | null>(null);
+  const rtaHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (rtaHoldTimerRef.current) clearTimeout(rtaHoldTimerRef.current);
+    };
+  }, []);
 
   const { query: groupsQuery } = useList({
     resource: "BudgetCategoryGroup",
@@ -61,6 +81,11 @@ export const BudgetPage = () => {
   });
   const { query: itemsQuery } = useList({
     resource: "BudgetCategoryItem",
+    pagination: { mode: "off" },
+    sorters: [{ field: "sortOrder", order: "asc" }],
+  });
+  const { query: subsectionsQuery } = useList({
+    resource: "BudgetCategorySubsection",
     pagination: { mode: "off" },
     sorters: [{ field: "sortOrder", order: "asc" }],
   });
@@ -86,6 +111,7 @@ export const BudgetPage = () => {
 
   const allGroups = (groupsQuery.data?.data as any[]) || [];
   const allItems = (itemsQuery.data?.data as any[]) || [];
+  const allSubsections = (subsectionsQuery.data?.data as any[]) || [];
   const allMonths = (monthsQuery.data?.data as any[]) || [];
   const allTxns = (txnsQuery.data?.data as any[]) || [];
   const bills = (billsQuery.data?.data as any[]) || [];
@@ -136,41 +162,85 @@ export const BudgetPage = () => {
   };
 
   const groups: BudgetGroup[] = useMemo(() => {
+    const toItem = (i: any): BudgetItem => {
+      const assigned = getAssignment(i.id, month)?.assignedCents || 0;
+      const activity = computeActivity(allTxns, i.id, month);
+      const available = computeAvailableChain(i.id, month);
+      const { liveName } = resolveItemDisplay(
+        {
+          name: i.name,
+          sourceType: i.sourceType,
+          sourceBillId: i.sourceBillId,
+          sourcePersonalName: i.sourcePersonalName,
+          customCycle: i.customCycle,
+        },
+        bills,
+        personals,
+      );
+      return {
+        id: i.id,
+        groupId: i.groupId,
+        subsectionId: i.subsectionId ?? null,
+        name: liveName,
+        sortOrder: i.sortOrder,
+        sourceType: i.sourceType,
+        sourceBillId: i.sourceBillId,
+        sourcePersonalName: i.sourcePersonalName,
+        customAmountCents: i.customAmountCents,
+        customCycle: i.customCycle,
+        assignedCents: assigned,
+        activityCents: activity,
+        availableCents: available,
+      };
+    };
+
     return allGroups
       .map((g): BudgetGroup => {
-        const items = allItems
+        const groupItems = allItems
           .filter((i) => i.groupId === g.id)
+          .sort((a, b) => a.sortOrder - b.sortOrder);
+
+        const directItems = groupItems
+          .filter((i) => !i.subsectionId)
+          .map(toItem);
+
+        const subsections: BudgetSubsection[] = allSubsections
+          .filter((s) => s.groupId === g.id)
           .sort((a, b) => a.sortOrder - b.sortOrder)
-          .map((i): BudgetItem => {
-            const assigned = getAssignment(i.id, month)?.assignedCents || 0;
-            const activity = computeActivity(allTxns, i.id, month);
-            const available = computeAvailableChain(i.id, month);
-            return {
-              id: i.id,
-              groupId: i.groupId,
-              name: i.name,
-              sortOrder: i.sortOrder,
-              sourceType: i.sourceType,
-              sourceBillId: i.sourceBillId,
-              sourcePersonalName: i.sourcePersonalName,
-              customAmountCents: i.customAmountCents,
-              customCycle: i.customCycle,
-              assignedCents: assigned,
-              activityCents: activity,
-              availableCents: available,
-            };
-          });
+          .map((s) => ({
+            id: s.id,
+            groupId: s.groupId,
+            name: s.name,
+            sortOrder: s.sortOrder,
+            items: groupItems
+              .filter((i) => i.subsectionId === s.id)
+              .map(toItem),
+          }));
+
         return {
           id: g.id,
           name: g.name,
           sortOrder: g.sortOrder,
-          items,
+          items: directItems,
+          subsections,
         };
       })
       .sort((a, b) => a.sortOrder - b.sortOrder);
-  }, [allGroups, allItems, allMonths, allTxns, monthIso]);
+  }, [
+    allGroups,
+    allItems,
+    allSubsections,
+    allMonths,
+    allTxns,
+    bills,
+    personals,
+    monthIso,
+  ]);
 
-  const allFlatItems = groups.flatMap((g) => g.items);
+  const allFlatItems = groups.flatMap((g) => [
+    ...g.items,
+    ...g.subsections.flatMap((s) => s.items),
+  ]);
 
   const readyToAssign = useMemo(
     () =>
@@ -246,6 +316,14 @@ export const BudgetPage = () => {
       setMoveAnchor(null);
       return;
     }
+    // Snapshot the RTA before the two-step write so the pill stays stable
+    // (avoids the green "Ready to Assign" flash between the decrement and
+    // increment when moving between categories).
+    if (params.destItemId) {
+      setRtaHold(readyToAssign);
+      if (rtaHoldTimerRef.current) clearTimeout(rtaHoldTimerRef.current);
+      rtaHoldTimerRef.current = setTimeout(() => setRtaHold(null), 700);
+    }
     upsertAssignment(src.id, src.assignedCents - params.amountCents);
     if (params.destItemId) {
       const dst = allFlatItems.find((i) => i.id === params.destItemId);
@@ -257,19 +335,66 @@ export const BudgetPage = () => {
     setMoveAnchor(null);
   };
 
-  const moveOptions: MoveMoneyOption[] = useMemo(
-    () =>
-      groups.flatMap((g) =>
-        g.items.map((it) => ({
-          itemId: it.id,
-          itemName: it.name,
-          availableCents: it.availableCents,
-          groupId: g.id,
-          groupName: g.name,
+  const moveOptions: MoveMoneyOption[] = useMemo(() => {
+    const buildName = (it: BudgetItem) =>
+      resolveItemDisplay(
+        {
+          name: it.name,
+          sourceType: it.sourceType,
+          sourceBillId: it.sourceBillId,
+          sourcePersonalName: it.sourcePersonalName,
+          customCycle: it.customCycle,
+        },
+        bills,
+        personals,
+      ).displayName;
+    const result: MoveMoneyOption[] = [];
+    groups.forEach((g) => {
+      // Interleave direct items and subsections at the group level by sortOrder
+      // so the popover lists them in the same order the Plan shows.
+      type Row =
+        | { kind: "item"; item: BudgetItem; sortOrder: number }
+        | { kind: "sub"; sub: BudgetSubsection; sortOrder: number };
+      const rows: Row[] = [
+        ...g.items.map((item) => ({
+          kind: "item" as const,
+          item,
+          sortOrder: item.sortOrder,
         })),
-      ),
-    [groups],
-  );
+        ...g.subsections.map((sub) => ({
+          kind: "sub" as const,
+          sub,
+          sortOrder: sub.sortOrder,
+        })),
+      ];
+      rows.sort((a, b) => {
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        return a.kind === "item" ? -1 : 1;
+      });
+      rows.forEach((row) => {
+        if (row.kind === "item") {
+          result.push({
+            itemId: row.item.id,
+            itemName: buildName(row.item),
+            availableCents: row.item.availableCents,
+            groupId: g.id,
+            groupName: g.name,
+          });
+        } else {
+          row.sub.items.forEach((it) => {
+            result.push({
+              itemId: it.id,
+              itemName: buildName(it),
+              availableCents: it.availableCents,
+              groupId: g.id,
+              groupName: `${g.name} / ${row.sub.name}`,
+            });
+          });
+        }
+      });
+    });
+    return result;
+  }, [groups, bills, personals]);
 
   const assignOptions: AssignTargetOption[] = moveOptions;
 
@@ -289,6 +414,7 @@ export const BudgetPage = () => {
   const isLoading =
     groupsQuery.isLoading ||
     itemsQuery.isLoading ||
+    subsectionsQuery.isLoading ||
     monthsQuery.isLoading ||
     txnsQuery.isLoading;
 
@@ -314,7 +440,7 @@ export const BudgetPage = () => {
         <Box />
         <Box sx={{ display: "flex", justifyContent: "center" }}>
           <ReadyToAssignPill
-            cents={readyToAssign}
+            cents={rtaHold ?? readyToAssign}
             onAssignClick={(el) => setAssignAnchor(el)}
           />
         </Box>
@@ -380,6 +506,7 @@ export const BudgetPage = () => {
             personals={personals}
             onAvailableClick={(item, el) => setMoveAnchor({ item, el })}
             onAddItem={(groupId) => setAddItemGroupId(groupId)}
+            onAddSubsection={(group) => setAddSubsectionGroup(group)}
             onEditItem={(item) => setEditItem(item)}
           />
         </Paper>
@@ -400,6 +527,19 @@ export const BudgetPage = () => {
         }
         onClose={() => setAddItemGroupId(null)}
       />
+      <AddSubsectionModal
+        open={!!addSubsectionGroup}
+        groupId={addSubsectionGroup?.id ?? null}
+        groupName={addSubsectionGroup?.name}
+        nextSortOrder={
+          addSubsectionGroup
+            ? allSubsections.filter(
+                (s) => s.groupId === addSubsectionGroup.id,
+              ).length
+            : 0
+        }
+        onClose={() => setAddSubsectionGroup(null)}
+      />
       <EditItemModal
         open={!!editItem}
         item={editItem}
@@ -419,6 +559,7 @@ export const BudgetPage = () => {
         open={!!assignAnchor}
         anchorEl={assignAnchor}
         options={assignOptions}
+        cycles={paymentCycles}
         onClose={() => setAssignAnchor(null)}
         onManualAssign={handleManualAssign}
         onAutoAssign={handleAutoAssign}

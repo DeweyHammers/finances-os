@@ -18,6 +18,7 @@ import {
   stateToValues,
   valuesToState,
 } from "./TransactionFormFields";
+import { CancelButton } from "../shared/CancelButton";
 
 interface EditTransactionModalProps {
   open: boolean;
@@ -56,7 +57,7 @@ export const EditTransactionModal = ({
   };
 
   const handleSubmit = () => {
-    if (!transactionId) return;
+    if (!transactionId || submitting) return;
     setSubmitting(true);
     updateTxn(
       {
@@ -112,22 +113,32 @@ export const EditTransactionModal = ({
         )}
       </DialogContent>
       <DialogActions sx={{ p: 4, pt: 1 }}>
-        <Button
-          onClick={handleClose}
-          sx={{ fontWeight: 700, color: "text.secondary" }}
-          disabled={submitting}
-        >
-          Cancel
-        </Button>
+        <CancelButton onClick={handleClose} disabled={submitting} />
         <Button
           onClick={handleSubmit}
           variant="contained"
           disableElevation
-          disabled={submitting || creatingPayee}
-          startIcon={submitting ? <CircularProgress size={16} /> : null}
-          sx={{ px: 4, py: 1, borderRadius: 2, fontWeight: 800 }}
+          disabled={creatingPayee || submitting}
+          sx={{
+            px: 4,
+            py: 1,
+            borderRadius: 2,
+            fontWeight: 800,
+            position: "relative",
+            ...(submitting && {
+              "&.Mui-disabled": {
+                bgcolor: "primary.main",
+              },
+            }),
+          }}
         >
-          {submitting ? "Saving..." : "Save Transaction"}
+          Save Transaction
+          {submitting && (
+            <CircularProgress
+              size={16}
+              sx={{ position: "absolute", right: 12, color: "inherit" }}
+            />
+          )}
         </Button>
       </DialogActions>
     </Dialog>

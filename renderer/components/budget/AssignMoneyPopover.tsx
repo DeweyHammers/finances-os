@@ -15,6 +15,7 @@ import {
 import BoltIcon from "@mui/icons-material/Bolt";
 import { toCents, formatMoney } from "../../lib/cents";
 import { getCycleColor } from "../../lib/cycle-utils";
+import { CancelButton } from "../shared/CancelButton";
 
 export interface AssignTargetOption {
   itemId: string;
@@ -28,12 +29,11 @@ interface AssignMoneyPopoverProps {
   open: boolean;
   anchorEl: HTMLElement | null;
   options: AssignTargetOption[];
+  cycles?: string[];
   onClose: () => void;
   onManualAssign: (params: { itemId: string; amountCents: number }) => void;
   onAutoAssign: (cycle: string) => void;
 }
-
-const CYCLES = ["Q1", "Q2", "Q3", "Q4"];
 
 const availableColor = (cents: number): string => {
   if (cents < 0) return "#f43f5e";
@@ -45,6 +45,7 @@ export const AssignMoneyPopover = ({
   open,
   anchorEl,
   options,
+  cycles = ["Q1", "Q2", "Q3", "Q4"],
   onClose,
   onManualAssign,
   onAutoAssign,
@@ -240,9 +241,7 @@ export const AssignMoneyPopover = ({
             }}
           />
           <Box sx={{ display: "flex", gap: 1, justifyContent: "flex-end" }}>
-            <Button onClick={onClose} sx={{ fontWeight: 700 }}>
-              Cancel
-            </Button>
+            <CancelButton onClick={onClose} />
             <Button
               variant="contained"
               disableElevation
@@ -267,8 +266,14 @@ export const AssignMoneyPopover = ({
           >
             Auto-Assign by Cycle
           </Typography>
-          <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-            {CYCLES.map((c) => {
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: cycles.length > 1 ? "1fr 1fr" : "1fr",
+              gap: 1,
+            }}
+          >
+            {cycles.map((c) => {
               const color = getCycleColor(c);
               return (
                 <Button

@@ -22,6 +22,7 @@ import { MonthlyPie } from "./MonthlyPie";
 import {
   computeYearlySpending,
   computeYearlyIncome,
+  computeWeeklyIncomeKpi,
   computeKpis,
   MonthlySpend,
   StatsCategoryGroup,
@@ -37,6 +38,11 @@ const sectionPaperSx = {
   borderRadius: 4,
   bgcolor: "rgba(30, 41, 59, 0.5)",
   border: "1px solid rgba(129, 140, 248, 0.1)",
+  flex: 1,
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
 };
 
 type StatsView = "yearly" | "monthly";
@@ -104,6 +110,10 @@ export const StatisticsPage = () => {
 
   const spendingKpis = useMemo(() => computeKpis(yearlySpending), [yearlySpending]);
   const incomeKpis = useMemo(() => computeKpis(yearlyIncome), [yearlyIncome]);
+  const weeklyIncomeKpi = useMemo(
+    () => computeWeeklyIncomeKpi({ year, transactions }),
+    [year, transactions],
+  );
 
   const toWifeKpi = useMemo(() => {
     let total = 0;
@@ -140,13 +150,15 @@ export const StatisticsPage = () => {
   return (
     <Box
       sx={{
+        height: "100%",
         p: 4,
         display: "flex",
         flexDirection: "column",
         gap: 3,
+        minHeight: 0,
       }}
     >
-      <Box>
+      <Box sx={{ flexShrink: 0 }}>
         <Typography
           variant="h4"
           sx={{ color: "white", fontWeight: 800, letterSpacing: "-0.5px" }}
@@ -192,6 +204,7 @@ export const StatisticsPage = () => {
                 value={series}
                 onChange={(_, v) => setSeries(v)}
                 sx={{
+                  flexShrink: 0,
                   borderBottom: "1px solid rgba(255,255,255,0.06)",
                   "& .MuiTab-root": {
                     textTransform: "none",
@@ -234,6 +247,7 @@ export const StatisticsPage = () => {
                 value={view}
                 onChange={(_, v) => setView(v)}
                 sx={{
+                  flexShrink: 0,
                   mt: 2,
                   mb: 3,
                   minHeight: 36,
@@ -272,13 +286,17 @@ export const StatisticsPage = () => {
               {view === "yearly" && (
                 <Box
                   sx={{
+                    flex: 1,
+                    minHeight: 0,
                     display: "flex",
                     flexDirection: "column",
                     gap: 3,
+                    overflow: "hidden",
                   }}
                 >
                   <Box
                     sx={{
+                      flexShrink: 0,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
@@ -313,24 +331,29 @@ export const StatisticsPage = () => {
                     kpis={kpisForSeries}
                     allItems={allItemsForSeries}
                     emptyTotalLabel={emptyTotalLabel}
-                    extraTiles={
+                    tilesAfterAverage={
                       isSpending
-                        ? [
+                        ? []
+                        : [
                             {
-                              label: "To Wife",
-                              value:
-                                toWifeKpi.total > 0
-                                  ? formatMoney(toWifeKpi.total)
-                                  : "—",
+                              label: "Weekly Average",
+                              value: formatMoney(
+                                Math.round(weeklyIncomeKpi.avg),
+                              ),
                               hint:
-                                toWifeKpi.activeMonths > 0
-                                  ? `${toWifeKpi.activeMonths} active ${
-                                      toWifeKpi.activeMonths === 1
-                                        ? "month"
-                                        : "months"
+                                weeklyIncomeKpi.activeWeeks > 0
+                                  ? `over ${weeklyIncomeKpi.activeWeeks} active ${
+                                      weeklyIncomeKpi.activeWeeks === 1
+                                        ? "week"
+                                        : "weeks"
                                     }`
                                   : "no activity",
                             },
+                          ]
+                    }
+                    extraTiles={
+                      isSpending
+                        ? [
                             {
                               label: "To Wife Average",
                               value: formatMoney(Math.round(toWifeKpi.avg)),
@@ -353,13 +376,17 @@ export const StatisticsPage = () => {
               {view === "monthly" && (
                 <Box
                   sx={{
+                    flex: 1,
+                    minHeight: 0,
                     display: "flex",
                     flexDirection: "column",
                     gap: 3,
+                    overflow: "hidden",
                   }}
                 >
                   <Box
                     sx={{
+                      flexShrink: 0,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
@@ -587,6 +614,7 @@ const YearlySection = ({
   allItems,
   emptyTotalLabel,
   onMonthClick,
+  tilesAfterAverage = [],
   extraTiles = [],
 }: {
   title: string;
@@ -598,17 +626,29 @@ const YearlySection = ({
   allItems: { id: string; name?: string }[];
   emptyTotalLabel: string;
   onMonthClick?: (idx: number) => void;
+  tilesAfterAverage?: { label: string; value: string; hint?: string }[];
   extraTiles?: { label: string; value: string; hint?: string }[];
 }) => (
-  <Paper elevation={0} sx={innerCardSx(accent)}>
+  <Paper
+    elevation={0}
+    sx={{
+      ...innerCardSx(accent),
+      flex: 1,
+      minHeight: 0,
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+    }}
+  >
     <SectionHeader title={title} icon={icon} accent={accent} />
     <Box
       sx={{
+        flexShrink: 0,
         display: "grid",
         gridTemplateColumns: {
           xs: "1fr",
           sm: "repeat(2, 1fr)",
-          md: `repeat(${3 + extraTiles.length}, 1fr)`,
+          md: `repeat(${3 + tilesAfterAverage.length + extraTiles.length}, 1fr)`,
         },
         gap: 2,
         mb: 3,
@@ -629,6 +669,9 @@ const YearlySection = ({
             : "no activity"
         }
       />
+      {tilesAfterAverage.map((t) => (
+        <StatTile key={t.label} label={t.label} value={t.value} hint={t.hint} />
+      ))}
       <StatTile
         label="Highest Month"
         value={
@@ -651,12 +694,21 @@ const YearlySection = ({
         />
       ))}
     </Box>
-    <MonthlyStackedBars
-      data={data}
-      allItems={allItems}
-      year={year}
-      onMonthClick={onMonthClick}
-    />
+    <Box
+      sx={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <MonthlyStackedBars
+        data={data}
+        allItems={allItems}
+        year={year}
+        onMonthClick={onMonthClick}
+      />
+    </Box>
   </Paper>
 );
 
@@ -679,7 +731,17 @@ const MonthlySection = ({
   itemsLabel: string;
   emptyLabel: string;
 }) => (
-  <Paper elevation={0} sx={innerCardSx(accent)}>
+  <Paper
+    elevation={0}
+    sx={{
+      ...innerCardSx(accent),
+      flex: 1,
+      minHeight: 0,
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+    }}
+  >
     <SectionHeader title={title} icon={icon} accent={accent} />
     {month ? (
       <MonthlyPie

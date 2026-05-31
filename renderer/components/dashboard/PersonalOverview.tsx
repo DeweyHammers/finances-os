@@ -23,7 +23,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   settings,
 }) => {
   if (!settings) return null;
-  const cycles = getCyclesForPaymentCycle();
+  const cycles = getCyclesForPaymentCycle(settings.paymentCycle);
   const activeCycles = cycles.filter((cycle) =>
     personalBills.some((b) => b.withdrawalCycle === cycle),
   );

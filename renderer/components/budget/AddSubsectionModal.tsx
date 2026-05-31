@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogTitle,
@@ -9,27 +9,30 @@ import {
   Button,
   TextField,
   CircularProgress,
+  Typography,
 } from "@mui/material";
 import { useCreate } from "@refinedev/core";
 import { CancelButton } from "../shared/CancelButton";
 
-interface AddGroupModalProps {
+interface AddSubsectionModalProps {
   open: boolean;
+  groupId: string | null;
+  groupName?: string;
+  nextSortOrder: number;
   onClose: () => void;
-  nextSortOrder?: number;
 }
 
-export const AddGroupModal = ({
+export const AddSubsectionModal = ({
   open,
+  groupId,
+  groupName,
+  nextSortOrder,
   onClose,
-  nextSortOrder = 0,
-}: AddGroupModalProps) => {
+}: AddSubsectionModalProps) => {
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const { mutate: createGroup } = useCreate();
+  const { mutate: createSubsection } = useCreate();
 
-  // Reset on open only — never on close — so the typed name doesn't flash
-  // back to empty during the close animation.
   useEffect(() => {
     if (open) {
       setName("");
@@ -43,12 +46,12 @@ export const AddGroupModal = ({
   };
 
   const handleSubmit = () => {
-    if (!name.trim() || submitting) return;
+    if (!name.trim() || !groupId || submitting) return;
     setSubmitting(true);
-    createGroup(
+    createSubsection(
       {
-        resource: "BudgetCategoryGroup",
-        values: { name: name.trim(), sortOrder: nextSortOrder },
+        resource: "BudgetCategorySubsection",
+        values: { name: name.trim(), groupId, sortOrder: nextSortOrder },
         successNotification: false,
       },
       {
@@ -76,13 +79,25 @@ export const AddGroupModal = ({
         },
       }}
     >
-      <DialogTitle sx={{ fontWeight: 900 }}>New Category Group</DialogTitle>
+      <DialogTitle sx={{ fontWeight: 900 }}>New Subsection</DialogTitle>
       <DialogContent>
+        {groupName && (
+          <Typography
+            sx={{
+              fontSize: "0.8rem",
+              color: "text.secondary",
+              fontWeight: 700,
+              mb: 1,
+            }}
+          >
+            Inside <strong>{groupName}</strong>
+          </Typography>
+        )}
         <TextField
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
-          label="Group Name"
+          label="Subsection Name"
           fullWidth
           variant="outlined"
           slotProps={{ inputLabel: { shrink: true } }}
@@ -107,7 +122,7 @@ export const AddGroupModal = ({
             }),
           }}
         >
-          Add Group
+          Add
           {submitting && (
             <CircularProgress
               size={16}

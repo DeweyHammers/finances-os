@@ -26,6 +26,7 @@ import {
   computeAccountBalance,
   buildBalanceAdjustment,
 } from "../../lib/budget-utils";
+import { CancelButton } from "../shared/CancelButton";
 
 interface EditAccountModalProps {
   open: boolean;
@@ -78,7 +79,7 @@ export const EditAccountModal = ({
   };
 
   const handleSubmit = () => {
-    if (!accountId || !name.trim()) return;
+    if (!accountId || !name.trim() || submitting) return;
     setSubmitting(true);
 
     updateAccount(
@@ -125,7 +126,7 @@ export const EditAccountModal = ({
   };
 
   const handleDelete = () => {
-    if (!accountId) return;
+    if (!accountId || submitting) return;
     setSubmitting(true);
     deleteAccount(
       { resource: "Account", id: accountId, successNotification: false },
@@ -232,13 +233,7 @@ export const EditAccountModal = ({
           {confirmDelete ? "Click again to confirm delete" : "Close Account"}
         </Button>
         <Box sx={{ display: "flex", gap: 1 }}>
-          <Button
-            onClick={handleClose}
-            sx={{ fontWeight: 700, color: "text.secondary" }}
-            disabled={submitting}
-          >
-            Cancel
-          </Button>
+          <CancelButton onClick={handleClose} disabled={submitting} />
           {confirmDelete ? (
             <Button
               onClick={handleDelete}
@@ -246,23 +241,53 @@ export const EditAccountModal = ({
               color="error"
               disableElevation
               disabled={submitting}
-              startIcon={submitting ? <CircularProgress size={16} /> : null}
-              sx={{ px: 4, py: 1, borderRadius: 2, fontWeight: 800 }}
+              sx={{
+                px: 4,
+                py: 1,
+                borderRadius: 2,
+                fontWeight: 800,
+                position: "relative",
+                ...(submitting && {
+                  "&.Mui-disabled": {
+                    bgcolor: "error.main",
+                  },
+                }),
+              }}
             >
               Delete
+              {submitting && (
+                <CircularProgress
+                  size={16}
+                  sx={{ position: "absolute", right: 12, color: "inherit" }}
+                />
+              )}
             </Button>
           ) : (
             <Button
               onClick={handleSubmit}
               variant="contained"
               disableElevation
-              disabled={submitting || !name.trim()}
-              startIcon={
-                submitting ? <CircularProgress size={16} /> : null
-              }
-              sx={{ px: 4, py: 1, borderRadius: 2, fontWeight: 800 }}
+              disabled={!name.trim() || submitting}
+              sx={{
+                px: 4,
+                py: 1,
+                borderRadius: 2,
+                fontWeight: 800,
+                position: "relative",
+                ...(submitting && {
+                  "&.Mui-disabled": {
+                    bgcolor: "primary.main",
+                  },
+                }),
+              }}
             >
-              {submitting ? "Saving..." : "Save"}
+              Save
+              {submitting && (
+                <CircularProgress
+                  size={16}
+                  sx={{ position: "absolute", right: 12, color: "inherit" }}
+                />
+              )}
             </Button>
           )}
         </Box>

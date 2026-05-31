@@ -3,11 +3,18 @@ import { SHORT_MONTHS } from "../../../lib/constants";
 export interface StatsTransaction {
   date: string | Date;
   categoryItemId: string | null;
+  categoryName: string | null;
   payeeId: string | null;
   memo: string | null;
   inflowCents: number;
   outflowCents: number;
 }
+
+const REMOVED_GROUP_ID = "__removed__";
+const REMOVED_GROUP_NAME = "Removed Items";
+
+const orphanItemId = (snapshotName: string): string =>
+  `__removed__${snapshotName.trim().toLowerCase()}`;
 
 export interface StatsCategoryItem {
   id: string;
@@ -77,27 +84,45 @@ export const computeYearlySpending = (params: {
     const itemMap = new Map<string, ItemSpend>();
 
     transactions.forEach((t) => {
-      if (!t.categoryItemId) return;
       const d = toDate(t.date);
       if (!Number.isFinite(d.getTime())) return;
       if (d.getUTCFullYear() !== year || d.getUTCMonth() !== monthIndex) return;
 
-      const item = itemById.get(t.categoryItemId);
-      if (!item) return;
-      const group = groupById.get(item.groupId);
-
       const cents = (t.outflowCents || 0) - (t.inflowCents || 0);
       if (cents <= 0) return;
 
-      const existing = itemMap.get(item.id);
+      const liveItem = t.categoryItemId ? itemById.get(t.categoryItemId) : undefined;
+      const snapshotName = (t.categoryName || "").trim();
+
+      let key: string;
+      let resolvedName: string;
+      let resolvedGroupId: string;
+      let resolvedGroupName: string;
+
+      if (liveItem) {
+        const group = groupById.get(liveItem.groupId);
+        key = liveItem.id;
+        resolvedName = liveItem.name;
+        resolvedGroupId = liveItem.groupId;
+        resolvedGroupName = group?.name ?? "";
+      } else if (snapshotName) {
+        key = orphanItemId(snapshotName);
+        resolvedName = snapshotName;
+        resolvedGroupId = REMOVED_GROUP_ID;
+        resolvedGroupName = REMOVED_GROUP_NAME;
+      } else {
+        return;
+      }
+
+      const existing = itemMap.get(key);
       if (existing) {
         existing.cents += cents;
       } else {
-        itemMap.set(item.id, {
-          itemId: item.id,
-          itemName: item.name,
-          groupId: item.groupId,
-          groupName: group?.name ?? "",
+        itemMap.set(key, {
+          itemId: key,
+          itemName: resolvedName,
+          groupId: resolvedGroupId,
+          groupName: resolvedGroupName,
           cents,
         });
       }
@@ -183,6 +208,48 @@ export const computeYearlyIncome = (params: {
       items: ordered,
     };
   });
+};
+
+const isoWeekKey = (date: Date): string => {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${weekNum}`;
+};
+
+export const computeWeeklyIncomeKpi = (params: {
+  year: number;
+  transactions: StatsTransaction[];
+}): { total: number; activeWeeks: number; avg: number } => {
+  const { year, transactions } = params;
+  const totals = new Map<string, number>();
+
+  transactions.forEach((t) => {
+    if (!isIncomeTransaction(t)) return;
+    const d = toDate(t.date);
+    if (!Number.isFinite(d.getTime())) return;
+    if (d.getUTCFullYear() !== year) return;
+
+    const key = isoWeekKey(d);
+    totals.set(key, (totals.get(key) || 0) + (t.inflowCents || 0));
+  });
+
+  let total = 0;
+  let activeWeeks = 0;
+  totals.forEach((cents) => {
+    if (cents > 0) {
+      total += cents;
+      activeWeeks += 1;
+    }
+  });
+
+  return {
+    total,
+    activeWeeks,
+    avg: activeWeeks > 0 ? total / activeWeeks : 0,
+  };
 };
 
 export const computeKpis = (months: MonthlySpend[]) => {

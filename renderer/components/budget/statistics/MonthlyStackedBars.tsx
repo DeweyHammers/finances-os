@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Typography, Paper } from "@mui/material";
 import { formatMoney } from "../../../lib/cents";
 import {
@@ -16,8 +16,9 @@ interface Props {
   onMonthClick?: (monthIndex: number) => void;
 }
 
-const PADDING = { top: 24, right: 24, bottom: 36, left: 64 };
-const HEIGHT = 360;
+const PADDING = { top: 24, right: 24, bottom: 16, left: 64 };
+const X_AXIS_HEIGHT = 50;
+const MIN_CHART_HEIGHT = 220;
 
 const niceMax = (raw: number): number => {
   if (raw <= 0) return 100;
@@ -39,12 +40,38 @@ export const MonthlyStackedBars = ({
   onMonthClick,
 }: Props) => {
   const [hover, setHover] = useState<{
-    x: number;
-    y: number;
+    mouseX: number;
+    mouseY: number;
     month: MonthlySpend;
     item: ItemSpend;
   } | null>(null);
-  const [width, setWidth] = useState(900);
+  const [size, setSize] = useState({ width: 900, height: 320 });
+  const outerRef = useRef<HTMLDivElement | null>(null);
+  const barsRef = useRef<HTMLDivElement | null>(null);
+
+  // Measure the bars container so the chart fills whatever vertical space is
+  // available — no scroll, no zoom, the SVG just scales to fit.
+  useLayoutEffect(() => {
+    const el = barsRef.current;
+    if (!el) return;
+    const update = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w <= 0 || h <= 0) return;
+      setSize((prev) =>
+        Math.abs(prev.width - w) > 2 || Math.abs(prev.height - h) > 2
+          ? { width: w, height: h }
+          : prev,
+      );
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const { width } = size;
+  const chartH = Math.max(MIN_CHART_HEIGHT, size.height);
 
   const maxCents = useMemo(
     () => Math.max(0, ...data.map((m) => m.totalCents)),
@@ -53,7 +80,7 @@ export const MonthlyStackedBars = ({
   const yMax = niceMax(maxCents / 100);
 
   const innerW = Math.max(100, width - PADDING.left - PADDING.right);
-  const innerH = HEIGHT - PADDING.top - PADDING.bottom;
+  const innerH = Math.max(0, chartH - PADDING.top - PADDING.bottom);
   const bandW = innerW / 12;
   const barW = Math.min(56, bandW * 0.6);
 
@@ -68,22 +95,29 @@ export const MonthlyStackedBars = ({
     PADDING.top + innerH - (dollars / yMax) * innerH;
 
   return (
-    <Box>
+    <Box
+      ref={outerRef}
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+        height: "100%",
+        position: "relative",
+      }}
+    >
       <Box
+        ref={barsRef}
         sx={{
-          width: "100%",
-          position: "relative",
-        }}
-        ref={(el: HTMLDivElement | null) => {
-          if (el && el.clientWidth && Math.abs(el.clientWidth - width) > 2) {
-            setWidth(el.clientWidth);
-          }
+          flex: 1,
+          minHeight: 0,
+          overflow: "hidden",
         }}
       >
         <svg
           width="100%"
-          height={HEIGHT}
-          viewBox={`0 0 ${width} ${HEIGHT}`}
+          height={chartH}
+          viewBox={`0 0 ${width} ${chartH}`}
           style={{ display: "block" }}
         >
           {yTicks.map((t, i) => {
@@ -139,6 +173,17 @@ export const MonthlyStackedBars = ({
                     !!hover &&
                     hover.month.monthIndex === m.monthIndex &&
                     hover.item.itemId === it.itemId;
+                  const handleMove = (e: React.MouseEvent) => {
+                    const outer = outerRef.current;
+                    if (!outer) return;
+                    const rect = outer.getBoundingClientRect();
+                    setHover({
+                      mouseX: e.clientX - rect.left,
+                      mouseY: e.clientY - rect.top,
+                      month: m,
+                      item: it,
+                    });
+                  };
                   const rect = (
                     <rect
                       key={it.itemId}
@@ -150,14 +195,8 @@ export const MonthlyStackedBars = ({
                       opacity={hover && !isHover ? 0.35 : 1}
                       rx={2}
                       style={{ cursor: "pointer" }}
-                      onMouseEnter={() =>
-                        setHover({
-                          x: cx,
-                          y: top,
-                          month: m,
-                          item: it,
-                        })
-                      }
+                      onMouseEnter={handleMove}
+                      onMouseMove={handleMove}
                       onMouseLeave={() => setHover(null)}
                       onClick={
                         onMonthClick
@@ -189,25 +228,6 @@ export const MonthlyStackedBars = ({
                     ${Math.round(m.totalCents / 100).toLocaleString()}
                   </text>
                 )}
-                <text
-                  x={cx}
-                  y={HEIGHT - PADDING.bottom + 18}
-                  textAnchor="middle"
-                  fontSize={11}
-                  fill="#94a3b8"
-                  fontFamily="Inter, sans-serif"
-                  fontWeight={600}
-                  onClick={
-                    hasData && onMonthClick
-                      ? () => onMonthClick(m.monthIndex)
-                      : undefined
-                  }
-                  style={{
-                    cursor: hasData && onMonthClick ? "pointer" : "default",
-                  }}
-                >
-                  {m.monthLabel}
-                </text>
               </g>
             );
           })}
@@ -220,10 +240,45 @@ export const MonthlyStackedBars = ({
             stroke="rgba(255,255,255,0.15)"
             strokeWidth={1}
           />
+        </svg>
+      </Box>
 
+      <Box sx={{ flexShrink: 0 }}>
+        <svg
+          width="100%"
+          height={X_AXIS_HEIGHT}
+          viewBox={`0 0 ${width} ${X_AXIS_HEIGHT}`}
+          style={{ display: "block" }}
+        >
+          {data.map((m, i) => {
+            const cx = PADDING.left + bandW * i + bandW / 2;
+            const hasData = m.totalCents > 0;
+            return (
+              <text
+                key={m.monthIndex}
+                x={cx}
+                y={20}
+                textAnchor="middle"
+                fontSize={11}
+                fill="#94a3b8"
+                fontFamily="Inter, sans-serif"
+                fontWeight={600}
+                onClick={
+                  hasData && onMonthClick
+                    ? () => onMonthClick(m.monthIndex)
+                    : undefined
+                }
+                style={{
+                  cursor: hasData && onMonthClick ? "pointer" : "default",
+                }}
+              >
+                {m.monthLabel}
+              </text>
+            );
+          })}
           <text
             x={PADDING.left + innerW / 2}
-            y={HEIGHT - 4}
+            y={X_AXIS_HEIGHT - 6}
             textAnchor="middle"
             fontSize={11}
             fill="#64748b"
@@ -234,25 +289,30 @@ export const MonthlyStackedBars = ({
             {year}
           </text>
         </svg>
+      </Box>
 
-        {hover && (() => {
-          const TOOLTIP_W = 230;
-          const ARROW = 9;
-          const GAP = 12;
-          const tooltipLeft = Math.min(
-            Math.max(hover.x - TOOLTIP_W / 2, 8),
-            width - TOOLTIP_W - 8,
-          );
-          const tooltipTop = Math.max(8, hover.y - GAP - 70);
-          const arrowCenter = Math.min(
-            Math.max(hover.x - tooltipLeft, 18),
-            TOOLTIP_W - 18,
-          );
-          const pct =
-            hover.month.totalCents > 0
-              ? (hover.item.cents / hover.month.totalCents) * 100
-              : 0;
-          return (
+      {hover && (() => {
+        const TOOLTIP_W = 230;
+        const TOOLTIP_H_EST = 88;
+        const CURSOR_OFFSET_X = 16;
+        const CURSOR_OFFSET_Y = 20;
+        const containerH =
+          outerRef.current?.clientHeight ?? chartH + X_AXIS_HEIGHT;
+        let tooltipLeft = hover.mouseX + CURSOR_OFFSET_X;
+        if (tooltipLeft + TOOLTIP_W + 8 > width) {
+          tooltipLeft = hover.mouseX - TOOLTIP_W - CURSOR_OFFSET_X;
+        }
+        tooltipLeft = Math.max(8, Math.min(tooltipLeft, width - TOOLTIP_W - 8));
+        let tooltipTop = hover.mouseY + CURSOR_OFFSET_Y;
+        if (tooltipTop + TOOLTIP_H_EST + 8 > containerH) {
+          tooltipTop = hover.mouseY - TOOLTIP_H_EST - CURSOR_OFFSET_Y;
+        }
+        tooltipTop = Math.max(8, tooltipTop);
+        const pct =
+          hover.month.totalCents > 0
+            ? (hover.item.cents / hover.month.totalCents) * 100
+            : 0;
+        return (
           <Paper
             elevation={6}
             sx={{
@@ -339,35 +399,9 @@ export const MonthlyStackedBars = ({
                 {pct.toFixed(1)}% of month
               </Typography>
             </Box>
-            <Box
-              sx={{
-                position: "absolute",
-                bottom: -ARROW,
-                left: arrowCenter - ARROW,
-                width: 0,
-                height: 0,
-                borderLeft: `${ARROW}px solid transparent`,
-                borderRight: `${ARROW}px solid transparent`,
-                borderTop: `${ARROW}px solid rgba(129, 140, 248, 0.25)`,
-              }}
-            />
-            <Box
-              sx={{
-                position: "absolute",
-                bottom: -ARROW + 1.5,
-                left: arrowCenter - ARROW + 1.5,
-                width: 0,
-                height: 0,
-                borderLeft: `${ARROW - 1.5}px solid transparent`,
-                borderRight: `${ARROW - 1.5}px solid transparent`,
-                borderTop: `${ARROW - 1.5}px solid rgba(15, 23, 42, 0.96)`,
-              }}
-            />
           </Paper>
-          );
-        })()}
-      </Box>
-
+        );
+      })()}
     </Box>
   );
 };

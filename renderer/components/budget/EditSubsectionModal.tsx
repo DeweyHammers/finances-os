@@ -7,45 +7,44 @@ import {
   DialogContent,
   DialogActions,
   Button,
-  Box,
   TextField,
-  Alert,
   CircularProgress,
 } from "@mui/material";
 import { useUpdate } from "@refinedev/core";
-import type { BudgetItem } from "./BudgetTable";
+import type { BudgetSubsection } from "./BudgetTable";
 import { CancelButton } from "../shared/CancelButton";
 
-interface EditItemModalProps {
+interface EditSubsectionModalProps {
   open: boolean;
-  item: BudgetItem | null;
+  subsection: BudgetSubsection | null;
   onClose: () => void;
 }
 
-export const EditItemModal = ({ open, item, onClose }: EditItemModalProps) => {
+export const EditSubsectionModal = ({
+  open,
+  subsection,
+  onClose,
+}: EditSubsectionModalProps) => {
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { mutate: update } = useUpdate();
 
   useEffect(() => {
-    if (open && item) {
-      setName(item.name);
+    if (open && subsection) {
+      setName(subsection.name);
       setSubmitting(false);
     }
-  }, [open, item]);
+  }, [open, subsection]);
 
-  if (!item) return null;
-
-  const isCustom = item.sourceType === "CUSTOM";
-  const isBill = item.sourceType === "BILL";
+  if (!subsection) return null;
 
   const handleSave = () => {
     if (!name.trim() || submitting) return;
     setSubmitting(true);
     update(
       {
-        resource: "BudgetCategoryItem",
-        id: item.id,
+        resource: "BudgetCategorySubsection",
+        id: subsection.id,
         values: { name: name.trim() },
         successNotification: false,
       },
@@ -63,7 +62,7 @@ export const EditItemModal = ({ open, item, onClose }: EditItemModalProps) => {
       open={open}
       onClose={submitting ? undefined : onClose}
       fullWidth
-      maxWidth="sm"
+      maxWidth="xs"
       slotProps={{
         paper: {
           sx: {
@@ -74,41 +73,20 @@ export const EditItemModal = ({ open, item, onClose }: EditItemModalProps) => {
         },
       }}
     >
-      <DialogTitle sx={{ fontWeight: 900, pt: 3, px: 4 }}>
-        Edit Budget Item
-      </DialogTitle>
-      <DialogContent sx={{ px: 4, pb: 2 }}>
-        <Box
-          sx={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-            mt: 1,
-          }}
-        >
-          {!isCustom && (
-            <Alert severity="info" variant="outlined">
-              {isBill
-                ? "This item is sourced from a Bill. The amount and cycle are managed on the Bills page — this display name stays in sync with the latest Bill name."
-                : "This item is sourced from Personal entries. Amount and cycle are managed on the Personal page — this display name stays in sync with the latest Personal name."}
-            </Alert>
-          )}
-          <TextField
-            label="Display Name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            fullWidth
-            variant="outlined"
-            slotProps={{ inputLabel: { shrink: true } }}
-            helperText={
-              isBill
-                ? "Pre-filled from the current Bill name. Edits here override the auto-sync for this category."
-                : ""
-            }
-          />
-        </Box>
+      <DialogTitle sx={{ fontWeight: 900 }}>Edit Subsection</DialogTitle>
+      <DialogContent>
+        <TextField
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          label="Subsection Name"
+          fullWidth
+          variant="outlined"
+          slotProps={{ inputLabel: { shrink: true } }}
+          sx={{ mt: 1 }}
+        />
       </DialogContent>
-      <DialogActions sx={{ p: 4, pt: 1 }}>
+      <DialogActions sx={{ p: 3, pt: 1 }}>
         <CancelButton onClick={onClose} disabled={submitting} />
         <Button
           variant="contained"
@@ -118,7 +96,6 @@ export const EditItemModal = ({ open, item, onClose }: EditItemModalProps) => {
           sx={{
             fontWeight: 800,
             borderRadius: 2,
-            px: 4,
             position: "relative",
             ...(submitting && {
               "&.Mui-disabled": {
