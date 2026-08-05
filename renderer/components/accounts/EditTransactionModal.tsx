@@ -10,7 +10,7 @@ import {
   Box,
   CircularProgress,
 } from "@mui/material";
-import { useOne, useUpdate } from "@refinedev/core";
+import { useOne, useUpdate, useList } from "@refinedev/core";
 import {
   TransactionFormFields,
   TransactionFormState,
@@ -46,10 +46,16 @@ export const EditTransactionModal = ({
     queryOptions: { enabled: !!transactionId && open },
   });
 
+  const { query: accountsQuery } = useList({
+    resource: "Account",
+    pagination: { mode: "off" },
+  });
+
   useEffect(() => {
     const data = query.data?.data;
-    if (data && open) setState(valuesToState(data));
-  }, [query.data?.data, open]);
+    const accounts = (accountsQuery.data?.data ?? []) as { id: string; name: string }[];
+    if (data && open) setState(valuesToState(data, accounts));
+  }, [query.data?.data, accountsQuery.data?.data, open]);
 
   const handleClose = () => {
     if (submitting) return;

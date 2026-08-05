@@ -39,6 +39,7 @@ export const ResourceCreateModal: FC<ResourceCreateModalProps> = ({
       onClose={close}
       fullWidth
       maxWidth={maxWidth}
+      transitionDuration={{ enter: 225, exit: 0 }}
       slotProps={{
         paper: {
           sx: {

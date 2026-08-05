@@ -22,14 +22,19 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
   yearlyCosts,
   months,
 }) => {
-  // Group yearly costs by month
-  const groupedYearly = yearlyCosts.reduce((acc: any, cost: any) => {
-    const monthName = months[cost.month - 1];
-    if (!acc[monthName]) acc[monthName] = { costs: [], total: 0 };
-    acc[monthName].costs.push(cost);
-    acc[monthName].total += Number(cost.amount) || 0;
+  // Group yearly costs by month number, then sort chronologically
+  const groupedByMonthNum = yearlyCosts.reduce((acc: any, cost: any) => {
+    const m = cost.month;
+    if (!acc[m]) acc[m] = { costs: [], total: 0 };
+    acc[m].costs.push(cost);
+    acc[m].total += Number(cost.amount) || 0;
     return acc;
   }, {});
+  const groupedYearly = Object.fromEntries(
+    Object.entries(groupedByMonthNum)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([m, data]) => [months[Number(m) - 1], data]),
+  );
 
   const yearlyTotal = yearlyCosts.reduce(
     (acc, curr) => acc + (Number(curr.amount) || 0),
@@ -73,11 +78,13 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
                     variant="caption"
                     sx={{ fontWeight: 800, color: "text.secondary" }}
                   >
-                    TOTAL: $
-                    {data.total.toLocaleString(undefined, {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
+                    TOTAL:{" "}
+                    <span style={{ color: "white" }}>
+                      ${data.total.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </span>
                   </Typography>
                 </Box>
                 <Box
@@ -92,13 +99,6 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
                       color="#ec4899"
                     />
                   ))}
-                  {data.costs.length > 1 && (
-                    <DashboardCard
-                      name="Total"
-                      amount={data.total}
-                      color="#ec4899"
-                    />
-                  )}
                 </Box>
               </Box>
             ),

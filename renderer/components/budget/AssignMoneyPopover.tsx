@@ -4,8 +4,6 @@ import { useState, useEffect } from "react";
 import {
   Popover,
   Box,
-  Tabs,
-  Tab,
   TextField,
   Autocomplete,
   Button,
@@ -14,7 +12,6 @@ import {
 } from "@mui/material";
 import BoltIcon from "@mui/icons-material/Bolt";
 import { toCents, formatMoney } from "../../lib/cents";
-import { getCycleColor } from "../../lib/cycle-utils";
 import { CancelButton } from "../shared/CancelButton";
 
 export interface AssignTargetOption {
@@ -25,14 +22,21 @@ export interface AssignTargetOption {
   groupName: string;
 }
 
+interface CurrentPeriod {
+  key: string;
+  label: string;
+  dateRange: string;
+  color: string;
+}
+
 interface AssignMoneyPopoverProps {
   open: boolean;
   anchorEl: HTMLElement | null;
   options: AssignTargetOption[];
-  cycles?: string[];
+  currentPeriod?: CurrentPeriod | null;
   onClose: () => void;
   onManualAssign: (params: { itemId: string; amountCents: number }) => void;
-  onAutoAssign: (cycle: string) => void;
+  onAutoAssign: () => void;
 }
 
 const availableColor = (cents: number): string => {
@@ -45,7 +49,7 @@ export const AssignMoneyPopover = ({
   open,
   anchorEl,
   options,
-  cycles = ["Q1", "Q2", "Q3", "Q4"],
+  currentPeriod,
   onClose,
   onManualAssign,
   onAutoAssign,
@@ -69,8 +73,8 @@ export const AssignMoneyPopover = ({
     onManualAssign({ itemId: destOption.itemId, amountCents: cents });
   };
 
-  const handleAutoAssign = (cycle: string) => {
-    onAutoAssign(cycle);
+  const handleAutoAssign = () => {
+    onAutoAssign();
     onClose();
   };
 
@@ -94,30 +98,35 @@ export const AssignMoneyPopover = ({
         },
       }}
     >
-      <Tabs
-        value={tab}
-        onChange={(_, v) => setTab(v)}
-        variant="fullWidth"
-        slotProps={{ indicator: { sx: { transition: "none" } } }}
-        sx={{
-          borderBottom: "1px solid rgba(255,255,255,0.06)",
-          "& .MuiTab-root": {
-            textTransform: "none",
-            fontWeight: 700,
-            fontSize: "0.95rem",
-            color: "rgba(255,255,255,0.5)",
-          },
-          "& .Mui-selected": { color: "primary.light" },
-        }}
-      >
-        <Tab
-          value="auto"
-          icon={<BoltIcon sx={{ fontSize: 18 }} />}
-          iconPosition="start"
-          label="Auto"
-        />
-        <Tab value="manually" label="Manually" />
-      </Tabs>
+      <Box sx={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        {([
+          { value: "auto" as const, label: "Auto", icon: <BoltIcon sx={{ fontSize: 18 }} /> },
+          { value: "manually" as const, label: "Manually", icon: null },
+        ] as const).map((t) => (
+          <Box
+            key={t.value}
+            onClick={() => setTab(t.value)}
+            sx={{
+              flex: 1,
+              py: 1.5,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 0.75,
+              cursor: "pointer",
+              fontWeight: 700,
+              fontSize: "0.95rem",
+              color: tab === t.value ? "primary.light" : "rgba(255,255,255,0.5)",
+              borderBottom: "2px solid",
+              borderColor: tab === t.value ? "primary.light" : "transparent",
+              userSelect: "none",
+            }}
+          >
+            {t.icon}
+            {t.label}
+          </Box>
+        ))}
+      </Box>
 
       {tab === "manually" ? (
         <Box sx={{ p: 2.5, display: "flex", flexDirection: "column", gap: 2 }}>
@@ -264,39 +273,47 @@ export const AssignMoneyPopover = ({
               textTransform: "uppercase",
             }}
           >
-            Auto-Assign by Cycle
+            Auto-Assign for This Week
           </Typography>
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: cycles.length > 1 ? "1fr 1fr" : "1fr",
-              gap: 1,
-            }}
-          >
-            {cycles.map((c) => {
-              const color = getCycleColor(c);
-              return (
-                <Button
-                  key={c}
-                  variant="outlined"
-                  onClick={() => handleAutoAssign(c)}
-                  sx={{
-                    fontWeight: 800,
-                    color,
-                    borderColor: `${color}50`,
-                    bgcolor: `${color}10`,
-                    py: 1,
-                    "&:hover": {
-                      bgcolor: `${color}25`,
-                      borderColor: color,
-                    },
-                  }}
-                >
-                  {c}
-                </Button>
-              );
-            })}
-          </Box>
+          {currentPeriod ? (
+            <Button
+              variant="outlined"
+              onClick={handleAutoAssign}
+              sx={{
+                fontWeight: 800,
+                color: currentPeriod.color,
+                borderColor: `${currentPeriod.color}50`,
+                bgcolor: `${currentPeriod.color}10`,
+                py: 1.5,
+                display: "flex",
+                flexDirection: "column",
+                gap: 0.25,
+                lineHeight: 1.3,
+                "&:hover": {
+                  bgcolor: `${currentPeriod.color}25`,
+                  borderColor: currentPeriod.color,
+                },
+              }}
+            >
+              {currentPeriod.label}
+              <Typography
+                component="span"
+                sx={{
+                  fontSize: "0.7rem",
+                  fontWeight: 600,
+                  color: currentPeriod.color,
+                  opacity: 0.75,
+                  textTransform: "none",
+                }}
+              >
+                {currentPeriod.dateRange}
+              </Typography>
+            </Button>
+          ) : (
+            <Typography sx={{ color: "text.secondary", fontSize: "0.85rem" }}>
+              No active pay period found.
+            </Typography>
+          )}
         </Box>
       )}
     </Popover>

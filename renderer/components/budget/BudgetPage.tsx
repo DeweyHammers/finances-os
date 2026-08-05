@@ -11,7 +11,7 @@ import {
   Paper,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
-import { useList, useCreate, useUpdate } from "@refinedev/core";
+import { useList, useOne, useCreate, useUpdate } from "@refinedev/core";
 import { ReadyToAssignPill } from "./ReadyToAssignPill";
 import {
   BudgetTable,
@@ -36,10 +36,20 @@ import {
   computeAvailable,
   computeReadyToAssign,
   monthStart,
-  resolveAutoAssignAmount,
+  resolveAutoAssignAmountForPeriod,
 } from "../../lib/budget-utils";
 import { resolveItemDisplay } from "../../lib/budget-display";
 import { usePaymentCycle } from "../../lib/usePaymentCycle";
+import {
+  getPayPeriodsForMonth,
+  clampDayToMonth,
+  computeSplitPersonalAllocations,
+  getBillPeriodKeyWithOverride,
+  getBillPeriodKey,
+  monthKeyOf,
+  BillOverrideRecord,
+  PayPeriod,
+} from "../../lib/pay-period-utils";
 
 const startOfThisMonth = () => {
   const d = new Date();
@@ -48,7 +58,20 @@ const startOfThisMonth = () => {
 
 export const BudgetPage = () => {
   const month = useMemo(() => startOfThisMonth(), []);
-  const { cycles: paymentCycles } = usePaymentCycle();
+  const { payDay, paymentCycle } = usePaymentCycle();
+  const biWeekly = paymentCycle === "BI_WEEKLY";
+  const periods: PayPeriod[] = useMemo(
+    () =>
+      getPayPeriodsForMonth(
+        month.getUTCFullYear(),
+        month.getUTCMonth(),
+        payDay,
+        new Date(),
+        biWeekly,
+      ),
+    [month, payDay, biWeekly],
+  );
+  const currentPeriod = periods.find((p) => p.isCurrent) ?? periods[0] ?? null;
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [addItemGroupId, setAddItemGroupId] = useState<string | null>(null);
   const [addSubsectionGroup, setAddSubsectionGroup] = useState<{
@@ -105,6 +128,18 @@ export const BudgetPage = () => {
     resource: "Personal",
     pagination: { mode: "off" },
   });
+  const { query: overridesQuery } = useList({
+    resource: "BillPayWeekOverride",
+    pagination: { mode: "off" },
+  });
+  const { query: incomesQuery } = useList({
+    resource: "Income",
+    pagination: { mode: "off" },
+  });
+  const { query: settingsQuery } = useOne({
+    resource: "AppSettings",
+    id: "global",
+  });
 
   const { mutate: createBudgetMonth } = useCreate();
   const { mutate: updateBudgetMonth } = useUpdate();
@@ -116,6 +151,16 @@ export const BudgetPage = () => {
   const allTxns = (txnsQuery.data?.data as any[]) || [];
   const bills = (billsQuery.data?.data as any[]) || [];
   const personals = (personalsQuery.data?.data as any[]) || [];
+  const overrideRowsRaw = (overridesQuery.data?.data as any[]) || [];
+  const incomes = (incomesQuery.data?.data as any[]) || [];
+  const settings = (settingsQuery.data?.data as any) || {};
+
+  const viewYear = month.getUTCFullYear();
+  const viewMonth = month.getUTCMonth();
+  const clampedBills = bills.map((b: any) => ({
+    ...b,
+    dueDate: clampDayToMonth(Number(b.dueDate), viewYear, viewMonth),
+  }));
 
   const monthIso = month.toISOString();
 
@@ -277,11 +322,122 @@ export const BudgetPage = () => {
     }
   };
 
-  const handleAutoAssign = (cycle: string) => {
+  const handleAutoAssign = () => {
+    if (!currentPeriod) return;
     let count = 0;
     let totalCents = 0;
+    const billRefs = clampedBills.map((b: any) => ({
+      id: b.id,
+      amount: Number(b.amount),
+      dueDate: Number(b.dueDate),
+    }));
+    const personalRefs = personals.map((p: any) => ({
+      name: p.name,
+      amount: Number(p.amount),
+      dueDate: p.dueDate != null ? clampDayToMonth(Number(p.dueDate), viewYear, viewMonth) : undefined,
+      weekOfMonth: p.weekOfMonth ?? null,
+      repeatWeekly: Boolean(p.repeatWeekly),
+      splitAcrossWeeks: Boolean(p.splitAcrossWeeks),
+    }));
+
+    const monthKey = monthKeyOf(viewYear, viewMonth);
+    const overrides: BillOverrideRecord[] = overrideRowsRaw.map((r: any) => ({
+      billId: String(r.billId),
+      monthKey: String(r.monthKey),
+      weekIndex: Number(r.weekIndex),
+    }));
+
+    // Mirror Overview's per-period computations so split personals get the
+    // same slice they show on the Overview page (bills placement respects
+    // the auto-balance overrides; personals split proportionally to leftover
+    // room after bills + fixed personal + wife target).
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+    const collectPaydays = (payDay: number, isBiWeekly: boolean, offset: number): number[] => {
+      const all: number[] = [];
+      for (let d = 1; d <= daysInMonth; d++) {
+        if (new Date(viewYear, viewMonth, d).getDay() === payDay) all.push(d);
+      }
+      return isBiWeekly ? all.filter((_, i) => i % 2 === offset) : all;
+    };
+    const primaryIncome = incomes.find((i: any) => i.isPrimary);
+    const incomePerPeriodCents = periods.map((p) => {
+      let total = 0;
+      const sources = incomes.length > 0
+        ? incomes
+        : [{
+            amount: settings.w2Amount ?? 0,
+            paymentCycle: settings.paymentCycle,
+            payDay: settings.payDay,
+            payWeekOffset: 0,
+          }];
+      sources.forEach((income: any) => {
+        const incomePayDay = Number(income.payDay ?? payDay);
+        const isBW =
+          (income.paymentCycle ?? primaryIncome?.paymentCycle ?? settings.paymentCycle) ===
+          "BI_WEEKLY";
+        const offset = Number(income.payWeekOffset ?? 0);
+        const paydays = collectPaydays(incomePayDay, isBW, offset);
+        if (paydays.some((d) => d >= p.startDay && d <= p.endDay)) {
+          total += Math.round((Number(income.amount) || 0) * 100);
+        }
+      });
+      return total;
+    });
+    const fixedPersonalPerPeriodCents = periods.map((p) =>
+      personalRefs
+        .filter((pb) => {
+          if (pb.splitAcrossWeeks) return false;
+          if (pb.repeatWeekly) return true;
+          const key =
+            pb.weekOfMonth != null
+              ? `P${pb.weekOfMonth}`
+              : getBillPeriodKey(Number(pb.dueDate ?? 1), periods);
+          return key === p.key;
+        })
+        .reduce((acc, pb) => acc + Math.round((Number(pb.amount) || 0) * 100), 0),
+    );
+    const billsPerPeriodCents = periods.map((p) =>
+      billRefs
+        .filter(
+          (b) =>
+            getBillPeriodKeyWithOverride(
+              b.id,
+              Number(b.dueDate),
+              periods,
+              monthKey,
+              overrides,
+            ) === p.key,
+        )
+        .reduce((acc, b) => acc + Math.round((Number(b.amount) || 0) * 100), 0),
+    );
+    const targetSurplusCents = Number(settings?.wifeWeeklyTargetCents ?? 30000);
+    const splitPersonalRefs = personalRefs.filter((pb) => pb.splitAcrossWeeks);
+    const splitAlloc = computeSplitPersonalAllocations({
+      periods,
+      incomePerPeriodCents,
+      fixedPersonalPerPeriodCents,
+      billsPerPeriodCents,
+      targetSurplusCents,
+      splits: splitPersonalRefs.map((pb) => ({
+        id: pb.name,
+        amount: Number(pb.amount) || 0,
+      })),
+    });
+    const currentPeriodIdx = periods.findIndex((p) => p.key === currentPeriod.key);
+    // Cumulative allocation through the current period — the auto-assign
+    // top-up logic treats this as the running total that Available should
+    // reach after this week. Auto-assigning a later week without doing the
+    // earlier ones simply pulls the whole cumulative slice at once.
+    const splitAllocationsByPersonalName: Record<string, number> = {};
+    splitPersonalRefs.forEach((pb) => {
+      const slices = splitAlloc.perSplitPerPeriod.get(pb.name) ?? [];
+      splitAllocationsByPersonalName[pb.name] = slices
+        .slice(0, currentPeriodIdx + 1)
+        .reduce((a, b) => a + b, 0);
+    });
+
     allFlatItems.forEach((it) => {
-      const target = resolveAutoAssignAmount({
+      const target = resolveAutoAssignAmountForPeriod({
         item: {
           id: it.id,
           sourceType: it.sourceType as "BILL" | "PERSONAL_NAME" | "CUSTOM",
@@ -290,19 +446,44 @@ export const BudgetPage = () => {
           customAmountCents: it.customAmountCents,
           customCycle: it.customCycle,
         },
-        cycle,
-        bills,
-        personals,
+        periodKey: currentPeriod.key,
+        periods,
+        bills: billRefs,
+        personals: personalRefs,
+        overrides,
+        monthKey,
+        splitAllocationsByPersonalName,
       });
-      if (target > 0) {
-        const current = it.assignedCents;
-        upsertAssignment(it.id, current + target);
-        count++;
-        totalCents += target;
+      if (target <= 0) return;
+      // Repeating items (custom cycle-null, personal repeatWeekly) get a fresh
+      // target every pay period — compare the monthly assignment against the
+      // cumulative expectation (target × periods so far). Non-repeating items
+      // (bills, dated personals) fire once per month, so top up available.
+      const personalMatch =
+        it.sourceType === "PERSONAL_NAME"
+          ? personalRefs.find((p) => p.name === it.sourcePersonalName)
+          : null;
+      const isRepeating =
+        (it.sourceType === "CUSTOM" && it.customCycle == null) ||
+        (it.sourceType === "PERSONAL_NAME" && Boolean(personalMatch?.repeatWeekly));
+      let needed: number;
+      if (isRepeating) {
+        const expected = target * (currentPeriodIdx + 1);
+        // Clamp assigned to 0: if the user moved available money (which
+        // includes prior-month surplus) back to RTA, assignedCents can be
+        // negative, and expected - (negative) would inflate needed well
+        // above the current period's target.
+        needed = expected - Math.max(0, it.assignedCents);
+      } else {
+        needed = target - Math.max(0, it.availableCents);
       }
+      if (needed <= 0) return;
+      upsertAssignment(it.id, it.assignedCents + needed);
+      count++;
+      totalCents += needed;
     });
     setToast(
-      `Assigned ${(totalCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} across ${count} items for ${cycle}`,
+      `Assigned ${(totalCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} across ${count} items for ${currentPeriod.label}`,
     );
   };
 
@@ -345,7 +526,7 @@ export const BudgetPage = () => {
           sourcePersonalName: it.sourcePersonalName,
           customCycle: it.customCycle,
         },
-        bills,
+        clampedBills,
         personals,
       ).displayName;
     const result: MoveMoneyOption[] = [];
@@ -416,7 +597,10 @@ export const BudgetPage = () => {
     itemsQuery.isLoading ||
     subsectionsQuery.isLoading ||
     monthsQuery.isLoading ||
-    txnsQuery.isLoading;
+    txnsQuery.isLoading ||
+    overridesQuery.isLoading ||
+    incomesQuery.isLoading ||
+    settingsQuery.isLoading;
 
   return (
     <Box
@@ -502,8 +686,9 @@ export const BudgetPage = () => {
         >
           <BudgetTable
             groups={groups}
-            bills={bills}
+            bills={clampedBills}
             personals={personals}
+            periods={periods}
             onAvailableClick={(item, el) => setMoveAnchor({ item, el })}
             onAddItem={(groupId) => setAddItemGroupId(groupId)}
             onAddSubsection={(group) => setAddSubsectionGroup(group)}
@@ -559,7 +744,7 @@ export const BudgetPage = () => {
         open={!!assignAnchor}
         anchorEl={assignAnchor}
         options={assignOptions}
-        cycles={paymentCycles}
+        currentPeriod={currentPeriod}
         onClose={() => setAssignAnchor(null)}
         onManualAssign={handleManualAssign}
         onAutoAssign={handleAutoAssign}

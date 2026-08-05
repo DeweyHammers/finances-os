@@ -13,7 +13,7 @@ interface PersonalEditProps {
 export const PersonalEdit = ({ modalProps }: PersonalEditProps) => {
   return (
     <ResourceEditModal modalProps={modalProps} title="Personal Bill">
-      <PersonalFormFields formProps={modalProps} isEdit />
+      <PersonalFormFields formProps={modalProps} />
     </ResourceEditModal>
   );
 };

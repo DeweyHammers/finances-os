@@ -2,12 +2,10 @@
 
 import { useMemo } from "react";
 import { GridColDef } from "@mui/x-data-grid";
-import { Box, Typography } from "@mui/material";
+import { Typography } from "@mui/material";
 import { BillCreate } from "./create";
 import { BillEdit } from "./edit";
 import { ResourceList } from "../shared/ResourceList";
-import { getCycleColor } from "../../lib/cycle-utils";
-
 export const BillList = () => {
   const getOrdinal = (n: number) => {
     const s = ["th", "st", "nd", "rd"];
@@ -54,32 +52,6 @@ export const BillList = () => {
             {getOrdinal(params.value)}
           </Typography>
         ),
-      },
-      {
-        field: "withdrawalCycle",
-        headerName: "Cycle",
-        width: 120,
-        align: "center",
-        headerAlign: "center",
-        renderCell: (params) => {
-          const cycleColor = getCycleColor(params.value as string);
-          return (
-            <Box
-              sx={{
-                px: 1.5,
-                py: 0.5,
-                bgcolor: `${cycleColor}15`,
-                borderRadius: "4px",
-                color: cycleColor,
-                fontSize: "0.8rem",
-                fontWeight: 900,
-                border: `1px solid ${cycleColor}30`,
-              }}
-            >
-              {params.value}
-            </Box>
-          );
-        },
       },
     ],
     [],

@@ -7,9 +7,20 @@ datasource db {
   url      = "file:./dev.db"
 }
 
+model Income {
+  id            String  @id @default(cuid())
+  name          String
+  amount        Float   @default(0.00)
+  paymentCycle  String  @default("WEEKLY")
+  payDay        Int     @default(3)
+  payWeekOffset Int     @default(0)  // bi-weekly only: 0 = 1st & 3rd paydays, 1 = 2nd & 4th paydays
+  isPrimary     Boolean @default(false)
+}
+
 model AppSettings {
   id                        String  @id @default("global")
   paymentCycle              String  @default("BI_WEEKLY") // WEEKLY, BI_WEEKLY, MONTHLY
+  payDay                    Int     @default(2) // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
   eddActive                 Boolean @default(true)
   eddRemainingBalance       Float   @default(7200.00) 
   baseEddWeeklyAmount       Float   @default(450.00)
@@ -23,6 +34,7 @@ model AppSettings {
   upworkExpensesHoldAmount  Float   @default(0.00)
   upworkMinWithdrawalAmount Float   @default(0.00)
   wifeMonthlyAmount         Float   @default(0.00)
+  wifeWeeklyTargetCents     Int     @default(30000)  // auto-balance target: min surplus per pay week after bills+personal
 }
 
 model Earning {
@@ -94,14 +106,28 @@ model Bill {
   dueDate         Int      @default(1)
   withdrawalCycle String   @default("Q1") // Q1, Q2, Q3, Q4, MONTH
   isAutoPay       Boolean  @default(true)
+  overrides       BillPayWeekOverride[]
+}
+
+model BillPayWeekOverride {
+  id         String @id @default(cuid())
+  billId     String
+  bill       Bill   @relation(fields: [billId], references: [id], onDelete: Cascade)
+  monthKey   String // "YYYY-MM" — the VIEW month whose pay-week grid this override applies to
+  weekIndex  Int    // 0-based index into that month's periods (P1 = 0, P2 = 1, …)
+
+  @@unique([billId, monthKey])
 }
 
 model Personal {
-  id              String   @id @default(cuid())
-  name            String
-  amount          Float
-  dueDate         Int      @default(1)
-  withdrawalCycle String   @default("Q1")
+  id                String   @id @default(cuid())
+  name              String
+  amount            Float
+  dueDate           Int      @default(1)
+  weekOfMonth       Int?
+  withdrawalCycle   String   @default("Q1")
+  repeatWeekly      Boolean  @default(false)
+  splitAcrossWeeks  Boolean  @default(false)  // when true, amount is a MONTHLY total distributed across pay weeks proportional to leftover room
 }
 
 model YearlyCost {

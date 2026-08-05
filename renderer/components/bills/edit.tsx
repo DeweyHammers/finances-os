@@ -13,7 +13,7 @@ interface BillEditProps {
 export const BillEdit = ({ modalProps }: BillEditProps) => {
   return (
     <ResourceEditModal modalProps={modalProps} title="Bill">
-      <BillFormFields formProps={modalProps} isEdit />
+      <BillFormFields formProps={modalProps} />
     </ResourceEditModal>
   );
 };
