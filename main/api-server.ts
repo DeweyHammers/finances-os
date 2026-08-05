@@ -55,7 +55,10 @@ export function transformBody(body: any) {
           key === "outflowCents" ||
           key === "customAmountCents" ||
           key === "assignedCents" ||
-          key === "sortOrder"
+          key === "sortOrder" ||
+          key === "payDay" ||
+          key === "payWeekOffset" ||
+          key === "weekOfMonth"
         ) {
           const num = Number(trimmed);
           if (!isNaN(num)) {
@@ -71,6 +74,45 @@ export function transformBody(body: any) {
   });
   return transformed;
 }
+
+// ── Income: special routes to enforce single-primary constraint ──────────────
+app.post("/api/Income", async (req: Request, res: Response) => {
+  const data = transformBody(req.body);
+  const { id: _id, ...createData } = data;
+  const isPrimary = createData.isPrimary === true || createData.isPrimary === "true";
+  try {
+    const item = await prisma.$transaction(async (tx) => {
+      if (isPrimary) {
+        await tx.income.updateMany({ where: {}, data: { isPrimary: false } });
+      }
+      return tx.income.create({ data: { ...createData, isPrimary } });
+    });
+    res.json(item);
+  } catch (error: any) {
+    console.error("API Error POST /api/Income:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch("/api/Income/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const data = transformBody(req.body);
+  const { id: _id, ...updateData } = data;
+  const isPrimary = updateData.isPrimary === true || updateData.isPrimary === "true";
+  try {
+    const item = await prisma.$transaction(async (tx) => {
+      if (isPrimary) {
+        await tx.income.updateMany({ where: { id: { not: id } }, data: { isPrimary: false } });
+      }
+      return tx.income.update({ where: { id }, data: { ...updateData, isPrimary } });
+    });
+    res.json(item);
+  } catch (error: any) {
+    console.error(`API Error PATCH /api/Income/${id}:`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+// ─────────────────────────────────────────────────────────────────────────────
 
 // List & Create
 app.get("/api/:resource", async (req: Request, res: Response) => {

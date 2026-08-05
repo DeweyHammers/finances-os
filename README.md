@@ -1,30 +1,34 @@
 # Finances OS
 
-A personal cash-flow workstation for planning a weekly paycheck against monthly bills. Income lands once a week, expenses are bucketed into four weekly cycles (Q1–Q4), and the dashboard shows what's left over for each pay period at a glance.
+A personal cash-flow workstation for planning your paycheck against monthly bills. Pay periods are calculated from the real calendar based on your configured pay day, and the dashboard shows income vs. expenses for each period at a glance.
 
 The app opens on the **Plan** (zero-based budget) by default. Other sections live under **Budget** (Plan, Statistics, Payees), **Cash** (per-account ledgers), and **Expenses** (Overview, Bills, Personal, Yearly Costs).
 
 ## Core Features
 
-### 🧮 Plan (YNAB-style Budget)
+### 🧮 Plan
+
 - Monthly **zero-based budget** table: every dollar of income gets assigned a job.
 - Sticky **Ready to Assign** pill at the top, color-coded (green = balanced, yellow = unassigned, red = over-assigned).
 - **Category groups → items**, drag-reorder within and across groups.
-- **Three modes for adding items:** pull from existing **Bills**, pick a **Personal** name (auto-aggregated across all four cycles), or type a **Custom** item with name + amount + optional cycle tag.
-- **Auto-Assign Q1 / Q2 / Q3 / Q4** buttons fill the right amount for every sourced item in one click.
+- **Subsections** (one level deep) can live inside a group to sub-organize items — items can sit directly in the group or in a subsection.
+- **Three modes for adding items:** pull from existing **Bills**, pick a **Personal** name, or type a **Custom** item with name + amount.
+- **Auto-Assign** button fills the right amount for every sourced item in one click (scoped to the current pay period). Bill due days are clamped to the last valid day of the current month before period matching, so a bill set to the 31st is correctly routed in a 30-day month.
 - Inline-edit the **Assigned** cell; calculator-style (`+50` to add) supported.
 - **Move Money** popover off any Available pill to cover overspending YNAB-style.
 - Activity + Available are derived live from your transactions.
 
 ### 📊 Statistics
+
 - Top-level tabs split the page by series: **Spending** (red) / **Income** (green). Default is Spending.
 - Inner tabs flip between **Yearly Overview** (12-month stacked bar chart per item / per payee) and **Month-to-Month** (donut chart for the selected month with per-item / per-source breakdown on hover).
-- KPI tiles per series: **{Year} Total**, **Monthly Average**, **Highest Month**. Spending also surfaces **To Wife** and **To Wife Average** tiles, derived from any category item literally named "To Wife".
-- Year and month pickers are chevron pills (←/→) inside each inner view.
+- KPI tiles per series: **{Year} Total**, **Monthly Average**, **Highest Month**. Spending also surfaces **To Wife Average** and **Saved This Year** tiles — the latter sums every transaction categorized to a budget item literally named "Savings" (case-insensitive), with a subtitle showing the average per active month.
+- Year and month pickers are chevron pills (←/→) inside each inner view. Each pill shows a **"CURRENT YEAR" / "CURRENT MONTH"** sublabel when the selection matches today (both computed in local time, not UTC).
 - **Click a month** in any Yearly bar chart to drill into that month's pie in the Month-to-Month view (same series).
 - Income is detected as any `AccountTransaction` with `memo.trim().toLowerCase() === "income"` and positive `inflowCents`, grouped by payee.
 
 ### 💵 Cash & Accounts
+
 - Manual **Accounts** (Checking, Savings, etc.) with derived balances — never out of sync with your transactions.
 - Editing an account's **Working Balance** writes a tagged adjustment transaction so Ready to Assign tracks reality.
 - Per-account **transaction ledger** with date, payee, category, memo, outflow, inflow.
@@ -35,13 +39,24 @@ The app opens on the **Plan** (zero-based budget) by default. Other sections liv
 - Sidebar shows **Cash $TOTAL** with each account name + live balance and a hover-pencil that opens an edit modal in place.
 
 ### 📅 Expenses
-- **Overview:** Top-of-section landing page summarizing the upcoming Cash Flow & Allowance, Bills, Personal, and Yearly Costs in one scroll.
-- **Bills:** Recurring monthly bills assigned to a specific weekly cycle (Q1–Q4) and due day.
-- **Personal:** Personal/household items budgeted against a cycle (one record per cycle, e.g. "Gas Q1 $50, Gas Q2 $50, …").
+
+- **Overview:** Two-panel landing page: a **Monthly** section (month navigator + Wife Target pill + Cash Flow & Allowance pay-week cards + Bills + Personal) and a **Yearly Overview** section below it.
+  - **Month navigator** (`< June 2026 >`) lets you browse any month; defaults to the current month and shows a "CURRENT MONTH" label when on it.
+  - **Wife Target pill** — a compact editor left of the month picker showing the current per-week wife allowance target. Click the pencil to edit; Enter commits, Escape cancels, blur saves.
+  - **Pay periods belong to their payday's month.** Each pay week starts on an in-month payday and runs until the day before the next payday. The last period of a month forward-extends into the next month up to the day before that month's first payday (e.g. July's P5 runs Jul 29 – Aug 4). There is **no backward extension** — bills due Aug 1-4 don't appear under August; they surface under July's P5 because Jul 29's paycheck funds them. This matches how the money actually moves.
+  - **Auto-Balance** — every time the view loads or bills/income/personal/target change, the app quietly re-plans which pay week funds each bill. The best-fit-decreasing algorithm places most-constrained bills first (those with the fewest eligible weeks), then everything else into the week with the most remaining room. The goal: every pay week retains **≥ the wife weekly target** as surplus after bills + personal. When the target is unreachable given income, some weeks fall short but the plan still runs.
+  - Overrides live in a `BillPayWeekOverride(billId, monthKey, weekIndex)` table (one row per bill per month view). They're recomputed automatically; no manual controls.
+- **Bills:** Recurring monthly bills with a name, amount, and due day. Grouped into pay-period windows via auto-balance (funded-by-paycheck attribution). Due days past the end of the current month are clamped to the last valid day for display; the stored value is never changed.
+- **Personal:** Personal/household items with a name, amount, and one of three **cadences**:
+  - **Fixed Week / Day** — fires on a specific `weekOfMonth` (1-4) or a day-of-month.
+  - **Every Pay Week** — full amount hits every pay period.
+  - **Split Monthly** — `amount` is a **monthly total** that gets distributed across pay weeks proportional to each week's leftover room after bills + fixed personal + wife target. Splits are computed after the auto-balance runs so they only consume genuinely spare cash and never breach the wife target. Great for savings goals ("$100/mo into Savings, spread wherever it fits").
 - **Yearly Costs:** Annual expenses scheduled by month and day.
 
-### ⚙️ Settings
-- Single weekly income value drives the dashboard cycle projections (separate from the Plan's Ready-to-Assign pool).
+### ⚙️ Income & Auto-Balance Settings
+
+- **Income Sources:** Define one or more income sources, each with its own name, amount, payment cycle (Weekly / Bi-Weekly), pay day (Mon–Fri), and biweekly offset (1st & 3rd vs. 2nd & 4th weeks). The **Primary** income drives the pay-period windows used throughout the Plan and Overview.
+- **Wife Weekly Target** — configured inline via the Overview's Wife Target pill (`AppSettings.wifeWeeklyTargetCents`, default $300). Changing it triggers an auto-balance re-run for the current month.
 
 ## 🧪 Tests
 
@@ -51,7 +66,7 @@ npm run test:watch # Watch mode
 npm run test:ui    # Vitest UI dashboard
 ```
 
-Vitest + Testing Library + Supertest. 88 tests covering the budget math (cents, activity, available, RTA, auto-assign cycle resolver, move-money, balance adjustments), the form components (AssignedCell, PayeeAutocomplete, SiderAccountRow), and the API server's body coercion.
+Vitest + Testing Library + Supertest. 157 tests covering the budget math (cents, activity, available, RTA, auto-assign period resolver, move-money, balance adjustments), the pay-period calendar logic (payday-month attribution, `getBillPeriodKey`, `clampDayToMonth`, override lookup, `balanceBillsGreedy` most-constrained-first ordering, `distributeSplitAcrossWeeks` largest-remainder rounding), the form components (AssignedCell, PayeeAutocomplete, SiderAccountRow), and the API server's body coercion.
 
 ## 🛠 Technical Architecture
 
@@ -64,6 +79,7 @@ Vitest + Testing Library + Supertest. 88 tests covering the budget math (cents, 
 ## 🚀 Running the App
 
 ### Production Mode (Recommended)
+
 1. **Build:**
    ```bash
    npm run build
@@ -80,11 +96,13 @@ Vitest + Testing Library + Supertest. 88 tests covering the budget math (cents, 
    The shortcut launches via the **signed Electron host**, which Windows trusts.
 
 ### Development Mode
+
 ```bash
 npm run dev
 ```
 
 ### Syncing dev ↔ prod data
+
 Two helper scripts copy the SQLite database file between the dev workspace and the installed app's userData. Both auto-back up the destination before overwriting (timestamped `.bak` file alongside it).
 
 ```bash
@@ -93,6 +111,7 @@ npm run db:push   # copy prisma\dev.db  →  %APPDATA%\finances-os\database.db
 ```
 
 When changing the Prisma schema, push to the dev DB and regenerate the typed client:
+
 ```bash
 npx prisma db push      # apply schema to prisma\dev.db
 npx prisma generate     # regenerate node_modules\.prisma\client (stop dev server first — Electron locks the engine DLL)

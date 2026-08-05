@@ -15,7 +15,7 @@ import StorefrontIcon from "@mui/icons-material/Storefront";
 import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import PersonIcon from "@mui/icons-material/Person";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
-import SettingsIcon from "@mui/icons-material/Settings";
+import SavingsIcon from "@mui/icons-material/Savings";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import AddIcon from "@mui/icons-material/Add";
@@ -285,14 +285,9 @@ export const CustomSider = () => {
         label="Yearly Costs"
         icon={<CalendarMonthIcon />}
       />
+      <NavLeaf href="/Income" label="Income" icon={<SavingsIcon />} />
 
       <Box sx={{ flex: 1 }} />
-
-      <NavLeaf
-        href="/AppSettings"
-        label="Settings"
-        icon={<SettingsIcon />}
-      />
       <Box sx={{ height: 16 }} />
 
       <AddAccountModal

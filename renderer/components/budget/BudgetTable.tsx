@@ -39,8 +39,8 @@ import { CSS } from "@dnd-kit/utilities";
 import { useUpdate, useDelete } from "@refinedev/core";
 import { AvailableCell } from "./AvailableCell";
 import { formatMoney } from "../../lib/cents";
-import { getCycleColor } from "../../lib/cycle-utils";
 import { resolveItemDisplay } from "../../lib/budget-display";
+import { PayPeriod } from "../../lib/pay-period-utils";
 
 export interface BudgetItem {
   id: string;
@@ -92,6 +92,7 @@ interface BudgetTableProps {
   groups: BudgetGroup[];
   bills?: BillRef[];
   personals?: PersonalRef[];
+  periods?: PayPeriod[];
   onAvailableClick: (item: BudgetItem, anchor: HTMLElement) => void;
   onAddItem: (groupId: string) => void;
   onAddSubsection?: (group: { id: string; name: string }) => void;
@@ -259,6 +260,7 @@ export const BudgetTable = ({
   groups: propGroups,
   bills = [],
   personals = [],
+  periods = [],
   onAvailableClick,
   onAddItem,
   onAddSubsection,
@@ -755,6 +757,7 @@ export const BudgetTable = ({
                               item={item}
                               bills={bills}
                               personals={personals}
+                              periods={periods}
                               onAvailableClick={onAvailableClick}
                               onDelete={() => setPendingDeleteItem(item)}
                               onEdit={onEditItem}
@@ -771,6 +774,7 @@ export const BudgetTable = ({
                             subsection={sub}
                             bills={bills}
                             personals={personals}
+                            periods={periods}
                             open={isOpenSub(sub.id)}
                             onToggle={() =>
                               setOpenSubsections((s) => ({
@@ -860,6 +864,7 @@ interface SubsectionBlockProps {
   subsection: BudgetSubsection;
   bills: BillRef[];
   personals: PersonalRef[];
+  periods?: PayPeriod[];
   open: boolean;
   onToggle: () => void;
   onAvailableClick: (item: BudgetItem, anchor: HTMLElement) => void;
@@ -873,6 +878,7 @@ const SubsectionBlock = ({
   subsection,
   bills,
   personals,
+  periods = [],
   open,
   onToggle,
   onAvailableClick,
@@ -1033,6 +1039,7 @@ const SubsectionBlock = ({
                 item={item}
                 bills={bills}
                 personals={personals}
+                periods={periods}
                 onAvailableClick={onAvailableClick}
                 onDelete={() => onDeleteItem(item)}
                 onEdit={onEditItem}
@@ -1048,6 +1055,7 @@ interface BudgetItemRowProps {
   item: BudgetItem;
   bills: BillRef[];
   personals: PersonalRef[];
+  periods?: PayPeriod[];
   onAvailableClick: (item: BudgetItem, anchor: HTMLElement) => void;
   onDelete: () => void;
   onEdit?: (item: BudgetItem) => void;
@@ -1066,6 +1074,7 @@ const BudgetItemRow = ({
   item,
   bills,
   personals,
+  periods = [],
   onAvailableClick,
   onDelete,
   onEdit,
@@ -1085,7 +1094,7 @@ const BudgetItemRow = ({
     opacity: isDragging ? 0.5 : 1,
   };
 
-  const { displayName, cycles } = formatItemDisplay(item, bills, personals);
+  const { displayName } = formatItemDisplay(item, bills, personals);
 
   return (
     <Box
@@ -1116,29 +1125,6 @@ const BudgetItemRow = ({
           }}
         >
           <DragIndicatorIcon sx={{ fontSize: 18 }} />
-        </Box>
-        <Box sx={{ display: "flex", gap: 0.5, flexShrink: 0 }}>
-          {cycles.map((c) => {
-            const color = getCycleColor(c);
-            return (
-              <Box
-                key={c}
-                sx={{
-                  px: 0.85,
-                  py: 0.15,
-                  borderRadius: "6px",
-                  fontSize: "0.7rem",
-                  fontWeight: 900,
-                  color,
-                  bgcolor: `${color}18`,
-                  border: `1px solid ${color}30`,
-                  letterSpacing: 0.5,
-                }}
-              >
-                {c}
-              </Box>
-            );
-          })}
         </Box>
         <Typography
           sx={{

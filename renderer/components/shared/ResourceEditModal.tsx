@@ -105,6 +105,7 @@ export const ResourceEditModal: FC<ResourceEditModalProps> = ({
       onClose={close}
       fullWidth
       maxWidth={maxWidth}
+      transitionDuration={{ enter: 225, exit: 0 }}
       slotProps={{
         paper: {
           sx: {

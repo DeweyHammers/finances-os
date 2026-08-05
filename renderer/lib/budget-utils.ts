@@ -26,6 +26,21 @@ export interface PersonalRecord {
   withdrawalCycle: string;
 }
 
+export interface BillRecordWithDueDate {
+  id: string;
+  amount: number;
+  dueDate: number;
+}
+
+export interface PersonalRecordExtended {
+  name: string;
+  amount: number;
+  dueDate?: number;
+  weekOfMonth?: number | null;
+  repeatWeekly?: boolean;
+  splitAcrossWeeks?: boolean;
+}
+
 export const monthKey = (date: string | Date): string => {
   const d = typeof date === "string" ? new Date(date) : date;
   const y = d.getUTCFullYear();
@@ -154,6 +169,84 @@ export const resolveAutoAssignAmount = (params: {
     if (item.customAmountCents == null) return 0;
     if (item.customCycle == null) return item.customAmountCents;
     if (item.customCycle === cycle) return item.customAmountCents;
+    return 0;
+  }
+
+  return 0;
+};
+
+/**
+ * Period-aware auto-assign: resolves how much to assign for a category item
+ * in the given pay period (identified by periodKey like "P1").
+ * - BILL: assigns bill.amount when the bill's dueDate (or override) lands in that period.
+ * - PERSONAL_NAME: assigns per cadence — split (pre-computed per-period), weekOfMonth,
+ *   repeatWeekly, or dueDate.
+ * - CUSTOM: assigns customAmountCents only when customCycle is null (always).
+ */
+import {
+  PayPeriod,
+  getBillPeriodKey,
+  getBillPeriodKeyWithOverride,
+  BillOverrideRecord,
+} from "./pay-period-utils";
+
+export const resolveAutoAssignAmountForPeriod = (params: {
+  item: CategoryItem;
+  periodKey: string;
+  periods: PayPeriod[];
+  bills: BillRecordWithDueDate[];
+  personals: PersonalRecordExtended[];
+  overrides?: BillOverrideRecord[];
+  monthKey?: string;
+  splitAllocationsByPersonalName?: Record<string, number>;
+}): number => {
+  const {
+    item,
+    periodKey,
+    periods,
+    bills,
+    personals,
+    overrides,
+    monthKey,
+    splitAllocationsByPersonalName,
+  } = params;
+
+  if (item.sourceType === "BILL") {
+    const bill = bills.find((b) => b.id === item.sourceBillId);
+    if (!bill) return 0;
+    const attributedKey =
+      overrides && monthKey
+        ? getBillPeriodKeyWithOverride(
+            bill.id,
+            Number(bill.dueDate),
+            periods,
+            monthKey,
+            overrides,
+          )
+        : getBillPeriodKey(Number(bill.dueDate), periods);
+    if (attributedKey !== periodKey) return 0;
+    return Math.round(bill.amount * 100);
+  }
+
+  if (item.sourceType === "PERSONAL_NAME") {
+    if (!item.sourcePersonalName) return 0;
+    const match = personals.find((p) => p.name === item.sourcePersonalName);
+    if (!match) return 0;
+    if (match.splitAcrossWeeks) {
+      return splitAllocationsByPersonalName?.[match.name] ?? 0;
+    }
+    if (match.repeatWeekly) return Math.round(match.amount * 100);
+    const attributedKey =
+      match.weekOfMonth != null
+        ? `P${match.weekOfMonth}`
+        : getBillPeriodKey(Number(match.dueDate ?? 1), periods);
+    if (attributedKey !== periodKey) return 0;
+    return Math.round(match.amount * 100);
+  }
+
+  if (item.sourceType === "CUSTOM") {
+    if (item.customAmountCents == null) return 0;
+    if (item.customCycle == null) return item.customAmountCents;
     return 0;
   }
 

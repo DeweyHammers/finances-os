@@ -53,8 +53,8 @@ const INCOME_ACCENT = "#34d399";
 
 export const StatisticsPage = () => {
   const now = useMemo(() => new Date(), []);
-  const [year, setYear] = useState(now.getUTCFullYear());
-  const [monthIndex, setMonthIndex] = useState(now.getUTCMonth());
+  const [year, setYear] = useState(now.getFullYear());
+  const [monthIndex, setMonthIndex] = useState(now.getMonth());
   const [view, setView] = useState<StatsView>("yearly");
   const [series, setSeries] = useState<StatsSeries>("spending");
 
@@ -124,6 +124,25 @@ export const StatisticsPage = () => {
       );
       if (w && w.cents > 0) {
         total += w.cents;
+        activeMonths += 1;
+      }
+    });
+    return {
+      total,
+      activeMonths,
+      avg: activeMonths > 0 ? total / activeMonths : 0,
+    };
+  }, [yearlySpending]);
+
+  const savingsKpi = useMemo(() => {
+    let total = 0;
+    let activeMonths = 0;
+    yearlySpending.forEach((m) => {
+      const s = m.items.find(
+        (it) => it.itemName.trim().toLowerCase() === "savings",
+      );
+      if (s && s.cents > 0) {
+        total += s.cents;
         activeMonths += 1;
       }
     });
@@ -315,6 +334,7 @@ export const StatisticsPage = () => {
                     </Typography>
                     <ChevronPill
                       label={String(year)}
+                      sublabel={year === now.getFullYear() ? "Current Year" : undefined}
                       onPrev={() => shiftYear(-1)}
                       onNext={() => shiftYear(1)}
                       prevAria="Previous year"
@@ -362,6 +382,14 @@ export const StatisticsPage = () => {
                                   ? `per active month`
                                   : undefined,
                             },
+                            {
+                              label: "Saved This Year",
+                              value: formatMoney(savingsKpi.total),
+                              hint:
+                                savingsKpi.activeMonths > 0
+                                  ? `${formatMoney(Math.round(savingsKpi.avg))}/mo · ${savingsKpi.activeMonths} ${savingsKpi.activeMonths === 1 ? "month" : "months"}`
+                                  : "no activity",
+                            },
                           ]
                         : []
                     }
@@ -406,6 +434,7 @@ export const StatisticsPage = () => {
                     </Typography>
                     <ChevronPill
                       label={`${MONTHS[monthIndex]} ${year}`}
+                      sublabel={year === now.getFullYear() && monthIndex === now.getMonth() ? "Current Month" : undefined}
                       onPrev={() => shiftMonth(-1)}
                       onNext={() => shiftMonth(1)}
                       prevAria="Previous month"
@@ -489,12 +518,14 @@ const StatTile = ({
 
 const ChevronPill = ({
   label,
+  sublabel,
   onPrev,
   onNext,
   prevAria,
   nextAria,
 }: {
   label: string;
+  sublabel?: string;
   onPrev: () => void;
   onNext: () => void;
   prevAria: string;
@@ -522,18 +553,33 @@ const ChevronPill = ({
     >
       <NavigateBeforeIcon sx={{ fontSize: 28 }} />
     </IconButton>
-    <Typography
-      sx={{
-        minWidth: 140,
-        textAlign: "center",
-        fontWeight: 800,
-        color: "white",
-        fontSize: "0.95rem",
-        letterSpacing: 0.3,
-      }}
-    >
-      {label}
-    </Typography>
+    <Box sx={{ minWidth: 140, textAlign: "center" }}>
+      <Typography
+        sx={{
+          fontWeight: 800,
+          color: "white",
+          fontSize: "0.95rem",
+          letterSpacing: 0.3,
+          lineHeight: 1.2,
+        }}
+      >
+        {label}
+      </Typography>
+      {sublabel && (
+        <Typography
+          sx={{
+            fontSize: "0.6rem",
+            fontWeight: 900,
+            letterSpacing: "1px",
+            textTransform: "uppercase",
+            color: "primary.light",
+            mt: 0.3,
+          }}
+        >
+          {sublabel}
+        </Typography>
+      )}
+    </Box>
     <IconButton
       onClick={onNext}
       aria-label={nextAria}

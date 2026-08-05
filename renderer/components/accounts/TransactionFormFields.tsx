@@ -580,8 +580,16 @@ export const TransactionFormFields = ({
   );
 };
 
+const todayLocalIsoDate = (): string => {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+
 export const emptyTransactionState = (): TransactionFormState => ({
-  date: new Date().toISOString().slice(0, 10),
+  date: todayLocalIsoDate(),
   payeeId: null,
   categoryItemId: null,
   transferAccountId: null,
@@ -606,17 +614,28 @@ export const stateToValues = (
   cleared: true,
 });
 
-export const valuesToState = (txn: any): TransactionFormState => {
+export const valuesToState = (
+  txn: any,
+  accounts?: { id: string; name: string }[],
+): TransactionFormState => {
   const originalDateIso =
     typeof txn.date === "string"
       ? txn.date
       : new Date(txn.date).toISOString();
+  const memo = txn.memo || "";
+  let transferAccountId: string | null = null;
+  if (!txn.categoryItemId && accounts?.length && memo.startsWith("Transfer to ")) {
+    const rest = memo.slice("Transfer to ".length);
+    const accountName = rest.includes(": ") ? rest.slice(0, rest.indexOf(": ")) : rest;
+    const match = accounts.find((a) => a.name === accountName);
+    if (match) transferAccountId = match.id;
+  }
   return {
     date: originalDateIso.slice(0, 10),
     payeeId: txn.payeeId || null,
     categoryItemId: txn.categoryItemId || null,
-    transferAccountId: null,
-    memo: txn.memo || "",
+    transferAccountId,
+    memo,
     inflow: txn.inflowCents ? String(fromCents(txn.inflowCents)) : "",
     outflow: txn.outflowCents ? String(fromCents(txn.outflowCents)) : "",
     originalDateIso,

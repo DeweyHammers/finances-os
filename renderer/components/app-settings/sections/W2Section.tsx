@@ -9,7 +9,7 @@ interface W2SectionProps {
 }
 
 export const W2Section = ({ register }: W2SectionProps) => {
-  const { paymentCycle, cycles } = usePaymentCycle();
+  const { paymentCycle } = usePaymentCycle();
   const isBiWeekly = paymentCycle === "BI_WEEKLY";
   const isMonthly = paymentCycle === "MONTHLY";
 
@@ -23,8 +23,6 @@ export const W2Section = ({ register }: W2SectionProps) => {
     : isMonthly
       ? "Monthly"
       : "Weekly";
-  const cycleRange =
-    cycles.length === 1 ? "Q1" : `${cycles[0]}-${cycles[cycles.length - 1]}`;
 
   return (
     <Box>
@@ -40,7 +38,7 @@ export const W2Section = ({ register }: W2SectionProps) => {
         label={`${cadenceTitle} Amount`}
         type="number"
         fullWidth
-        helperText={`Amount received each ${cadenceWord} pay period (${cycleRange}).`}
+        helperText={`Amount received each ${cadenceWord} pay period.`}
       />
     </Box>
   );

@@ -29,9 +29,9 @@ export const DashboardCard: React.FC<DashboardCardProps> = ({
       elevation={0}
       sx={{
         mb: 1.5,
-        bgcolor: "rgba(15, 23, 42, 0.4)",
+        bgcolor: "rgba(30, 41, 59, 0.55)",
         borderRadius: 3,
-        border: "1px solid rgba(255, 255, 255, 0.03)",
+        border: "1px solid rgba(255, 255, 255, 0.07)",
         position: "relative",
         overflow: "hidden",
       }}

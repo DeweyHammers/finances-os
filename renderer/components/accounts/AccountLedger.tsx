@@ -80,9 +80,14 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
     const q = search.trim().toLowerCase();
     if (!q) return transactions;
     return transactions.filter((t) => {
+      const isTransfer =
+        !t.categoryItemId &&
+        (t.memo?.startsWith("Transfer to ") || t.memo?.startsWith("Transfer from "));
       const payee = t.isAdjustment
         ? "Manual Balance Adjustment"
-        : payeeName(t.payeeId);
+        : isTransfer
+          ? "Transfer"
+          : payeeName(t.payeeId);
       const liveCat = t.categoryItemId ? itemName(t.categoryItemId) : "";
       const category =
         liveCat || (t.categoryName as string) || "Ready to Assign";
@@ -122,7 +127,13 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
           <Typography
             sx={{ fontWeight: 600, color: "white", fontSize: "0.95rem" }}
           >
-            {p.row.isAdjustment ? "Manual Balance Adjustment" : payeeName(p.value)}
+            {p.row.isAdjustment
+              ? "Manual Balance Adjustment"
+              : !p.row.categoryItemId &&
+                  (p.row.memo?.startsWith("Transfer to ") ||
+                    p.row.memo?.startsWith("Transfer from "))
+                ? "Transfer"
+                : payeeName(p.value)}
           </Typography>
         ),
       },

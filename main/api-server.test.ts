@@ -68,4 +68,10 @@ describe("transformBody", () => {
     expect(out.sortOrder).toBe(0);
     expect(out.nested).toBe(null);
   });
+
+  it("coerces payDay and payWeekOffset to numbers", () => {
+    const out = transformBody({ payDay: "3", payWeekOffset: "1" });
+    expect(out.payDay).toBe(3);
+    expect(out.payWeekOffset).toBe(1);
+  });
 });

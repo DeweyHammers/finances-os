@@ -9,9 +9,11 @@ import {
   computeReadyToAssign,
   computeAccountBalance,
   resolveAutoAssignAmount,
+  resolveAutoAssignAmountForPeriod,
   moveMoney,
   buildBalanceAdjustment,
 } from "./budget-utils";
+import { getPayPeriodsForMonth } from "./pay-period-utils";
 
 describe("monthKey", () => {
   it("returns YYYY-MM in UTC", () => {
@@ -355,6 +357,188 @@ describe("resolveAutoAssignAmount", () => {
     expect(
       resolveAutoAssignAmount({ item, cycle: "Q1", bills, personals }),
     ).toBe(0);
+  });
+});
+
+describe("resolveAutoAssignAmountForPeriod", () => {
+  // August 2026: Wednesdays land on 5, 12, 19, 26 → 4 pay weeks
+  // P1 = Aug 5-11, P2 = Aug 12-18, P3 = Aug 19-25, P4 = Aug 26 – (Sep 1 = coord 32)
+  const periods = getPayPeriodsForMonth(2026, 7, 3, new Date(2026, 7, 5), false);
+
+  it("BILL: uses override to attribute a late-due bill to an earlier period", () => {
+    // Discord due on the 17th naturally lands in P2; auto-balance override
+    // moved it to Pay Week 1 (weekIndex 0). Auto-assign for P1 should now
+    // see it.
+    const bill = { id: "discord", amount: 9.99, dueDate: 17 };
+    const item = {
+      id: "i-discord",
+      sourceType: "BILL" as const,
+      sourceBillId: "discord",
+    };
+    const overrides = [{ billId: "discord", monthKey: "2026-08", weekIndex: 0 }];
+
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item,
+        periodKey: "P1",
+        periods,
+        bills: [bill],
+        personals: [],
+        overrides,
+        monthKey: "2026-08",
+      }),
+    ).toBe(999);
+
+    // And P2 (the natural period) no longer claims it.
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item,
+        periodKey: "P2",
+        periods,
+        bills: [bill],
+        personals: [],
+        overrides,
+        monthKey: "2026-08",
+      }),
+    ).toBe(0);
+  });
+
+  it("BILL: falls back to natural due-date attribution when no override matches", () => {
+    const bill = { id: "phone", amount: 101, dueDate: 5 };
+    const item = {
+      id: "i-phone",
+      sourceType: "BILL" as const,
+      sourceBillId: "phone",
+    };
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item,
+        periodKey: "P1",
+        periods,
+        bills: [bill],
+        personals: [],
+        overrides: [],
+        monthKey: "2026-08",
+      }),
+    ).toBe(10100);
+  });
+
+  it("PERSONAL_NAME split: uses pre-computed split allocation for this period", () => {
+    // Saving is a split personal ($100/mo). The Overview computes the P1
+    // slice to be $12.15 given the current room; auto-assign should return
+    // that cumulative-through-P1 amount, not the full monthly total.
+    const item = {
+      id: "i-saving",
+      sourceType: "PERSONAL_NAME" as const,
+      sourcePersonalName: "Saving",
+    };
+    const personals = [
+      {
+        name: "Saving",
+        amount: 100,
+        dueDate: 1,
+        splitAcrossWeeks: true,
+        repeatWeekly: false,
+      },
+    ];
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item,
+        periodKey: "P1",
+        periods,
+        bills: [],
+        personals,
+        splitAllocationsByPersonalName: { Saving: 1215 },
+      }),
+    ).toBe(1215);
+  });
+
+  it("PERSONAL_NAME split: returns 0 when no allocation is registered", () => {
+    const item = {
+      id: "i-saving",
+      sourceType: "PERSONAL_NAME" as const,
+      sourcePersonalName: "Saving",
+    };
+    const personals = [
+      {
+        name: "Saving",
+        amount: 100,
+        dueDate: 1,
+        splitAcrossWeeks: true,
+        repeatWeekly: false,
+      },
+    ];
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item,
+        periodKey: "P1",
+        periods,
+        bills: [],
+        personals,
+      }),
+    ).toBe(0);
+  });
+
+  it("PERSONAL_NAME weekOfMonth: attributes to Pk regardless of dueDate", () => {
+    const item = {
+      id: "i-gas",
+      sourceType: "PERSONAL_NAME" as const,
+      sourcePersonalName: "Gas",
+    };
+    const personals = [
+      {
+        name: "Gas",
+        amount: 50,
+        dueDate: 1,
+        weekOfMonth: 3,
+        repeatWeekly: false,
+      },
+    ];
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item,
+        periodKey: "P3",
+        periods,
+        bills: [],
+        personals,
+      }),
+    ).toBe(5000);
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item,
+        periodKey: "P1",
+        periods,
+        bills: [],
+        personals,
+      }),
+    ).toBe(0);
+  });
+
+  it("PERSONAL_NAME repeatWeekly still returns amount each period", () => {
+    const item = {
+      id: "i-spend",
+      sourceType: "PERSONAL_NAME" as const,
+      sourcePersonalName: "Spending",
+    };
+    const personals = [
+      {
+        name: "Spending",
+        amount: 20,
+        dueDate: 1,
+        repeatWeekly: true,
+      },
+    ];
+    for (const key of ["P1", "P2", "P3", "P4"]) {
+      expect(
+        resolveAutoAssignAmountForPeriod({
+          item,
+          periodKey: key,
+          periods,
+          bills: [],
+          personals,
+        }),
+      ).toBe(2000);
+    }
   });
 });
 

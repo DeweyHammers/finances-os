@@ -42,6 +42,7 @@ interface ResourceListProps {
   ) => React.ReactNode;
   height?: string;
   searchField?: string;
+  gridSx?: object;
 }
 
 export const ResourceList: FC<ResourceListProps> = ({
@@ -55,6 +56,7 @@ export const ResourceList: FC<ResourceListProps> = ({
   renderExtraFilters,
   height = "calc(100vh - 120px)",
   searchField = "name",
+  gridSx = {},
 }) => {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const { mutate: deleteMutate } = useDelete();
@@ -331,6 +333,7 @@ export const ResourceList: FC<ResourceListProps> = ({
             onSortModelChange={(model) => setSortModel(model)}
             sx={{
               border: "none",
+              ...gridSx,
               "& .MuiDataGrid-columnSeparator": {
                 display: "none",
               },

@@ -6,9 +6,14 @@ import { Box, Typography } from "@mui/material";
 import { PersonalCreate } from "./create";
 import { PersonalEdit } from "./edit";
 import { ResourceList } from "../shared/ResourceList";
-import { getCycleColor } from "../../lib/cycle-utils";
 
 export const PersonalList = () => {
+  const getOrdinal = (n: number) => {
+    const s = ["th", "st", "nd", "rd"];
+    const v = n % 100;
+    return s[(v - 20) % 10] || s[v] || s[0];
+  };
+
   const columns = useMemo<GridColDef[]>(
     () => [
       {
@@ -38,28 +43,34 @@ export const PersonalList = () => {
         ),
       },
       {
-        field: "withdrawalCycle",
-        headerName: "Cycle",
-        width: 150,
-        align: "center",
+        field: "repeatWeekly",
+        headerName: "Schedule",
+        width: 180,
         headerAlign: "center",
         renderCell: (params) => {
-          const cycleColor = getCycleColor(params.value as string);
+          const isWeekly = !!params.value;
+          const isSplit = !!params.row.splitAcrossWeeks;
+          const dueDate = params.row.dueDate;
+          const weekOfMonth = params.row.weekOfMonth;
+          const chipSx = {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "100%",
+            height: "100%",
+            bgcolor: "rgba(129,140,248,0.15)",
+            color: "#818cf8",
+            fontSize: "0.8rem",
+            fontWeight: 900,
+            borderLeft: "3px solid rgba(129,140,248,0.5)",
+          };
+          if (isSplit) return <Box sx={chipSx}>Split Monthly</Box>;
+          if (isWeekly) return <Box sx={chipSx}>Every Week</Box>;
+          if (weekOfMonth != null) return <Box sx={chipSx}>Week {weekOfMonth}</Box>;
           return (
-            <Box
-              sx={{
-                px: 1.5,
-                py: 0.5,
-                bgcolor: `${cycleColor}15`,
-                borderRadius: "4px",
-                color: cycleColor,
-                fontSize: "0.8rem",
-                fontWeight: 900,
-                border: `1px solid ${cycleColor}30`,
-              }}
-            >
-              {params.value}
-            </Box>
+            <Typography sx={{ color: "text.secondary", fontSize: "0.9rem" }}>
+              Due {dueDate}{getOrdinal(Number(dueDate))}
+            </Typography>
           );
         },
       },
@@ -74,6 +85,11 @@ export const PersonalList = () => {
       columns={columns}
       createModal={PersonalCreate}
       editModal={PersonalEdit}
+      gridSx={{
+        "& .MuiDataGrid-cell[data-field='repeatWeekly']": {
+          padding: 0,
+        },
+      }}
     />
   );
 };

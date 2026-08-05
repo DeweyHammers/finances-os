@@ -31,7 +31,7 @@ export const SummarySection: React.FC<SummarySectionProps> = ({
       sx={{
         p: { xs: 3, md: 4 },
         borderRadius: 4,
-        bgcolor: "rgba(30, 41, 59, 0.5)",
+        bgcolor: "rgba(15, 23, 42, 0.55)",
         border: "1px solid rgba(129, 140, 248, 0.1)",
         minHeight: "auto",
         width: "100%",
@@ -84,11 +84,11 @@ export const SummarySection: React.FC<SummarySectionProps> = ({
                 display: "inline-flex",
                 flexDirection: "column",
                 alignItems: { xs: "flex-start", sm: "flex-end" },
-                bgcolor: "rgba(15, 23, 42, 0.3)",
+                bgcolor: "rgba(129, 140, 248, 0.08)",
                 px: 3,
                 py: 1.5,
                 borderRadius: 3,
-                border: "1px solid rgba(255, 255, 255, 0.05)",
+                border: "1px solid rgba(129, 140, 248, 0.2)",
               }}
             >
               <Typography
