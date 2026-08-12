@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import {
   useList,
   BaseRecord,
@@ -14,10 +14,15 @@ import {
   Typography,
   Button,
   IconButton,
+  Snackbar,
+  Alert,
+  Fade,
 } from "@mui/material";
 import AccountBalanceWalletIcon from "@mui/icons-material/AccountBalanceWallet";
 import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import { BillsOverview } from "../../components/dashboard/BillsOverview";
 import { PersonalOverview } from "../../components/dashboard/PersonalOverview";
 import { YearlyOverview } from "../../components/dashboard/YearlyOverview";
@@ -27,9 +32,10 @@ import { SHORT_MONTHS } from "../../lib/constants";
 import { useRouter } from "next/navigation";
 import {
   getPayPeriodsForMonth,
-  balanceBillsGreedy,
+  balancePayWeeks,
+  getBillNaturalWeekIndex,
   monthKeyOf,
-  BillOverrideRecord,
+  BillSplitRecord,
 } from "../../lib/pay-period-utils";
 
 export default function Overview() {
@@ -37,28 +43,48 @@ export default function Overview() {
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
-  // Tracks the input-hash of the last balance run per month, so re-renders
-  // triggered by the override write don't cause the effect to re-fire.
-  const balancedHashRef = useRef<Map<string, string>>(new Map());
-  const balancingRef = useRef(false);
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [optimizeAlert, setOptimizeAlert] = useState<string | null>(() => {
+    try { return localStorage.getItem("overviewOptimizeAlert"); } catch { return null; }
+  });
+  const [successToast, setSuccessToast] = useState(false);
 
-  const { query: billsQuery } = useList<BaseRecord>({ resource: "Bill" });
-  const { query: personalQuery } = useList<BaseRecord>({ resource: "Personal" });
-  const { query: yearlyQuery } = useList<BaseRecord>({ resource: "YearlyCost" });
+  const initializedRef = useRef(false);
+  const prevBillsSigRef = useRef("");
+  const prevIncomesSigRef = useRef("");
+  const prevPersonalsSigRef = useRef("");
+  const prevWifeTargetRef = useRef(0);
+
+  useEffect(() => {
+    try {
+      if (optimizeAlert) localStorage.setItem("overviewOptimizeAlert", optimizeAlert);
+      else localStorage.removeItem("overviewOptimizeAlert");
+    } catch {}
+  }, [optimizeAlert]);
+
+  const { query: billsQuery } = useList<BaseRecord>({ resource: "Bill", successNotification: false, errorNotification: false });
+  const { query: personalQuery } = useList<BaseRecord>({ resource: "Personal", successNotification: false, errorNotification: false });
+  const { query: yearlyQuery } = useList<BaseRecord>({ resource: "YearlyCost", successNotification: false, errorNotification: false });
   const { query: settingsQuery } = useOne<BaseRecord>({
     resource: "AppSettings",
     id: "global",
+    successNotification: false,
+    errorNotification: false,
   });
   const { query: incomesQuery } = useList<BaseRecord>({
     resource: "Income",
     pagination: { mode: "off" },
+    successNotification: false,
+    errorNotification: false,
   });
-  const { query: overridesQuery } = useList<BaseRecord>({
-    resource: "BillPayWeekOverride",
+  const { query: splitsQuery } = useList<BaseRecord>({
+    resource: "BillSplit",
     pagination: { mode: "off" },
+    successNotification: false,
+    errorNotification: false,
   });
-  const { mutateAsync: createOverride } = useCreate();
-  const { mutateAsync: deleteOverride } = useDelete();
+  const { mutateAsync: createSplit } = useCreate();
+  const { mutateAsync: deleteSplit } = useDelete();
 
   // ── All hooks must run in the same order every render. Pull data out of the
   // query results (defaulting while loading) BEFORE any conditional return so
@@ -69,208 +95,164 @@ export default function Overview() {
   const settings = (settingsQuery.data?.data || {}) as any;
   const incomes = (incomesQuery.data?.data || []) as any[];
   const primaryIncome = incomes.find((i) => i.isPrimary) as any | undefined;
-  const overrideRowsRaw = (overridesQuery.data?.data as any[]) || [];
+  const splitRowsRaw = (splitsQuery.data?.data as any[]) || [];
 
-  const monthKey = useMemo(
-    () => monthKeyOf(viewYear, viewMonth),
-    [viewYear, viewMonth],
-  );
-  const overrides: BillOverrideRecord[] = useMemo(() => {
-    return overrideRowsRaw.map((r) => ({
+  const splits: BillSplitRecord[] = useMemo(() => {
+    return splitRowsRaw.map((r) => ({
       billId: String(r.billId),
       monthKey: String(r.monthKey),
       weekIndex: Number(r.weekIndex),
+      amountCents: Number(r.amountCents),
     }));
-  }, [overrideRowsRaw]);
+  }, [splitRowsRaw]);
 
   const targetSurplusCents = Number(settings?.wifeWeeklyTargetCents ?? 30000);
 
-  const balanceInputHash = useMemo(() => {
-    return JSON.stringify({
-      monthKey,
-      target: targetSurplusCents,
-      cycle: primaryIncome?.paymentCycle,
-      payDay: primaryIncome?.payDay,
-      bills: bills
-        .map((b: any) => `${b.id}:${b.amount}:${b.dueDate}`)
-        .sort(),
-      personals: personalBills
-        .map(
-          (p: any) =>
-            `${p.id}:${p.amount}:${p.dueDate}:${p.weekOfMonth ?? ""}:${
-              p.repeatWeekly ? 1 : 0
-            }`,
-        )
-        .sort(),
-      incomes: incomes
-        .map(
-          (i: any) =>
-            `${i.id}:${i.amount}:${i.payDay}:${i.paymentCycle}:${i.payWeekOffset ?? 0}`,
-        )
-        .sort(),
-    });
-  }, [
-    monthKey,
-    targetSurplusCents,
-    primaryIncome?.paymentCycle,
-    primaryIncome?.payDay,
-    bills,
-    personalBills,
-    incomes,
-  ]);
-
+  // Detect post-load changes and prompt the user to re-optimize.
   useEffect(() => {
-    if (balancingRef.current) return;
-    if (!primaryIncome) return;
-    if (bills.length === 0) return;
-    // Every input query MUST have finished loading before we plan overrides —
-    // otherwise `overrideRowsRaw` might still be `[]` (query loading) and the
-    // "same as DB?" comparison thinks the DB is empty, causing us to skip
-    // deletes and create-on-top-of existing rows → P2002 unique-constraint 500.
-    if (
-      billsQuery.isLoading ||
-      personalQuery.isLoading ||
-      settingsQuery.isLoading ||
-      incomesQuery.isLoading ||
-      overridesQuery.isLoading
-    ) {
+    const loading =
+      billsQuery.isLoading || personalQuery.isLoading ||
+      settingsQuery.isLoading || incomesQuery.isLoading;
+    if (loading) return;
+
+    const billsSig = bills.map((b: any) => `${b.id}:${b.amount}:${b.dueDate}`).sort().join(",");
+    const incomesSig = incomes.map((i: any) => `${i.id}:${i.amount}:${i.payDay}:${i.paymentCycle}`).sort().join(",");
+    const personalsSig = personalBills.map((p: any) => `${p.id}:${p.amount}:${p.dueDate}`).sort().join(",");
+    const wifeTarget = targetSurplusCents;
+
+    if (!initializedRef.current) {
+      prevBillsSigRef.current = billsSig;
+      prevIncomesSigRef.current = incomesSig;
+      prevPersonalsSigRef.current = personalsSig;
+      prevWifeTargetRef.current = wifeTarget;
+      initializedRef.current = true;
       return;
     }
-    if (balancedHashRef.current.get(monthKey) === balanceInputHash) return;
 
-    const run = async () => {
-      balancingRef.current = true;
-      try {
-        const payWeekday = Number(primaryIncome.payDay);
-        const biWeekly = primaryIncome.paymentCycle === "BI_WEEKLY";
-        const periods = getPayPeriodsForMonth(
-          viewYear,
-          viewMonth,
-          payWeekday,
-          new Date(),
-          biWeekly,
-        );
-        if (periods.length === 0) return;
-        const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+    if (billsSig !== prevBillsSigRef.current) {
+      prevBillsSigRef.current = billsSig;
+      setOptimizeAlert("Bills were added or updated.");
+    } else if (incomesSig !== prevIncomesSigRef.current) {
+      prevIncomesSigRef.current = incomesSig;
+      setOptimizeAlert("Income was added or updated.");
+    } else if (personalsSig !== prevPersonalsSigRef.current) {
+      prevPersonalsSigRef.current = personalsSig;
+      setOptimizeAlert("Personal expenses were added or updated.");
+    } else if (wifeTarget !== prevWifeTargetRef.current) {
+      prevWifeTargetRef.current = wifeTarget;
+      setOptimizeAlert("Wife's weekly target was changed.");
+    }
+  }, [bills, incomes, personalBills, targetSurplusCents, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading]);
 
-        const collectPaydays = (
-          payDay: number,
-          isBiWeekly: boolean,
-          offset: number,
-        ): number[] => {
+  const handleOptimize = async () => {
+    if (isOptimizing || !primaryIncome) return;
+    setIsOptimizing(true);
+    try {
+      const payWeekday = Number(primaryIncome.payDay);
+      const biWeekly = primaryIncome.paymentCycle === "BI_WEEKLY";
+
+      const computeIncomePerPeriod = (periods: ReturnType<typeof getPayPeriodsForMonth>, tYear: number, tMonth: number) => {
+        const dim = new Date(tYear, tMonth + 1, 0).getDate();
+        const collectPaydays = (payDay: number, isBiWeekly: boolean, offset: number) => {
           const all: number[] = [];
-          for (let d = 1; d <= daysInMonth; d++) {
-            if (new Date(viewYear, viewMonth, d).getDay() === payDay) all.push(d);
+          for (let d = 1; d <= dim; d++) {
+            if (new Date(tYear, tMonth, d).getDay() === payDay) all.push(d);
           }
           return isBiWeekly ? all.filter((_, i) => i % 2 === offset) : all;
         };
-
-        const incomePerPeriodCents = periods.map((p) => {
+        return periods.map((p) => {
           let total = 0;
           incomes.forEach((income: any) => {
-            const incomePayDay = Number(income.payDay ?? payWeekday);
-            const isBW =
-              (income.paymentCycle ?? primaryIncome.paymentCycle) ===
-              "BI_WEEKLY";
-            const offset = Number(income.payWeekOffset ?? 0);
-            const paydays = collectPaydays(incomePayDay, isBW, offset);
-            if (paydays.some((d) => d >= p.startDay && d <= p.endDay)) {
+            const pd = Number(income.payDay ?? payWeekday);
+            const isBW = (income.paymentCycle ?? primaryIncome.paymentCycle) === "BI_WEEKLY";
+            const off = Number(income.payWeekOffset ?? 0);
+            if (collectPaydays(pd, isBW, off).some((d) => d >= p.startDay && d <= p.endDay)) {
               total += Math.round((Number(income.amount) || 0) * 100);
             }
           });
           return total;
         });
+      };
 
-        const personalPerPeriodCents = periods.map((p) => {
+      const computePersonalPerPeriod = (periods: ReturnType<typeof getPayPeriodsForMonth>) =>
+        periods.map((p) => {
           let total = 0;
           personalBills.forEach((pb: any) => {
             let fires = false;
             if (pb.repeatWeekly) fires = true;
-            else if (pb.weekOfMonth != null)
-              fires = `P${pb.weekOfMonth}` === p.key;
+            else if (pb.weekOfMonth != null) fires = `P${pb.weekOfMonth}` === p.key;
             else {
               const D = Number(pb.dueDate);
               const nextCoord = D + p.daysInMonth;
-              fires =
-                (D >= p.startDay && D <= p.endDay) ||
-                (nextCoord >= p.startDay && nextCoord <= p.endDay);
+              fires = (D >= p.startDay && D <= p.endDay) || (nextCoord >= p.startDay && nextCoord <= p.endDay);
             }
             if (fires) total += Math.round((Number(pb.amount) || 0) * 100);
           });
           return total;
         });
 
-        const result = balanceBillsGreedy({
-          bills: bills.map((b) => ({
-            id: b.id,
-            amount: Number(b.amount),
-            dueDate: Number(b.dueDate),
-          })),
+      for (let i = 0; i < 12; i++) {
+        const target = new Date(today.getFullYear(), today.getMonth() + i, 1);
+        const tYear = target.getFullYear();
+        const tMonth = target.getMonth();
+        const mk = monthKeyOf(tYear, tMonth);
+
+        const periods = getPayPeriodsForMonth(tYear, tMonth, payWeekday, today, biWeekly);
+        if (periods.length === 0) continue;
+
+        const isThisCurrentMonth = tYear === today.getFullYear() && tMonth === today.getMonth();
+        const tTodayCoord = isThisCurrentMonth ? today.getDate() : 0;
+
+        const lockedWeekIndices = new Set<number>(
+          periods.filter((p) => tTodayCoord > 0 && p.endDay <= tTodayCoord).map((p) => p.index),
+        );
+
+        const existingForMonth = splitRowsRaw.filter((o: any) => String(o.monthKey) === mk);
+
+        const isNaturalRow = (billId: string, weekIndex: number) =>
+          getBillNaturalWeekIndex(
+            Number(bills.find((b: any) => b.id === billId)?.dueDate ?? 0),
+            periods,
+          ) === weekIndex;
+
+        const lockedAllocations = existingForMonth
+          .filter((o: any) => lockedWeekIndices.has(Number(o.weekIndex)) && isNaturalRow(String(o.billId), Number(o.weekIndex)))
+          .map((o: any) => ({ billId: String(o.billId), weekIndex: Number(o.weekIndex), amountCents: Number(o.amountCents) }));
+
+        const result = balancePayWeeks({
+          bills: bills.map((b: any) => ({ id: b.id, amount: Number(b.amount), dueDate: Number(b.dueDate), neverSplit: Boolean(b.neverSplit) })),
           periods,
-          incomePerPeriodCents,
-          fixedExpensesPerPeriodCents: personalPerPeriodCents,
+          incomePerPeriodCents: computeIncomePerPeriod(periods, tYear, tMonth),
+          fixedExpensesPerPeriodCents: computePersonalPerPeriod(periods),
           targetSurplusCents,
+          todayCoord: tTodayCoord,
+          lockedAllocations,
         });
 
-        const currentForMonth = overrideRowsRaw
-          .filter((o: any) => String(o.monthKey) === monthKey)
-          .map((o: any) => `${o.billId}:${Number(o.weekIndex)}`)
-          .sort();
-        const nextForMonth = result.assignments
-          .map((a) => `${a.billId}:${a.weekIndex}`)
-          .sort();
-        const same =
-          currentForMonth.length === nextForMonth.length &&
-          currentForMonth.every((s, i) => s === nextForMonth[i]);
+        const toDelete = existingForMonth.filter(
+          (o: any) => !lockedWeekIndices.has(Number(o.weekIndex)) || !isNaturalRow(String(o.billId), Number(o.weekIndex)),
+        );
+        const currentSig = toDelete.map((o: any) => `${o.billId}:${o.weekIndex}:${o.amountCents}`).sort().join(",");
+        const newSig = result.allocations.map((a) => `${a.billId}:${a.weekIndex}:${a.amountCents}`).sort().join(",");
+        if (currentSig === newSig) continue;
 
-        if (!same) {
-          const existing = overrideRowsRaw.filter(
-            (o: any) => String(o.monthKey) === monthKey,
-          );
-          for (const o of existing) {
-            await deleteOverride({
-              resource: "BillPayWeekOverride",
-              id: o.id,
-              successNotification: false,
-            });
-          }
-          for (const a of result.assignments) {
-            await createOverride({
-              resource: "BillPayWeekOverride",
-              values: {
-                billId: a.billId,
-                monthKey,
-                weekIndex: a.weekIndex,
-              },
-              successNotification: false,
-            });
-          }
+        for (const o of toDelete) {
+          await deleteSplit({ resource: "BillSplit", id: o.id, successNotification: false });
         }
-
-        balancedHashRef.current.set(monthKey, balanceInputHash);
-      } finally {
-        balancingRef.current = false;
+        for (const a of result.allocations) {
+          await createSplit({
+            resource: "BillSplit",
+            values: { billId: a.billId, monthKey: mk, weekIndex: a.weekIndex, amountCents: a.amountCents },
+            successNotification: false,
+          });
+        }
       }
-    };
-
-    void run();
-    // Hash captures all the real inputs; overrideRowsRaw and mutate fns are
-    // intentionally omitted so we don't re-fire on our own writes. The
-    // `isSuccess` flags are included so the effect re-fires once every input
-    // query has finished loading (they only flip false→true, and never back,
-    // so they don't cause churn later).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    balanceInputHash,
-    monthKey,
-    bills.length,
-    !!primaryIncome,
-    billsQuery.isSuccess,
-    personalQuery.isSuccess,
-    settingsQuery.isSuccess,
-    incomesQuery.isSuccess,
-    overridesQuery.isSuccess,
-  ]);
+    } finally {
+      setIsOptimizing(false);
+      setOptimizeAlert(null);
+      setSuccessToast(true);
+    }
+  };
 
   if (
     billsQuery.isLoading ||
@@ -278,7 +260,7 @@ export default function Overview() {
     yearlyQuery.isLoading ||
     settingsQuery.isLoading ||
     incomesQuery.isLoading ||
-    overridesQuery.isLoading
+    splitsQuery.isLoading
   ) {
     return (
       <Box sx={{ display: "flex", justifyContent: "center", p: 8 }}>
@@ -376,6 +358,47 @@ export default function Overview() {
         </Typography>
       </Box>
 
+      {/* ── Stale-data alert ── */}
+      {optimizeAlert && (
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 2,
+            px: 2.5,
+            py: 1.75,
+            borderRadius: 3,
+            bgcolor: "rgba(251, 191, 36, 0.07)",
+            border: "1px solid rgba(251, 191, 36, 0.35)",
+          }}
+        >
+          <WarningAmberIcon sx={{ color: "#fbbf24", fontSize: 22, flexShrink: 0 }} />
+          <Box sx={{ flex: 1 }}>
+            <Typography sx={{ color: "white", fontWeight: 700, fontSize: "0.9rem", lineHeight: 1.3 }}>
+              {optimizeAlert}
+            </Typography>
+            <Typography sx={{ color: "text.secondary", fontSize: "0.78rem", mt: 0.25 }}>
+              Re-optimize your pay week schedule to reflect the latest changes.
+            </Typography>
+          </Box>
+          <Button
+            variant="contained"
+            size="small"
+            disableElevation
+            disabled={isOptimizing}
+            onClick={() => handleOptimize()}
+            startIcon={
+              isOptimizing
+                ? <CircularProgress size={12} color="inherit" />
+                : <AutoFixHighIcon sx={{ fontSize: 14 }} />
+            }
+            sx={{ fontWeight: 800, borderRadius: 2, flexShrink: 0, fontSize: "0.8rem" }}
+          >
+            {isOptimizing ? "Optimizing…" : "Optimize Now"}
+          </Button>
+        </Box>
+      )}
+
       {/* ── Monthly cash flow section ── */}
       <Box
         sx={{
@@ -452,14 +475,14 @@ export default function Overview() {
           incomes={incomes}
           viewYear={viewYear}
           viewMonth={viewMonth}
-          overrides={overrides}
+          splits={splits}
         />
         <BillsOverview
           bills={bills}
           settings={effectiveSettings}
           viewYear={viewYear}
           viewMonth={viewMonth}
-          overrides={overrides}
+          splits={splits}
         />
         <PersonalOverview
           personalBills={personalBills}
@@ -468,7 +491,7 @@ export default function Overview() {
           settings={effectiveSettings}
           viewYear={viewYear}
           viewMonth={viewMonth}
-          overrides={overrides}
+          splits={splits}
         />
       </Box>
 
@@ -483,6 +506,18 @@ export default function Overview() {
       >
         <YearlyOverview yearlyCosts={yearlyCosts} months={SHORT_MONTHS} />
       </Box>
+
+      <Snackbar
+        open={successToast}
+        autoHideDuration={3000}
+        onClose={() => setSuccessToast(false)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        slots={{ transition: Fade }}
+      >
+        <Alert severity="success" variant="filled" onClose={() => setSuccessToast(false)}>
+          Pay weeks optimized across the next 12 months!
+        </Alert>
+      </Snackbar>
 
     </Box>
   );

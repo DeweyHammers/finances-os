@@ -1,14 +1,15 @@
 "use client";
 
-import { Box, Grid, Typography, Paper } from "@mui/material";
+import { Box, Grid, Typography, Paper, Tooltip } from "@mui/material";
 import { SummarySection } from "./SummarySection";
 import { DashboardCard } from "./DashboardCard";
 import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
+import CallSplitIcon from "@mui/icons-material/CallSplit";
 import {
   getPayPeriodsForMonth,
-  getBillPeriodKeyWithOverride,
+  getBillAllocationsForBill,
   monthKeyOf,
-  BillOverrideRecord,
+  BillSplitRecord,
   clampDayToMonth,
   PayPeriod,
 } from "../../lib/pay-period-utils";
@@ -19,6 +20,7 @@ interface Bill {
   amount: number;
   dueDate: number;
   withdrawalCycle: string;
+  neverSplit?: boolean;
 }
 
 interface BillsOverviewProps {
@@ -26,7 +28,16 @@ interface BillsOverviewProps {
   settings: any;
   viewYear?: number;
   viewMonth?: number;
-  overrides?: BillOverrideRecord[];
+  splits?: BillSplitRecord[];
+}
+
+interface AllocatedBill {
+  bill: Bill;
+  amountCents: number;
+  isSplit: boolean;
+  occDay: number;
+  occInNextMonth: boolean;
+  coord: number;
 }
 
 export const BillsOverview: React.FC<BillsOverviewProps> = ({
@@ -34,7 +45,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
   settings,
   viewYear,
   viewMonth,
-  overrides = [],
+  splits = [],
 }) => {
   if (!settings) return null;
 
@@ -60,10 +71,10 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
     return s[(v - 20) % 10] || s[v] || s[0];
   };
 
-  // View-window occurrence for a bill: the coord (in day-of-month with
-  // forward-extension) at which this bill fires inside this month's periods.
-  // Independent of any override — the calendar date doesn't change when we
-  // shift the funding week.
+  // View-window occurrence for a bill: the calendar-day the bill actually
+  // fires. Independent of split placement — the split just spreads the
+  // payment mentally across weeks, but the real transaction still hits on
+  // dueDate.
   const occForView = (
     dueDate: number,
   ): { coord: number; inNextMonth: boolean; day: number } | null => {
@@ -74,27 +85,41 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
     if (dueDate >= firstStart && dueDate <= lastEnd) {
       return { coord: dueDate, inNextMonth: false, day: dueDate };
     }
+    // Orphan fallback: bill fires before the first payday and next-month
+    // occurrence is past the forward-extension window. Treat like forward ext.
+    if (dueDate < firstStart && nextCoord > lastEnd) {
+      return { coord: nextCoord, inNextMonth: true, day: dueDate };
+    }
     return null;
   };
 
-  const resolvePeriodBills = (period: PayPeriod) =>
-    bills
-      .map((b) => {
-        const occ = occForView(Number(b.dueDate));
-        const key = getBillPeriodKeyWithOverride(
-          b.id,
-          Number(b.dueDate),
-          periods,
-          monthKey,
-          overrides,
-        );
-        return { bill: b, occ, key };
-      })
-      .filter(
-        (x): x is { bill: Bill; occ: NonNullable<typeof x.occ>; key: string } =>
-          x.occ !== null && x.key === period.key,
-      )
-      .sort((a, b) => a.occ.coord - b.occ.coord);
+  const resolvePeriodBills = (period: PayPeriod): AllocatedBill[] => {
+    const out: AllocatedBill[] = [];
+    for (const b of bills) {
+      const occ = occForView(Number(b.dueDate));
+      if (!occ) continue;
+      const allocs = getBillAllocationsForBill(
+        b.id,
+        Number(b.dueDate),
+        Number(b.amount) || 0,
+        periods,
+        monthKey,
+        splits,
+      );
+      for (const a of allocs) {
+        if (a.periodKey !== period.key) continue;
+        out.push({
+          bill: b,
+          amountCents: a.amountCents,
+          isSplit: a.isSplit,
+          occDay: occ.day,
+          occInNextMonth: occ.inNextMonth,
+          coord: occ.coord,
+        });
+      }
+    }
+    return out.sort((a, b) => a.coord - b.coord);
+  };
 
   const activePeriods = periods.filter(
     (p) => resolvePeriodBills(p).length > 0,
@@ -111,7 +136,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
     if (periodBills.length === 0) return null;
 
     const subtotal = periodBills.reduce(
-      (acc, { bill }) => acc + (Number(bill.amount) || 0),
+      (acc, x) => acc + x.amountCents / 100,
       0,
     );
 
@@ -204,19 +229,53 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
           </Box>
 
           <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-            {periodBills.map(({ bill, occ }) => {
-              const clampedDay = clampDayToMonth(occ.day, year, month);
-              const subtitle = occ.inNextMonth
-                ? `Due ${nextMonthAbbr} ${occ.day}${getOrdinal(occ.day)}`
+            {periodBills.map(({ bill, amountCents, isSplit, occDay, occInNextMonth }) => {
+              const clampedDay = clampDayToMonth(occDay, year, month);
+              const dueBase = occInNextMonth
+                ? `Due ${nextMonthAbbr} ${occDay}${getOrdinal(occDay)}`
                 : `Due on the ${clampedDay}${getOrdinal(clampedDay)}`;
+              const totalDollars = Number(bill.amount) || 0;
+              const subtitle = isSplit
+                ? `Split · $${totalDollars.toFixed(2)} total · ${dueBase.toLowerCase()}`
+                : dueBase;
               return (
-                <DashboardCard
-                  key={bill.id}
-                  name={bill.name}
-                  amount={bill.amount}
-                  subtitle={subtitle}
-                  color={period.color}
-                />
+                <Box
+                  key={`${bill.id}-${period.key}`}
+                  sx={{ position: "relative" }}
+                >
+                  <DashboardCard
+                    name={bill.name}
+                    amount={amountCents / 100}
+                    subtitle={subtitle}
+                    color={period.color}
+                  />
+                  {isSplit && (
+                    <Tooltip
+                      title={`Auto-split across pay weeks · $${totalDollars.toFixed(2)} total`}
+                      placement="top"
+                      arrow
+                    >
+                      <Box
+                        sx={{
+                          position: "absolute",
+                          top: 8,
+                          right: 8,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: 22,
+                          height: 22,
+                          borderRadius: "50%",
+                          bgcolor: `${period.color}33`,
+                          color: period.color,
+                          pointerEvents: "auto",
+                        }}
+                      >
+                        <CallSplitIcon sx={{ fontSize: 14 }} />
+                      </Box>
+                    </Tooltip>
+                  )}
+                </Box>
               );
             })}
           </Box>

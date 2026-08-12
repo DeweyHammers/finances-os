@@ -3,10 +3,10 @@ import { Box, Grid, Typography, Paper, Tooltip } from "@mui/material";
 import {
   getPayPeriodsForMonth,
   getBillPeriodKey,
-  getBillPeriodKeyWithOverride,
+  getBillAllocationCentsForPeriod,
   computeSplitPersonalAllocations,
   monthKeyOf,
-  BillOverrideRecord,
+  BillSplitRecord,
   PayPeriod,
 } from "../../lib/pay-period-utils";
 
@@ -17,7 +17,7 @@ interface CashFlowOverviewProps {
   incomes?: any[];
   viewYear?: number;
   viewMonth?: number;
-  overrides?: BillOverrideRecord[];
+  splits?: BillSplitRecord[];
 }
 
 export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
@@ -27,7 +27,7 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
   incomes = [],
   viewYear,
   viewMonth,
-  overrides = [],
+  splits = [],
 }) => {
   if (!settings) return null;
 
@@ -66,20 +66,23 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
     return result;
   };
 
-  // Bills per period (auto-balanced with overrides).
+  // Bills per period, summing split allocations when present.
   const billsPerPeriodDollars = periods.map((period) =>
-    bills
-      .filter(
-        (b) =>
-          getBillPeriodKeyWithOverride(
-            b.id,
-            Number(b.dueDate),
-            periods,
-            monthKey,
-            overrides,
-          ) === period.key,
-      )
-      .reduce((acc, b) => acc + (Number(b.amount) || 0), 0),
+    bills.reduce(
+      (acc, b) =>
+        acc +
+        getBillAllocationCentsForPeriod(
+          b.id,
+          Number(b.dueDate),
+          Number(b.amount) || 0,
+          periods,
+          monthKey,
+          splits,
+          period.key,
+        ) /
+          100,
+      0,
+    ),
   );
 
   // Fixed personal (excluding split-across-weeks) per period.

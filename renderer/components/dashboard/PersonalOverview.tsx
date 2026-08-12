@@ -7,11 +7,11 @@ import PersonIcon from "@mui/icons-material/Person";
 import {
   getPayPeriodsForMonth,
   getBillPeriodKey,
-  getBillPeriodKeyWithOverride,
+  getBillAllocationCentsForPeriod,
   getBillOccurrenceInPeriod,
   computeSplitPersonalAllocations,
   monthKeyOf,
-  BillOverrideRecord,
+  BillSplitRecord,
   PayPeriod,
 } from "../../lib/pay-period-utils";
 
@@ -32,7 +32,7 @@ interface PersonalOverviewProps {
   settings: any;
   viewYear?: number;
   viewMonth?: number;
-  overrides?: BillOverrideRecord[];
+  splits?: BillSplitRecord[];
 }
 
 export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
@@ -42,7 +42,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   settings,
   viewYear,
   viewMonth,
-  overrides = [],
+  splits = [],
 }) => {
   if (!settings) return null;
 
@@ -86,20 +86,21 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
     return total;
   });
 
-  const billsPerPeriodCents = periods.map(
-    (period) =>
-      bills
-        .filter(
-          (b) =>
-            getBillPeriodKeyWithOverride(
-              b.id,
-              Number(b.dueDate),
-              periods,
-              monthKey,
-              overrides,
-            ) === period.key,
-        )
-        .reduce((acc, b) => acc + Math.round((Number(b.amount) || 0) * 100), 0),
+  const billsPerPeriodCents = periods.map((period) =>
+    bills.reduce(
+      (acc, b) =>
+        acc +
+        getBillAllocationCentsForPeriod(
+          b.id,
+          Number(b.dueDate),
+          Number(b.amount) || 0,
+          periods,
+          monthKey,
+          splits,
+          period.key,
+        ),
+      0,
+    ),
   );
 
   const fixedPersonalPerPeriodCents = periods.map((period) =>
