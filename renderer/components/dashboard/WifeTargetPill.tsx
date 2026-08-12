@@ -12,12 +12,6 @@ import EditIcon from "@mui/icons-material/Edit";
 import { useOne, useUpdate } from "@refinedev/core";
 import { fromCents, toCents } from "../../lib/cents";
 
-/**
- * Compact pill in the Overview header showing the current wife weekly
- * allowance target. Clicking opens a small popover with a number input;
- * committing writes AppSettings.wifeWeeklyTargetCents, which flows into the
- * auto-balance hash and re-plans the current month.
- */
 export const WifeTargetPill = () => {
   const { query } = useOne({
     resource: "AppSettings",
@@ -152,6 +146,11 @@ export const WifeTargetPill = () => {
         }}
       >
         <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+          <Typography
+            sx={{ fontSize: "0.7rem", fontWeight: 700, color: "text.secondary", textTransform: "uppercase", letterSpacing: 0.8 }}
+          >
+            Wife Target
+          </Typography>
           <TextField
             inputRef={inputRef}
             value={draft}
@@ -171,8 +170,6 @@ export const WifeTargetPill = () => {
               htmlInput: {
                 min: 0,
                 step: 10,
-                // Bind on the raw <input> so Enter/Escape aren't swallowed by
-                // MUI's InputBase or the Popover wrapper.
                 onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
@@ -186,11 +183,10 @@ export const WifeTargetPill = () => {
             }}
             sx={{ width: 180 }}
           />
-          <Typography
-            sx={{ fontSize: "0.7rem", color: "text.secondary" }}
-          >
+          <Typography sx={{ fontSize: "0.7rem", color: "text.secondary" }}>
             Min surplus each pay week must clear after bills + personal.
           </Typography>
+
         </Box>
       </Popover>
     </>

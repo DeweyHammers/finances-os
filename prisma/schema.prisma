@@ -106,17 +106,20 @@ model Bill {
   dueDate         Int      @default(1)
   withdrawalCycle String   @default("Q1") // Q1, Q2, Q3, Q4, MONTH
   isAutoPay       Boolean  @default(true)
-  overrides       BillPayWeekOverride[]
+  neverSplit      Boolean  @default(false) // when true, auto-balance never splits this bill across pay weeks
+  splits          BillSplit[]
 }
 
-model BillPayWeekOverride {
-  id         String @id @default(cuid())
-  billId     String
-  bill       Bill   @relation(fields: [billId], references: [id], onDelete: Cascade)
-  monthKey   String // "YYYY-MM" — the VIEW month whose pay-week grid this override applies to
-  weekIndex  Int    // 0-based index into that month's periods (P1 = 0, P2 = 1, …)
+model BillSplit {
+  id              String @id @default(cuid())
+  billId          String
+  bill            Bill   @relation(fields: [billId], references: [id], onDelete: Cascade)
+  monthKey        String // "YYYY-MM" — the VIEW month whose pay-week grid this row applies to
+  weekIndex       Int    // 0-based index into that month's periods (P1 = 0, P2 = 1, …)
+  amountCents     Int    // portion of this occurrence allocated to this pay week; sums per (billId, monthKey, occurrenceCoord) equal the bill's total
+  occurrenceCoord Int    @default(0) // day-of-current-month coord for this occurrence (in-month = D, next-month = D+daysInMonth); distinguishes bills that fire twice in one view
 
-  @@unique([billId, monthKey])
+  @@unique([billId, monthKey, weekIndex, occurrenceCoord])
 }
 
 model Personal {

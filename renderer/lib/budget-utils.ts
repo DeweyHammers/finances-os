@@ -186,8 +186,8 @@ export const resolveAutoAssignAmount = (params: {
 import {
   PayPeriod,
   getBillPeriodKey,
-  getBillPeriodKeyWithOverride,
-  BillOverrideRecord,
+  getBillAllocationCentsForPeriod,
+  BillSplitRecord,
 } from "./pay-period-utils";
 
 export const resolveAutoAssignAmountForPeriod = (params: {
@@ -196,7 +196,7 @@ export const resolveAutoAssignAmountForPeriod = (params: {
   periods: PayPeriod[];
   bills: BillRecordWithDueDate[];
   personals: PersonalRecordExtended[];
-  overrides?: BillOverrideRecord[];
+  splits?: BillSplitRecord[];
   monthKey?: string;
   splitAllocationsByPersonalName?: Record<string, number>;
 }): number => {
@@ -206,24 +206,29 @@ export const resolveAutoAssignAmountForPeriod = (params: {
     periods,
     bills,
     personals,
-    overrides,
+    splits,
     monthKey,
-    splitAllocationsByPersonalName,
+    splitAllocationsByPersonalName: _splitAllocationsByPersonalName,
   } = params;
 
   if (item.sourceType === "BILL") {
     const bill = bills.find((b) => b.id === item.sourceBillId);
     if (!bill) return 0;
-    const attributedKey =
-      overrides && monthKey
-        ? getBillPeriodKeyWithOverride(
-            bill.id,
-            Number(bill.dueDate),
-            periods,
-            monthKey,
-            overrides,
-          )
-        : getBillPeriodKey(Number(bill.dueDate), periods);
+    if (splits && monthKey) {
+      // Use per-week split allocations (single-week bills return the full
+      // amount only in their sole period; split bills return per-week cents).
+      return getBillAllocationCentsForPeriod(
+        bill.id,
+        Number(bill.dueDate),
+        Number(bill.amount),
+        periods,
+        monthKey,
+        splits,
+        periodKey,
+      );
+    }
+    // No splits provided — fall back to due-date attribution with full amount.
+    const attributedKey = getBillPeriodKey(Number(bill.dueDate), periods);
     if (attributedKey !== periodKey) return 0;
     return Math.round(bill.amount * 100);
   }
@@ -233,7 +238,8 @@ export const resolveAutoAssignAmountForPeriod = (params: {
     const match = personals.find((p) => p.name === item.sourcePersonalName);
     if (!match) return 0;
     if (match.splitAcrossWeeks) {
-      return splitAllocationsByPersonalName?.[match.name] ?? 0;
+      // Treat as a per-period allowance — the full amount is added each pay week.
+      return Math.round(match.amount * 100);
     }
     if (match.repeatWeekly) return Math.round(match.amount * 100);
     const attributedKey =

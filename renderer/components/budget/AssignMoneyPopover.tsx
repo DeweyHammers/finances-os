@@ -13,6 +13,7 @@ import {
 import BoltIcon from "@mui/icons-material/Bolt";
 import { toCents, formatMoney } from "../../lib/cents";
 import { CancelButton } from "../shared/CancelButton";
+import { PayPeriod } from "../../lib/pay-period-utils";
 
 export interface AssignTargetOption {
   itemId: string;
@@ -22,21 +23,14 @@ export interface AssignTargetOption {
   groupName: string;
 }
 
-interface CurrentPeriod {
-  key: string;
-  label: string;
-  dateRange: string;
-  color: string;
-}
-
 interface AssignMoneyPopoverProps {
   open: boolean;
   anchorEl: HTMLElement | null;
   options: AssignTargetOption[];
-  currentPeriod?: CurrentPeriod | null;
+  periods: PayPeriod[];
   onClose: () => void;
   onManualAssign: (params: { itemId: string; amountCents: number }) => void;
-  onAutoAssign: () => void;
+  onAutoAssign: (period: PayPeriod) => void;
 }
 
 const availableColor = (cents: number): string => {
@@ -49,7 +43,7 @@ export const AssignMoneyPopover = ({
   open,
   anchorEl,
   options,
-  currentPeriod,
+  periods,
   onClose,
   onManualAssign,
   onAutoAssign,
@@ -73,8 +67,8 @@ export const AssignMoneyPopover = ({
     onManualAssign({ itemId: destOption.itemId, amountCents: cents });
   };
 
-  const handleAutoAssign = () => {
-    onAutoAssign();
+  const handleAutoAssign = (period: PayPeriod) => {
+    onAutoAssign(period);
     onClose();
   };
 
@@ -273,46 +267,51 @@ export const AssignMoneyPopover = ({
               textTransform: "uppercase",
             }}
           >
-            Auto-Assign for This Week
+            Auto-Assign for Pay Week
           </Typography>
-          {currentPeriod ? (
-            <Button
-              variant="outlined"
-              onClick={handleAutoAssign}
-              sx={{
-                fontWeight: 800,
-                color: currentPeriod.color,
-                borderColor: `${currentPeriod.color}50`,
-                bgcolor: `${currentPeriod.color}10`,
-                py: 1.5,
-                display: "flex",
-                flexDirection: "column",
-                gap: 0.25,
-                lineHeight: 1.3,
-                "&:hover": {
-                  bgcolor: `${currentPeriod.color}25`,
-                  borderColor: currentPeriod.color,
-                },
-              }}
-            >
-              {currentPeriod.label}
-              <Typography
-                component="span"
-                sx={{
-                  fontSize: "0.7rem",
-                  fontWeight: 600,
-                  color: currentPeriod.color,
-                  opacity: 0.75,
-                  textTransform: "none",
-                }}
-              >
-                {currentPeriod.dateRange}
-              </Typography>
-            </Button>
-          ) : (
+          {periods.length === 0 ? (
             <Typography sx={{ color: "text.secondary", fontSize: "0.85rem" }}>
-              No active pay period found.
+              No pay periods found.
             </Typography>
+          ) : (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              {periods.map((p) => (
+                <Button
+                  key={p.key}
+                  variant="outlined"
+                  onClick={() => handleAutoAssign(p)}
+                  sx={{
+                    fontWeight: 800,
+                    color: p.color,
+                    borderColor: p.isCurrent ? p.color : `${p.color}50`,
+                    bgcolor: p.isCurrent ? `${p.color}18` : `${p.color}08`,
+                    py: 1.25,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 0.25,
+                    lineHeight: 1.3,
+                    "&:hover": {
+                      bgcolor: `${p.color}25`,
+                      borderColor: p.color,
+                    },
+                  }}
+                >
+                  {p.label}
+                  <Typography
+                    component="span"
+                    sx={{
+                      fontSize: "0.7rem",
+                      fontWeight: 600,
+                      color: p.color,
+                      opacity: 0.75,
+                      textTransform: "none",
+                    }}
+                  >
+                    {p.dateRange}
+                  </Typography>
+                </Button>
+              ))}
+            </Box>
           )}
         </Box>
       )}

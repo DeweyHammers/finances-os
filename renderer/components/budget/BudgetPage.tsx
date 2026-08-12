@@ -44,16 +44,16 @@ import {
   getPayPeriodsForMonth,
   clampDayToMonth,
   computeSplitPersonalAllocations,
-  getBillPeriodKeyWithOverride,
+  getBillAllocationCentsForPeriod,
   getBillPeriodKey,
   monthKeyOf,
-  BillOverrideRecord,
+  BillSplitRecord,
   PayPeriod,
 } from "../../lib/pay-period-utils";
 
 const startOfThisMonth = () => {
   const d = new Date();
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), 1));
 };
 
 export const BudgetPage = () => {
@@ -71,7 +71,6 @@ export const BudgetPage = () => {
       ),
     [month, payDay, biWeekly],
   );
-  const currentPeriod = periods.find((p) => p.isCurrent) ?? periods[0] ?? null;
   const [addGroupOpen, setAddGroupOpen] = useState(false);
   const [addItemGroupId, setAddItemGroupId] = useState<string | null>(null);
   const [addSubsectionGroup, setAddSubsectionGroup] = useState<{
@@ -84,7 +83,8 @@ export const BudgetPage = () => {
     el: HTMLElement;
   } | null>(null);
   const [assignAnchor, setAssignAnchor] = useState<HTMLElement | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toastOpen, setToastOpen] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
   // While a multi-step move is in flight (decrement source then increment
   // destination), the derived Ready-to-Assign value would briefly flash to a
   // positive amount between those two writes. We snapshot the pre-move RTA
@@ -128,8 +128,8 @@ export const BudgetPage = () => {
     resource: "Personal",
     pagination: { mode: "off" },
   });
-  const { query: overridesQuery } = useList({
-    resource: "BillPayWeekOverride",
+  const { query: splitsQuery } = useList({
+    resource: "BillSplit",
     pagination: { mode: "off" },
   });
   const { query: incomesQuery } = useList({
@@ -151,7 +151,7 @@ export const BudgetPage = () => {
   const allTxns = (txnsQuery.data?.data as any[]) || [];
   const bills = (billsQuery.data?.data as any[]) || [];
   const personals = (personalsQuery.data?.data as any[]) || [];
-  const overrideRowsRaw = (overridesQuery.data?.data as any[]) || [];
+  const splitRowsRaw = (splitsQuery.data?.data as any[]) || [];
   const incomes = (incomesQuery.data?.data as any[]) || [];
   const settings = (settingsQuery.data?.data as any) || {};
 
@@ -322,8 +322,7 @@ export const BudgetPage = () => {
     }
   };
 
-  const handleAutoAssign = () => {
-    if (!currentPeriod) return;
+  const handleAutoAssign = (targetPeriod: PayPeriod) => {
     let count = 0;
     let totalCents = 0;
     const billRefs = clampedBills.map((b: any) => ({
@@ -341,10 +340,11 @@ export const BudgetPage = () => {
     }));
 
     const monthKey = monthKeyOf(viewYear, viewMonth);
-    const overrides: BillOverrideRecord[] = overrideRowsRaw.map((r: any) => ({
+    const splits: BillSplitRecord[] = splitRowsRaw.map((r: any) => ({
       billId: String(r.billId),
       monthKey: String(r.monthKey),
       weekIndex: Number(r.weekIndex),
+      amountCents: Number(r.amountCents),
     }));
 
     // Mirror Overview's per-period computations so split personals get the
@@ -397,18 +397,20 @@ export const BudgetPage = () => {
         .reduce((acc, pb) => acc + Math.round((Number(pb.amount) || 0) * 100), 0),
     );
     const billsPerPeriodCents = periods.map((p) =>
-      billRefs
-        .filter(
-          (b) =>
-            getBillPeriodKeyWithOverride(
-              b.id,
-              Number(b.dueDate),
-              periods,
-              monthKey,
-              overrides,
-            ) === p.key,
-        )
-        .reduce((acc, b) => acc + Math.round((Number(b.amount) || 0) * 100), 0),
+      billRefs.reduce(
+        (acc, b) =>
+          acc +
+          getBillAllocationCentsForPeriod(
+            b.id,
+            Number(b.dueDate),
+            Number(b.amount),
+            periods,
+            monthKey,
+            splits,
+            p.key,
+          ),
+        0,
+      ),
     );
     const targetSurplusCents = Number(settings?.wifeWeeklyTargetCents ?? 30000);
     const splitPersonalRefs = personalRefs.filter((pb) => pb.splitAcrossWeeks);
@@ -423,8 +425,8 @@ export const BudgetPage = () => {
         amount: Number(pb.amount) || 0,
       })),
     });
-    const currentPeriodIdx = periods.findIndex((p) => p.key === currentPeriod.key);
-    // Cumulative allocation through the current period — the auto-assign
+    const targetPeriodIdx = periods.findIndex((p) => p.key === targetPeriod.key);
+    // Cumulative allocation through the target period — the auto-assign
     // top-up logic treats this as the running total that Available should
     // reach after this week. Auto-assigning a later week without doing the
     // earlier ones simply pulls the whole cumulative slice at once.
@@ -432,7 +434,7 @@ export const BudgetPage = () => {
     splitPersonalRefs.forEach((pb) => {
       const slices = splitAlloc.perSplitPerPeriod.get(pb.name) ?? [];
       splitAllocationsByPersonalName[pb.name] = slices
-        .slice(0, currentPeriodIdx + 1)
+        .slice(0, targetPeriodIdx + 1)
         .reduce((a, b) => a + b, 0);
     });
 
@@ -446,11 +448,11 @@ export const BudgetPage = () => {
           customAmountCents: it.customAmountCents,
           customCycle: it.customCycle,
         },
-        periodKey: currentPeriod.key,
+        periodKey: targetPeriod.key,
         periods,
         bills: billRefs,
         personals: personalRefs,
-        overrides,
+        splits,
         monthKey,
         splitAllocationsByPersonalName,
       });
@@ -468,12 +470,10 @@ export const BudgetPage = () => {
         (it.sourceType === "PERSONAL_NAME" && Boolean(personalMatch?.repeatWeekly));
       let needed: number;
       if (isRepeating) {
-        const expected = target * (currentPeriodIdx + 1);
-        // Clamp assigned to 0: if the user moved available money (which
-        // includes prior-month surplus) back to RTA, assignedCents can be
-        // negative, and expected - (negative) would inflate needed well
-        // above the current period's target.
-        needed = expected - Math.max(0, it.assignedCents);
+        // Weekly allowances and recurring items: always add one period's flat
+        // amount. Cumulative top-up is unreliable when existing assignments
+        // from prior sessions are non-zero.
+        needed = target;
       } else {
         needed = target - Math.max(0, it.availableCents);
       }
@@ -482,9 +482,8 @@ export const BudgetPage = () => {
       count++;
       totalCents += needed;
     });
-    setToast(
-      `Assigned ${(totalCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} across ${count} items for ${currentPeriod.label}`,
-    );
+    setToastMsg(`Assigned ${(totalCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} across ${count} items for ${targetPeriod.label}`);
+    setToastOpen(true);
   };
 
   const handleMoveMoney = (params: {
@@ -587,9 +586,8 @@ export const BudgetPage = () => {
     if (!item) return;
     upsertAssignment(item.id, item.assignedCents + params.amountCents);
     setAssignAnchor(null);
-    setToast(
-      `Assigned ${(params.amountCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} to ${item.name}`,
-    );
+    setToastMsg(`Assigned ${(params.amountCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} to ${item.name}`);
+    setToastOpen(true);
   };
 
   const isLoading =
@@ -598,7 +596,7 @@ export const BudgetPage = () => {
     subsectionsQuery.isLoading ||
     monthsQuery.isLoading ||
     txnsQuery.isLoading ||
-    overridesQuery.isLoading ||
+    splitsQuery.isLoading ||
     incomesQuery.isLoading ||
     settingsQuery.isLoading;
 
@@ -744,23 +742,24 @@ export const BudgetPage = () => {
         open={!!assignAnchor}
         anchorEl={assignAnchor}
         options={assignOptions}
-        currentPeriod={currentPeriod}
+        periods={periods.filter((p) => p.isCurrent)}
         onClose={() => setAssignAnchor(null)}
         onManualAssign={handleManualAssign}
         onAutoAssign={handleAutoAssign}
       />
       <Snackbar
-        open={!!toast}
+        open={toastOpen}
         autoHideDuration={3000}
-        onClose={() => setToast(null)}
+        onClose={() => setToastOpen(false)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        slotProps={{ transition: { onExited: () => setToastMsg("") } }}
       >
         <Alert
           severity="success"
           variant="filled"
-          onClose={() => setToast(null)}
+          onClose={() => setToastOpen(false)}
         >
-          {toast}
+          {toastMsg}
         </Alert>
       </Snackbar>
     </Box>

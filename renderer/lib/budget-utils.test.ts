@@ -365,17 +365,19 @@ describe("resolveAutoAssignAmountForPeriod", () => {
   // P1 = Aug 5-11, P2 = Aug 12-18, P3 = Aug 19-25, P4 = Aug 26 – (Sep 1 = coord 32)
   const periods = getPayPeriodsForMonth(2026, 7, 3, new Date(2026, 7, 5), false);
 
-  it("BILL: uses override to attribute a late-due bill to an earlier period", () => {
-    // Discord due on the 17th naturally lands in P2; auto-balance override
-    // moved it to Pay Week 1 (weekIndex 0). Auto-assign for P1 should now
-    // see it.
+  it("BILL: uses split allocation to attribute a late-due bill to an earlier period", () => {
+    // Discord due on the 17th naturally lands in P2; auto-balance wrote a
+    // single-row split placing it at Pay Week 1 (weekIndex 0). Auto-assign
+    // for P1 should now see it.
     const bill = { id: "discord", amount: 9.99, dueDate: 17 };
     const item = {
       id: "i-discord",
       sourceType: "BILL" as const,
       sourceBillId: "discord",
     };
-    const overrides = [{ billId: "discord", monthKey: "2026-08", weekIndex: 0 }];
+    const splits = [
+      { billId: "discord", monthKey: "2026-08", weekIndex: 0, amountCents: 999 },
+    ];
 
     expect(
       resolveAutoAssignAmountForPeriod({
@@ -384,7 +386,7 @@ describe("resolveAutoAssignAmountForPeriod", () => {
         periods,
         bills: [bill],
         personals: [],
-        overrides,
+        splits,
         monthKey: "2026-08",
       }),
     ).toBe(999);
@@ -397,13 +399,44 @@ describe("resolveAutoAssignAmountForPeriod", () => {
         periods,
         bills: [bill],
         personals: [],
-        overrides,
+        splits,
         monthKey: "2026-08",
       }),
     ).toBe(0);
   });
 
-  it("BILL: falls back to natural due-date attribution when no override matches", () => {
+  it("BILL: split across two weeks returns per-week cents in each period", () => {
+    const bill = { id: "climb", amount: 200, dueDate: 15 };
+    const item = {
+      id: "i-climb",
+      sourceType: "BILL" as const,
+      sourceBillId: "climb",
+    };
+    const splits = [
+      { billId: "climb", monthKey: "2026-08", weekIndex: 0, amountCents: 8000 },
+      { billId: "climb", monthKey: "2026-08", weekIndex: 1, amountCents: 12000 },
+    ];
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item, periodKey: "P1", periods,
+        bills: [bill], personals: [], splits, monthKey: "2026-08",
+      }),
+    ).toBe(8000);
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item, periodKey: "P2", periods,
+        bills: [bill], personals: [], splits, monthKey: "2026-08",
+      }),
+    ).toBe(12000);
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item, periodKey: "P3", periods,
+        bills: [bill], personals: [], splits, monthKey: "2026-08",
+      }),
+    ).toBe(0);
+  });
+
+  it("BILL: falls back to natural due-date attribution when no split matches", () => {
     const bill = { id: "phone", amount: 101, dueDate: 5 };
     const item = {
       id: "i-phone",
@@ -417,7 +450,7 @@ describe("resolveAutoAssignAmountForPeriod", () => {
         periods,
         bills: [bill],
         personals: [],
-        overrides: [],
+        splits: [],
         monthKey: "2026-08",
       }),
     ).toBe(10100);
