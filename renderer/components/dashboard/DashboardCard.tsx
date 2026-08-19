@@ -1,11 +1,12 @@
 "use client";
 
+import { ReactNode } from "react";
 import { Card, CardContent, Typography, Box } from "@mui/material";
 
 interface DashboardCardProps {
   name: string;
   amount: number;
-  subtitle?: string;
+  subtitle?: ReactNode;
   color?: string;
   isCurrency?: boolean;
   suffix?: string;
@@ -22,7 +23,12 @@ export const DashboardCard: React.FC<DashboardCardProps> = ({
   precision = 2,
 }) => {
   const cleanName = name.replace(/^[\s\u00A0]+|[\s\u00A0]+$/g, "");
-  const cleanSubtitle = subtitle?.replace(/^[\s\u00A0]+|[\s\u00A0]+$/g, "");
+  // Only trim when it's a plain string; JSX subtitles are passed through as-is
+  // so callers can wrap multi-line content in <Box> without losing structure.
+  const cleanSubtitle =
+    typeof subtitle === "string"
+      ? subtitle.replace(/^[\s\u00A0]+|[\s\u00A0]+$/g, "")
+      : subtitle;
 
   return (
     <Card

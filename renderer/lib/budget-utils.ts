@@ -186,7 +186,7 @@ export const resolveAutoAssignAmount = (params: {
 import {
   PayPeriod,
   getBillPeriodKey,
-  getBillAllocationCentsForPeriod,
+  getBillAllocationsForBill,
   BillSplitRecord,
 } from "./pay-period-utils";
 
@@ -208,24 +208,36 @@ export const resolveAutoAssignAmountForPeriod = (params: {
     personals,
     splits,
     monthKey,
-    splitAllocationsByPersonalName: _splitAllocationsByPersonalName,
+    splitAllocationsByPersonalName,
   } = params;
 
   if (item.sourceType === "BILL") {
     const bill = bills.find((b) => b.id === item.sourceBillId);
     if (!bill) return 0;
     if (splits && monthKey) {
-      // Use per-week split allocations (single-week bills return the full
-      // amount only in their sole period; split bills return per-week cents).
-      return getBillAllocationCentsForPeriod(
+      const allocs = getBillAllocationsForBill(
         bill.id,
         Number(bill.dueDate),
         Number(bill.amount),
         periods,
         monthKey,
         splits,
-        periodKey,
       );
+      if (allocs.length === 0) return 0;
+      // Split bills fund their target cumulatively across pay weeks — hitting
+      // Auto for P3 should top the category up to the sum of slices through
+      // P3, not just P3's slice (which would go negative and add nothing once
+      // prior weeks have covered more than this week's share).
+      if (allocs.length > 1) {
+        const targetIdx = periods.findIndex((p) => p.key === periodKey);
+        if (targetIdx < 0) return 0;
+        return allocs
+          .filter((a) => a.weekIndex <= targetIdx)
+          .reduce((acc, a) => acc + a.amountCents, 0);
+      }
+      // Single-week bill: only fund in its natural period.
+      const only = allocs[0];
+      return only.periodKey === periodKey ? only.amountCents : 0;
     }
     // No splits provided — fall back to due-date attribution with full amount.
     const attributedKey = getBillPeriodKey(Number(bill.dueDate), periods);
@@ -238,8 +250,9 @@ export const resolveAutoAssignAmountForPeriod = (params: {
     const match = personals.find((p) => p.name === item.sourcePersonalName);
     if (!match) return 0;
     if (match.splitAcrossWeeks) {
-      // Treat as a per-period allowance — the full amount is added each pay week.
-      return Math.round(match.amount * 100);
+      // Split personals fund cumulatively via caller-computed slices summed
+      // through the target period (matches the split-bill semantics above).
+      return splitAllocationsByPersonalName?.[item.sourcePersonalName] ?? 0;
     }
     if (match.repeatWeekly) return Math.round(match.amount * 100);
     const attributedKey =
