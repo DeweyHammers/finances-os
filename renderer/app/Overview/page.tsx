@@ -33,7 +33,8 @@ import { useRouter } from "next/navigation";
 import {
   getPayPeriodsForMonth,
   balancePayWeeks,
-  getBillNaturalWeekIndex,
+  getBillOccurrencesInView,
+  assertNoUnderfundedBills,
   monthKeyOf,
   BillSplitRecord,
 } from "../../lib/pay-period-utils";
@@ -103,16 +104,27 @@ export default function Overview() {
       monthKey: String(r.monthKey),
       weekIndex: Number(r.weekIndex),
       amountCents: Number(r.amountCents),
+      occurrenceCoord: Number(r.occurrenceCoord ?? 0),
     }));
   }, [splitRowsRaw]);
 
   const targetSurplusCents = Number(settings?.wifeWeeklyTargetCents ?? 30000);
 
+  // Detect legacy BillSplit rows (occurrenceCoord=0) — these were written by
+  // the pre-multi-occurrence algorithm and need to be re-optimized so
+  // per-occurrence allocations land correctly. Missing this migration causes
+  // "phantom" double-loading in P1 (natural fallback for the in-month
+  // occurrence stacks on top of the legacy split for the next-month one).
+  const hasLegacySplits = useMemo(
+    () => splitRowsRaw.length > 0 && splitRowsRaw.every((r: any) => Number(r.occurrenceCoord ?? 0) === 0),
+    [splitRowsRaw],
+  );
+
   // Detect post-load changes and prompt the user to re-optimize.
   useEffect(() => {
     const loading =
       billsQuery.isLoading || personalQuery.isLoading ||
-      settingsQuery.isLoading || incomesQuery.isLoading;
+      settingsQuery.isLoading || incomesQuery.isLoading || splitsQuery.isLoading;
     if (loading) return;
 
     const billsSig = bills.map((b: any) => `${b.id}:${b.amount}:${b.dueDate}`).sort().join(",");
@@ -126,6 +138,11 @@ export default function Overview() {
       prevPersonalsSigRef.current = personalsSig;
       prevWifeTargetRef.current = wifeTarget;
       initializedRef.current = true;
+      if (hasLegacySplits) {
+        setOptimizeAlert(
+          "Bill schedule needs re-optimization — the multi-occurrence fix requires re-running Optimize so each pay week gets the correct allocation.",
+        );
+      }
       return;
     }
 
@@ -142,7 +159,7 @@ export default function Overview() {
       prevWifeTargetRef.current = wifeTarget;
       setOptimizeAlert("Wife's weekly target was changed.");
     }
-  }, [bills, incomes, personalBills, targetSurplusCents, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading]);
+  }, [bills, incomes, personalBills, targetSurplusCents, hasLegacySplits, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading, splitsQuery.isLoading]);
 
   const handleOptimize = async () => {
     if (isOptimizing || !primaryIncome) return;
@@ -209,15 +226,34 @@ export default function Overview() {
 
         const existingForMonth = splitRowsRaw.filter((o: any) => String(o.monthKey) === mk);
 
-        const isNaturalRow = (billId: string, weekIndex: number) =>
-          getBillNaturalWeekIndex(
-            Number(bills.find((b: any) => b.id === billId)?.dueDate ?? 0),
-            periods,
-          ) === weekIndex;
+        // Resolve legacy occurrenceCoord=0 rows to the bill's primary
+        // (next-month-preferred) occurrence so the balance algorithm can
+        // account for them per-occurrence.
+        const resolveCoord = (billId: string, rawCoord: number): number => {
+          if (rawCoord !== 0) return rawCoord;
+          const bill = bills.find((b: any) => b.id === billId);
+          if (!bill) return 0;
+          const occs = getBillOccurrencesInView(Number(bill.dueDate ?? 0), periods);
+          if (occs.length === 0) return 0;
+          const primary = occs.find((o) => o.inNextMonth) ?? occs[0];
+          return primary.coord;
+        };
 
+        // Every split in a locked week is HISTORY — it represents money the
+        // paycheck for that week already committed. Preserve them as-is even
+        // if they don't match the new algorithm's "natural" attribution, so
+        // the algorithm accounts for what's already spent and only allocates
+        // the REMAINING portion of each bill into future weeks. Deleting
+        // these would cause the algorithm to re-place the full bill amount
+        // into unlocked weeks, doubling up on already-committed funds.
         const lockedAllocations = existingForMonth
-          .filter((o: any) => lockedWeekIndices.has(Number(o.weekIndex)) && isNaturalRow(String(o.billId), Number(o.weekIndex)))
-          .map((o: any) => ({ billId: String(o.billId), weekIndex: Number(o.weekIndex), amountCents: Number(o.amountCents) }));
+          .filter((o: any) => lockedWeekIndices.has(Number(o.weekIndex)))
+          .map((o: any) => ({
+            billId: String(o.billId),
+            weekIndex: Number(o.weekIndex),
+            amountCents: Number(o.amountCents),
+            occurrenceCoord: resolveCoord(String(o.billId), Number(o.occurrenceCoord ?? 0)),
+          }));
 
         const result = balancePayWeeks({
           bills: bills.map((b: any) => ({ id: b.id, amount: Number(b.amount), dueDate: Number(b.dueDate), neverSplit: Boolean(b.neverSplit) })),
@@ -229,11 +265,24 @@ export default function Overview() {
           lockedAllocations,
         });
 
+        // Fail loud if the algorithm silently dropped funding for any bill
+        // occurrence — this is the guard that prevents "Phone Bill missing
+        // from Sep P1" bugs from ever reappearing without a scream.
+        assertNoUnderfundedBills(result, `Optimize Now — ${mk}`);
+
+        // Only unlocked rows are recomputed; locked-week rows are preserved
+        // as-is (they represent past-paycheck commitments).
         const toDelete = existingForMonth.filter(
-          (o: any) => !lockedWeekIndices.has(Number(o.weekIndex)) || !isNaturalRow(String(o.billId), Number(o.weekIndex)),
+          (o: any) => !lockedWeekIndices.has(Number(o.weekIndex)),
         );
-        const currentSig = toDelete.map((o: any) => `${o.billId}:${o.weekIndex}:${o.amountCents}`).sort().join(",");
-        const newSig = result.allocations.map((a) => `${a.billId}:${a.weekIndex}:${a.amountCents}`).sort().join(",");
+        const currentSig = toDelete
+          .map((o: any) => `${o.billId}:${o.weekIndex}:${o.occurrenceCoord ?? 0}:${o.amountCents}`)
+          .sort()
+          .join(",");
+        const newSig = result.allocations
+          .map((a) => `${a.billId}:${a.weekIndex}:${a.occurrenceCoord}:${a.amountCents}`)
+          .sort()
+          .join(",");
         if (currentSig === newSig) continue;
 
         for (const o of toDelete) {
@@ -242,7 +291,13 @@ export default function Overview() {
         for (const a of result.allocations) {
           await createSplit({
             resource: "BillSplit",
-            values: { billId: a.billId, monthKey: mk, weekIndex: a.weekIndex, amountCents: a.amountCents },
+            values: {
+              billId: a.billId,
+              monthKey: mk,
+              weekIndex: a.weekIndex,
+              amountCents: a.amountCents,
+              occurrenceCoord: a.occurrenceCoord,
+            },
             successNotification: false,
           });
         }
@@ -413,6 +468,31 @@ export default function Overview() {
       >
         {/* Wife target + month picker */}
         <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 1.5 }}>
+          <Button
+            variant="outlined"
+            size="small"
+            disableElevation
+            disabled={isOptimizing}
+            onClick={() => handleOptimize()}
+            startIcon={
+              isOptimizing
+                ? <CircularProgress size={12} color="inherit" />
+                : <AutoFixHighIcon sx={{ fontSize: 14 }} />
+            }
+            sx={{
+              fontWeight: 800,
+              borderRadius: 2,
+              fontSize: "0.75rem",
+              borderColor: "rgba(129, 140, 248, 0.35)",
+              color: "primary.light",
+              "&:hover": {
+                borderColor: "primary.light",
+                bgcolor: "rgba(129, 140, 248, 0.08)",
+              },
+            }}
+          >
+            {isOptimizing ? "Optimizing…" : "Optimize"}
+          </Button>
           <WifeTargetPill />
           <Box
             sx={{

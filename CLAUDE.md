@@ -56,17 +56,47 @@ renderer/
 
 ### Auto-assign amounts
 - `repeatWeekly` Personal items (Gas, Spending, etc.) → **always add a flat per-period amount** (never cumulative top-up). This is intentional — each pay week gets a fresh allowance regardless of prior assigned state.
-- `splitAcrossWeeks` Personal items → per-period slice computed by `computeSplitPersonalAllocations` (proportional to leftover room).
-- Bills → attributed to the pay week whose payday funds them (via `getBillPeriodKey` forward-extension logic).
+- `splitAcrossWeeks` Personal items → cumulative top-up. Target = sum of per-period slices (from `computeSplitPersonalAllocations`) through the clicked pay week; caller subtracts current `available` so already-funded prior weeks aren't double-counted.
+- Bills with a `BillSplit` row per pay week → cumulative top-up (same shape as split personals). Prevents prior-week funding from masking later weeks' slices when the user hits Auto for P3 expecting P3's share to be added on top.
+- Single-week bills (no split, or one `BillSplit` row) → full amount only in the natural pay week (via `getBillPeriodKey` forward-extension logic).
+
+### Multi-occurrence bills (Aug 2026)
+A monthly bill can fire **twice** within a single pay-period view — once as the in-month occurrence, once as the next-month forward-extension. Example: Starlink (dueDate=4) in Sept 2026 has coord=4 (Sep 4, P1) AND coord=34 (Oct 4, P5).
+
+- `getBillOccurrencesInView(dueDate, periods)` in `pay-period-utils.ts` returns EVERY occurrence in the view (up to 2). Prefer this over `getBillPeriodKey` (which returns only the primary).
+- `BillSplit.occurrenceCoord` tags which occurrence a split funds. Legacy rows (`coord=0`) map to the primary (next-month-preferred) occurrence for backward compat until re-optimized.
+- `balancePayWeeks` places per-`(billId, occurrenceCoord)` units, so a bill firing twice gets two independent placement decisions (each may be split further).
+- **Invariant guard:** `assertNoUnderfundedBills(result, context)` throws when any occurrence's `allocations + locked cents < bill.amount`. The Overview optimizer calls this after every month. Past-window occurrences (natural home is in a locked past week with no locked allocation) are silently skipped — the algorithm can't retroactively fund a paycheck that already came and went.
+
+### Orphan-fallback skip
+`getBillOccurrencesInView` would orphan-attribute bills that fire before this view's first payday AND past its forward extension — EXCEPT when the NEXT view's first payday is ≤ the bill's dueDate. In that case the next view naturally covers the firing, so orphaning here would double-count the same real-world payment across two views. See `PayPeriod.nextViewFirstPayday`.
+
+### DueDate > daysInMonth clamping
+For a bill due the 31st in a 30-day month, `getBillOccurrencesInView` clamps the in-month coord to `daysInMonth` (so coord=30 for Sept, displayed as "the 30th") instead of leaking into the next-month coord range (which would falsely display as "Oct 1st"). Prevents Bill Shield / Claude / Spotify edge-case display bugs.
+
+### Retroactive planning in balancePayWeeks
+The algorithm ALLOWS placement in locked (past) weeks — locked only means "preserve existing splits via `lockedAllocations`", NOT "refuse to plan there". This lets the leveler suggest prefunding from past paychecks when unlocked weeks would otherwise be overloaded (e.g., Sept 4-6 bills eating all of Sept P1's budget can be relieved by "having saved" from Aug's P4). Callers who don't want retroactive suggestions can filter emitted allocations by week index.
 
 ### Bill balance schema
-`BillSplit(billId, monthKey, weekIndex, amountCents)` with `@@unique([billId, monthKey, weekIndex])` — replaces the old `BillPayWeekOverride` table (removed). The `balancePayWeeks` algorithm writes splits to fine-tune per-week amounts.
+`BillSplit(billId, monthKey, weekIndex, amountCents, occurrenceCoord)` with `@@unique([billId, monthKey, weekIndex, occurrenceCoord])` — replaces the old `BillPayWeekOverride` table (removed). `occurrenceCoord` distinguishes multiple firings of the same bill in one view. The `balancePayWeeks` algorithm writes splits to fine-tune per-week amounts.
 
-### Stale-data alert (Overview)
-- When bills / income / personals / wife target change after initial load, an amber banner appears.
+### Overview optimizer — locked-week semantics
+`renderer/app/Overview/page.tsx` treats every split row in a locked past week as "already committed" (`lockedAllocations`), regardless of whether it matches the algorithm's natural attribution. Only splits in NON-locked weeks get deleted and recomputed on Optimize. Legacy `coord=0` rows are resolved to the primary occurrence via `getBillOccurrencesInView`. Deleting locked history was the bug that caused P3/P4 to inherit the full BillShield/Climb amounts and crush wife allowance.
+
+### Stale-data alert + always-visible Optimize (Overview)
+- Auto-fires when bills / income / personals / wife target change after initial load, OR when any `BillSplit` row still has `occurrenceCoord=0` (schema migration signal).
 - Persisted in `localStorage("overviewOptimizeAlert")` — survives navigation and app restarts.
-- Cleared only when user clicks "Optimize Now" (no X dismiss). Triggers `balancePayWeeks` and writes `BillSplit` records.
+- Cleared only when user clicks Optimize Now. Triggers `balancePayWeeks` + `assertNoUnderfundedBills`, writes `BillSplit` records with proper `occurrenceCoord`.
+- A **permanent "Optimize" button** also sits next to `WifeTargetPill` in the Overview toolbar — always available regardless of alert state.
 - Success shown as a Snackbar toast (Fade, 3 s auto-dismiss).
+
+### BillsOverview subtitle format
+- **In-month** occurrence: `Due 5th` (no month prefix — current view's month is implicit).
+- **Next-month** occurrence (forward-extended): `Due Oct 4th` (explicit month so a bill firing twice reads as `5th` vs `Oct 5th`).
+- **Split** allocations render two lines via a JSX subtitle (DashboardCard's `subtitle` prop accepts `ReactNode`):
+  - Line 1: `Split · Oct 4th`
+  - Line 2 (0.85 opacity): `Saved $99.43 / Total $156.38` OR just `Total $156.38` when fully saved through this pay week.
+- Cumulative-saved counts only the current occurrence's splits — a bill's other occurrence (e.g., Sep 4 vs Oct 4 Starlink) doesn't inflate the progress.
 
 ### Toast pattern (MUI Snackbar)
 Split the message string from the open flag to prevent text/width collapse during exit animation:
@@ -100,8 +130,14 @@ Add `successNotification: false, errorNotification: false` to any `useList`/`use
 ## Tests
 
 ```
-npm run test          # run all
+npm run test          # run all (179 tests as of Aug 2026)
 npm run test:watch    # watch mode
 ```
+
+Key invariants covered by `pay-period-utils.test.ts`:
+- **Full-year coverage** — for every bill in the user's actual bill set, every real-world firing (Aug 2026 → Jul 2027) is attributed to exactly one view. Guards against orphan double-counting AND dropped bills.
+- **Multi-occurrence bills** — Sept 2026 dueDate=5 (Phone Bill) returns 2 occurrences; balance places both; underfunded stays empty.
+- **Locked-allocation preservation** — a bill with $78.19 locked in P2 has only its remaining $78.19 placed in unlocked weeks (not the full amount again).
+- **Assertion helper** — `assertNoUnderfundedBills` throws on any short-funded occurrence; the Overview optimizer calls it after every month's balance.
 
 MUI Autocomplete has a jsdom quirk: `pointerEvents` may need to be set before `fireEvent.click`. See `reference_test_harness.md` in memory for mock patterns.

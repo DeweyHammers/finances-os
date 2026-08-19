@@ -405,7 +405,10 @@ describe("resolveAutoAssignAmountForPeriod", () => {
     ).toBe(0);
   });
 
-  it("BILL: split across two weeks returns per-week cents in each period", () => {
+  it("BILL: split across two weeks returns cumulative cents through the target period", () => {
+    // Auto-assign is a cumulative top-up so prior weeks' funding stays in
+    // place — hitting Auto for P2 targets the sum of P1+P2 slices, and P3
+    // targets the full split total.
     const bill = { id: "climb", amount: 200, dueDate: 15 };
     const item = {
       id: "i-climb",
@@ -427,13 +430,13 @@ describe("resolveAutoAssignAmountForPeriod", () => {
         item, periodKey: "P2", periods,
         bills: [bill], personals: [], splits, monthKey: "2026-08",
       }),
-    ).toBe(12000);
+    ).toBe(20000);
     expect(
       resolveAutoAssignAmountForPeriod({
         item, periodKey: "P3", periods,
         bills: [bill], personals: [], splits, monthKey: "2026-08",
       }),
-    ).toBe(0);
+    ).toBe(20000);
   });
 
   it("BILL: falls back to natural due-date attribution when no split matches", () => {

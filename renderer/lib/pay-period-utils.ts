@@ -21,6 +21,12 @@ export interface PayPeriod {
   dateRange: string;
   isCurrent: boolean;
   color: string;
+  /** Day-of-next-month for the NEXT view's first payday, or null if none.
+   * Used by the orphan-fallback check: a bill whose dueDate ≥ this value has
+   * its next-month occurrence handled naturally by the next view, so it must
+   * NOT be orphan-attributed to this view (that would double-count the
+   * payment across two views). */
+  nextViewFirstPayday: number | null;
 }
 
 /**
@@ -121,6 +127,7 @@ export function getPayPeriodsForMonth(
       dateRange,
       isCurrent,
       color: PERIOD_COLORS[i] ?? PERIOD_COLORS[PERIOD_COLORS.length - 1],
+      nextViewFirstPayday: nextFirstPayday,
     };
   });
 }
@@ -131,48 +138,119 @@ export function clampDayToMonth(day: number, year: number, month: number): numbe
 }
 
 /**
- * Returns the period key that a monthly-recurring bill should surface under,
- * or null if no period in this month's view funds the bill (in which case it
- * belongs to a different month's view).
+ * Returns EVERY monthly-bill occurrence that fires within a view. A view can
+ * contain up to two occurrences of the same bill because it spans from the
+ * first payday of month M through the day before month M+1's first payday:
  *
- * A bill with dueDate D can be funded by one of the month's paychecks in two
- * ways:
- *  1. Its NEXT-MONTH occurrence (day D of next month, coord D + daysInMonth)
- *     falls in the last period's forward extension — this is preferred, since
- *     it's how the user thinks: "Jul 29's paycheck pays Aug 1's Bread."
- *  2. Its IN-MONTH occurrence (day D of this month) falls in some period —
- *     the fallback for bills that fire mid-cycle from an in-month paycheck.
- * Case 1 takes precedence so bills near month boundaries land under the
- * paycheck that actually funds them.
+ *  - IN-MONTH occurrence at coord = dueDate (when dueDate falls in the view)
+ *  - NEXT-MONTH occurrence at coord = dueDate + daysInMonth (forward extension)
+ *
+ * If dueDate < firstStart AND nextMonthCoord > lastEnd, the bill would be
+ * orphaned — no paycheck in the view lands before the due date. The orphan is
+ * attributed to the LAST period (that's the paycheck closest to the bill) so
+ * it never disappears from the view.
+ *
+ * Multi-occurrence months are common: any 5-payday month whose forward
+ * extension reaches into next-month days that also exist as in-month due
+ * dates. Missing this case causes bills to silently disappear from the
+ * schedule, which is the whole reason this helper exists.
+ */
+export interface BillOccurrenceInfo {
+  /** Day-of-current-month coordinate (in-month = D, next-month = D+daysInMonth,
+   * orphan = D+daysInMonth even though it exceeds lastEnd). Unique per occurrence. */
+  coord: number;
+  /** 0-based index of the pay period this occurrence lands in. */
+  weekIndex: number;
+  /** Pay-period key ("P1", "P2", ...) for the landing period. */
+  periodKey: string;
+  /** True when the coord is past daysInMonth (occurs in the following month). */
+  inNextMonth: boolean;
+  /** True when this occurrence was attributed via the orphan fallback rather
+   * than a natural landing. Callers may want to warn on this. */
+  isOrphan: boolean;
+}
+
+export function getBillOccurrencesInView(
+  dueDate: number,
+  periods: PayPeriod[],
+): BillOccurrenceInfo[] {
+  if (periods.length === 0) return [];
+  const daysInMonth = periods[0].daysInMonth;
+  const firstStart = periods[0].startDay;
+  const lastEnd = periods[periods.length - 1].endDay;
+  const nextMonthCoord = dueDate + daysInMonth;
+  const nextViewFirstPayday = periods[0].nextViewFirstPayday;
+
+  const raw: Array<{ coord: number; isOrphan: boolean }> = [];
+  // In-month: clamp dueDate to daysInMonth so a "31st" bill in a 30-day
+  // month lands at coord=30 (last day of month) rather than being pushed
+  // into the next-month coord range where it would display as "the 1st"
+  // and confusingly overlap with next view's in-month attribution.
+  const inMonthCoord = Math.min(dueDate, daysInMonth);
+  if (inMonthCoord >= firstStart && inMonthCoord <= lastEnd) {
+    raw.push({ coord: inMonthCoord, isOrphan: false });
+  }
+  // Next-month coord uses the raw dueDate + daysInMonth so we don't
+  // accidentally overlap the in-month clamp above (e.g., dueDate=31 in a
+  // 30-day month: in-month coord=30, next-month coord=61 — never collide).
+  if (
+    nextMonthCoord !== inMonthCoord &&
+    nextMonthCoord >= firstStart &&
+    nextMonthCoord <= lastEnd
+  ) {
+    raw.push({ coord: nextMonthCoord, isOrphan: false });
+  }
+  if (raw.length === 0 && dueDate < firstStart && nextMonthCoord > lastEnd) {
+    // Orphan candidate: bill fires before this month's first payday AND its
+    // next-month occurrence is past the forward-extension window. Only
+    // attribute it here if the NEXT view can't naturally cover the next-month
+    // firing (i.e., that view's first payday lands AFTER the due date, so
+    // the bill would be orphaned there too). Otherwise the next view's
+    // in-month case will handle it and orphaning here would double-count.
+    const nextViewCovers =
+      nextViewFirstPayday != null && dueDate >= nextViewFirstPayday;
+    if (!nextViewCovers) {
+      raw.push({ coord: nextMonthCoord, isOrphan: true });
+    }
+  }
+
+  const findWeekIdx = (coord: number, isOrphan: boolean): number => {
+    if (isOrphan) return periods.length - 1;
+    for (let i = 0; i < periods.length; i++) {
+      if (coord >= periods[i].startDay && coord <= periods[i].endDay) return i;
+    }
+    return periods.length - 1;
+  };
+
+  return raw.map(({ coord, isOrphan }) => {
+    const weekIndex = findWeekIdx(coord, isOrphan);
+    return {
+      coord,
+      weekIndex,
+      periodKey: periods[weekIndex].key,
+      inNextMonth: coord > daysInMonth,
+      isOrphan,
+    };
+  });
+}
+
+/**
+ * Returns the PRIMARY period key for a monthly-recurring bill, using the old
+ * "next-month occurrence wins" precedence rule. Kept for callers (like Personal
+ * bills, which don't currently support per-occurrence placement) that only need
+ * one attribution point. For bills, prefer `getBillOccurrencesInView` — it
+ * enumerates every occurrence and prevents silent double-coverage misses.
  */
 export function getBillPeriodKey(
   dueDate: number,
   periods: PayPeriod[],
 ): string | null {
-  if (periods.length === 0) return null;
-  const daysInMonth = periods[0].daysInMonth;
-  const nextMonthCoord = dueDate + daysInMonth;
-
-  for (const p of periods) {
-    if (nextMonthCoord >= p.startDay && nextMonthCoord <= p.endDay) {
-      return p.key;
-    }
-  }
-  for (const p of periods) {
-    if (dueDate >= p.startDay && dueDate <= p.endDay) return p.key;
-  }
-
-  // Orphan fallback: the bill fires early in the month (before the first
-  // payday) AND its next-month occurrence is just past the forward-extension
-  // window (because next month's first payday arrives before the due date).
-  // The last paycheck of this month is the closest one to fund it, so
-  // attribute to the last period so it's never invisible.
-  const lastPeriod = periods[periods.length - 1];
-  if (dueDate < periods[0].startDay && nextMonthCoord > lastPeriod.endDay) {
-    return lastPeriod.key;
-  }
-
-  return null;
+  const occs = getBillOccurrencesInView(dueDate, periods);
+  if (occs.length === 0) return null;
+  // Prefer next-month occurrence (matches original algorithm's precedence
+  // so callers that persisted state under this rule stay consistent).
+  const nextMonth = occs.find((o) => o.inNextMonth);
+  return (nextMonth ?? occs[0]).periodKey;
 }
 
 /**
@@ -188,23 +266,33 @@ export interface BillSplitRecord {
   monthKey: string;
   weekIndex: number;
   amountCents: number;
+  /** Coord of the specific occurrence this row funds. Legacy rows may omit
+   * (or store 0) — those are matched to the primary (next-month-preferred)
+   * occurrence for backward compatibility. */
+  occurrenceCoord?: number;
 }
 
 export interface BillAllocation {
   weekIndex: number;
   periodKey: string;
   amountCents: number;
-  /** True when this allocation is one of ≥ 2 rows for the same bill in the same month. */
+  /** True when this occurrence is spread across ≥ 2 weeks (i.e., THIS occurrence
+   * has multiple rows). A bill with two separate occurrences that are each
+   * single-week is NOT considered "split". */
   isSplit: boolean;
+  /** Occurrence this allocation belongs to. */
+  occurrenceCoord: number;
 }
 
 /**
- * Returns every pay-week allocation for a given bill within the current month
- * view. When BillSplit rows exist for (billId, monthKey) they win — an
- * unsplit bill appears as a single 1-row allocation. When no splits exist
- * (auto-balance hasn't run yet, or the row was never created), falls back to
- * the natural due-date attribution with the full bill amount, so the bill
- * still surfaces somewhere.
+ * Returns every pay-week allocation for a given bill within the view — one
+ * or more rows per occurrence. When BillSplit rows exist for an occurrence
+ * they win; otherwise falls back to natural attribution (full bill amount in
+ * the occurrence's home period) so the bill never silently disappears.
+ *
+ * Legacy split rows (occurrenceCoord=0 or undefined) are matched to the
+ * primary occurrence (next-month-preferred) so pre-fix data continues to
+ * render correctly until the next Optimize Now run rewrites them.
  */
 export function getBillAllocationsForBill(
   billId: string,
@@ -214,59 +302,90 @@ export function getBillAllocationsForBill(
   monthKey: string,
   splits: BillSplitRecord[],
 ): BillAllocation[] {
-  const forBill = splits
-    .filter((s) => s.billId === billId && s.monthKey === monthKey)
-    .filter((s) => s.weekIndex >= 0 && s.weekIndex < periods.length)
-    .sort((a, b) => a.weekIndex - b.weekIndex);
+  const occurrences = getBillOccurrencesInView(dueDate, periods);
+  if (occurrences.length === 0) return [];
 
-  if (forBill.length > 0) {
-    const isSplit = forBill.length > 1;
-    return forBill.map((s) => ({
-      weekIndex: s.weekIndex,
-      periodKey: periods[s.weekIndex].key,
-      amountCents: s.amountCents,
-      isSplit,
-    }));
+  const forBill = splits.filter(
+    (s) =>
+      s.billId === billId &&
+      s.monthKey === monthKey &&
+      s.weekIndex >= 0 &&
+      s.weekIndex < periods.length,
+  );
+
+  const primaryOcc = occurrences.find((o) => o.inNextMonth) ?? occurrences[0];
+  const amountCents = Math.round(amountDollars * 100);
+  const result: BillAllocation[] = [];
+
+  for (const occ of occurrences) {
+    let occSplits = forBill.filter(
+      (s) => (s.occurrenceCoord ?? 0) === occ.coord,
+    );
+    // Backward compat: legacy rows written without occurrenceCoord (stored 0)
+    // belong to the primary occurrence.
+    if (occSplits.length === 0 && occ.coord === primaryOcc.coord) {
+      occSplits = forBill.filter((s) => (s.occurrenceCoord ?? 0) === 0);
+    }
+
+    if (occSplits.length > 0) {
+      const sorted = [...occSplits].sort((a, b) => a.weekIndex - b.weekIndex);
+      const isSplit = sorted.length > 1;
+      for (const s of sorted) {
+        result.push({
+          weekIndex: s.weekIndex,
+          periodKey: periods[s.weekIndex].key,
+          amountCents: s.amountCents,
+          isSplit,
+          occurrenceCoord: occ.coord,
+        });
+      }
+    } else {
+      result.push({
+        weekIndex: occ.weekIndex,
+        periodKey: occ.periodKey,
+        amountCents,
+        isSplit: false,
+        occurrenceCoord: occ.coord,
+      });
+    }
   }
 
-  const naturalKey = getBillPeriodKey(dueDate, periods);
-  if (naturalKey == null) return [];
-  const naturalIdx = periods.findIndex((p) => p.key === naturalKey);
-  return [
-    {
-      weekIndex: naturalIdx,
-      periodKey: naturalKey,
-      amountCents: Math.round(amountDollars * 100),
-      isSplit: false,
-    },
-  ];
+  return result;
 }
 
 /**
- * Returns the week index (0-based) that a bill naturally falls into for the
- * given period list. Uses the same occurrence-coordinate logic as
- * balancePayWeeks Phase 1, so the result matches what the algorithm considers
- * the "home" week for a bill. Returns null when the bill has no occurrence
- * visible in this month's window.
+ * Returns the natural home week index for the primary (next-month-preferred)
+ * occurrence of a monthly bill, or null when the bill has no occurrence in
+ * the view. Prefer `getBillOccurrencesInView` when you need to enumerate
+ * every occurrence — this helper is kept for single-occurrence callsites.
  */
 export function getBillNaturalWeekIndex(
   dueDate: number,
   periods: PayPeriod[],
 ): number | null {
-  if (periods.length === 0) return null;
-  const daysInMonth = periods[0].daysInMonth;
-  const firstStart = periods[0].startDay;
-  const lastEnd = periods[periods.length - 1].endDay;
-  const nextCoord = dueDate + daysInMonth;
-  let coord: number | null = null;
-  if (nextCoord >= firstStart && nextCoord <= lastEnd) coord = nextCoord;
-  else if (dueDate >= firstStart && dueDate <= lastEnd) coord = dueDate;
-  else if (dueDate < firstStart && nextCoord > lastEnd) coord = nextCoord;
-  if (coord == null) return null;
-  for (let i = 0; i < periods.length; i++) {
-    if (coord >= periods[i].startDay && coord <= periods[i].endDay) return i;
-  }
-  return periods.length - 1;
+  const occs = getBillOccurrencesInView(dueDate, periods);
+  if (occs.length === 0) return null;
+  return (occs.find((o) => o.inNextMonth) ?? occs[0]).weekIndex;
+}
+
+/**
+ * Returns true when a persisted split at (billId, weekIndex, occurrenceCoord)
+ * corresponds to that bill's natural single-week attribution (i.e. the row
+ * matches what the balance algorithm would produce if it treated this
+ * occurrence as un-split). Used by the Overview optimizer to distinguish
+ * user-locked "natural" rows in past pay weeks from algorithm-generated
+ * splits that should be regenerated.
+ */
+export function isNaturalOccurrenceRow(
+  dueDate: number,
+  periods: PayPeriod[],
+  weekIndex: number,
+  occurrenceCoord: number,
+): boolean {
+  const occs = getBillOccurrencesInView(dueDate, periods);
+  const match = occs.find((o) => o.coord === occurrenceCoord);
+  if (!match) return false;
+  return match.weekIndex === weekIndex;
 }
 
 /**
@@ -326,12 +445,14 @@ export interface BalanceAllocation {
   billId: string;
   weekIndex: number;
   amountCents: number;
+  /** Which occurrence of the bill this allocation funds (coord in view space). */
+  occurrenceCoord: number;
 }
 
 export interface BalanceResult {
-  /** One row per (bill, week) with the cents that pay-week gets. Un-split
-   * bills produce exactly one row with amountCents = bill total. Split bills
-   * produce ≥ 2 rows summing to the bill total. */
+  /** One row per (bill, occurrence, week) with the cents that pay-week gets.
+   * Un-split occurrences produce exactly one row with amountCents = bill total.
+   * Split occurrences produce ≥ 2 rows summing to the bill total. */
   allocations: BalanceAllocation[];
   /** Total bill cents finally landed in each period (sum of allocations). */
   perWeekBillCents: number[];
@@ -340,6 +461,27 @@ export interface BalanceResult {
   /** Bills whose occurrence falls outside this month's coverage window and
    * therefore weren't placed at all. Callers can surface these. */
   unplaced: string[];
+  /** Occurrences whose allocations + locked cents don't sum to the bill's full
+   * amount (i.e., the algorithm couldn't fully fund them). Format: "billId@coord".
+   * Must be empty for a healthy plan — pass to `assertNoUnderfundedBills` at any
+   * callsite that wants to fail loud when funding is silently missed. */
+  underfunded: string[];
+}
+
+/**
+ * Throws with a descriptive message when a BalanceResult has any underfunded
+ * occurrences. Call this at the boundary of any code path that must not
+ * silently drop bill funding (e.g., the Optimize Now flow persisting splits).
+ */
+export function assertNoUnderfundedBills(
+  result: BalanceResult,
+  context?: string,
+): void {
+  if (result.underfunded.length === 0) return;
+  const where = context ? ` (${context})` : "";
+  throw new Error(
+    `balancePayWeeks left ${result.underfunded.length} bill occurrence(s) underfunded${where}: ${result.underfunded.join(", ")}`,
+  );
 }
 
 /** Below this threshold, don't consider a bill for auto-splitting — showing
@@ -451,22 +593,9 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       perWeekBillCents: [],
       feasible: bills.length === 0,
       unplaced: bills.map((b) => b.id),
+      underfunded: [],
     };
   }
-
-  const daysInMonth = periods[0].daysInMonth;
-  const firstStart = periods[0].startDay;
-  const lastEnd = periods[N - 1].endDay;
-
-  const occCoord = (dueDate: number): number | null => {
-    const nextCoord = dueDate + daysInMonth;
-    if (nextCoord >= firstStart && nextCoord <= lastEnd) return nextCoord;
-    if (dueDate >= firstStart && dueDate <= lastEnd) return dueDate;
-    // Orphan fallback: mirrors getBillPeriodKey — bill fires before the first
-    // payday AND next-month coord is past the forward-extension window.
-    if (dueDate < firstStart && nextCoord > lastEnd) return nextCoord;
-    return null;
-  };
 
   // Weeks whose last day is on or before todayCoord are "past" — their
   // allocations are frozen in the database and the algorithm must not touch
@@ -494,27 +623,36 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       perWeek[la.weekIndex] += la.amountCents;
     }
   }
-  // How many cents of each bill are already committed in locked weeks.
-  const lockedCentsPerBill = new Map<string, number>();
+  // How many cents each (bill, occurrence) has already committed in locked weeks.
+  const occKey = (billId: string, coord: number) => `${billId}#${coord}`;
+  const lockedCentsPerOcc = new Map<string, number>();
   for (const la of rawLocked) {
-    lockedCentsPerBill.set(la.billId, (lockedCentsPerBill.get(la.billId) ?? 0) + la.amountCents);
+    const k = occKey(la.billId, la.occurrenceCoord);
+    lockedCentsPerOcc.set(k, (lockedCentsPerOcc.get(k) ?? 0) + la.amountCents);
   }
 
   const unplaced: string[] = [];
+  const underfunded: string[] = [];
 
-  // Only weeks that haven't fully passed AND whose payday is on/before the
-  // bill's occurrence coord are eligible for placement.
+  // Any week whose payday is on/before the bill's occurrence coord is
+  // eligible for placement. Locked weeks ARE eligible — the "locked" concept
+  // only means "preserve existing split rows" (via lockedAllocations), not
+  // "refuse to plan there". A past week with no split for a bill is still a
+  // valid place to *suggest* prefunding; the algorithm can propose that the
+  // user should have saved from that paycheck, and locked cents will prevent
+  // double-committing where a real allocation already exists.
   const eligibleWeeks = (coord: number): number[] => {
     const out: number[] = [];
     for (let i = 0; i < N; i++) {
-      if (!lockedWeeks.has(i) && periods[i].startDay <= coord) out.push(i);
+      if (periods[i].startDay <= coord) out.push(i);
     }
     return out;
   };
 
-  // The period whose range actually contains the coord, skipping locked weeks.
-  // Bills naturally belong here — Phase 1 places them here directly so they
-  // never jump to an earlier week just because it has more budget room.
+  // The natural home is where the bill actually fires. Prefer a non-locked
+  // week (Phase 1 shouldn't dump a bill into a past week when the true firing
+  // week is still open), but fall back to any eligible period if the natural
+  // period is somehow unreachable.
   const naturalWeekIdx = (coord: number): number => {
     for (let i = 0; i < N; i++) {
       if (!lockedWeeks.has(i) && coord >= periods[i].startDay && coord <= periods[i].endDay) return i;
@@ -526,53 +664,87 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       if (!lockedWeeks.has(i) && periods[i].startDay <= coord) last = i;
     }
     if (last >= 0) return last;
-    // Last resort: last non-locked period.
-    for (let i = N - 1; i >= 0; i--) {
-      if (!lockedWeeks.has(i)) return i;
+    // Last resort: any period containing the coord (may be locked).
+    for (let i = 0; i < N; i++) {
+      if (coord >= periods[i].startDay && coord <= periods[i].endDay) return i;
     }
     return N - 1;
   };
 
+  // A "unit" is one (bill, occurrence) pair. A bill can produce up to two
+  // units in a view — the in-month and the forward-extended next-month one.
+  // Each unit is placed independently so multi-occurrence months never lose
+  // a payment.
   interface WithMeta {
     bill: BillForBalance;
     coord: number;
+    key: string; // billId#coord
     eligible: number[];
     naturalIdx: number;
-    amountCents: number;
+    amountCents: number; // remaining after locked cents
   }
+
+  // An occurrence is "past-window" when its natural home period is already
+  // locked (endDay < today) AND no locked allocation covers it. The paycheck
+  // that would have funded it has already been received and either paid the
+  // bill or was spent elsewhere — the algorithm cannot retroactively fix
+  // this. These are historical data gaps, not planning failures, so they're
+  // silently skipped rather than reported as underfunded.
+  const pastWindowOccs = new Set<string>();
 
   const withMeta: WithMeta[] = [];
   for (const b of bills) {
-    const coord = occCoord(b.dueDate);
-    if (coord == null) {
+    const occs = getBillOccurrencesInView(Number(b.dueDate), periods);
+    if (occs.length === 0) {
       unplaced.push(b.id);
       continue;
     }
-    const lockedCents = lockedCentsPerBill.get(b.id) ?? 0;
-    const remainingCents = Math.round(b.amount * 100) - lockedCents;
-    const eligible = eligibleWeeks(coord);
-    // Skip bills fully covered by locked weeks or with no eligible future weeks.
-    if (remainingCents <= 0 || eligible.length === 0) continue;
-    withMeta.push({
-      bill: b,
-      coord,
-      eligible,
-      naturalIdx: naturalWeekIdx(coord),
-      amountCents: remainingCents,
-    });
+    const fullCents = Math.round(b.amount * 100);
+    for (const occ of occs) {
+      const key = occKey(b.id, occ.coord);
+      const lockedCents = lockedCentsPerOcc.get(key) ?? 0;
+      const remainingCents = fullCents - lockedCents;
+      if (remainingCents <= 0) continue; // fully funded by locked rows
+      const eligible = eligibleWeeks(occ.coord);
+      if (eligible.length === 0) {
+        // Distinguish past-window (natural home locked, algorithm can't
+        // retroactively touch it) from a real placement failure (occurrence
+        // in a future period that we somehow can't cover).
+        const naturalIdxIgnoringLocks = periods.findIndex(
+          (p) => occ.coord >= p.startDay && occ.coord <= p.endDay,
+        );
+        const homeIdx = naturalIdxIgnoringLocks >= 0 ? naturalIdxIgnoringLocks : periods.length - 1;
+        if (lockedWeeks.has(homeIdx)) {
+          pastWindowOccs.add(key);
+        } else {
+          underfunded.push(`${b.id}@${occ.coord}`);
+        }
+        continue;
+      }
+      withMeta.push({
+        bill: b,
+        coord: occ.coord,
+        key,
+        eligible,
+        naturalIdx: naturalWeekIdx(occ.coord),
+        amountCents: remainingCents,
+      });
+    }
   }
 
-  // Phase 1: place each bill in its natural period (the pay week whose date
-  // range contains the bill's occurrence). This keeps Bread (Sep 1) in P4
-  // instead of jumping it to P1 just because P1 has more budget room.
+  // Phase 1: place each occurrence in its natural period. This keeps Bread
+  // (Sep 1) in P4 instead of jumping it to P1 just because P1 has more budget
+  // room, and keeps each occurrence of a multi-occurrence bill in its own
+  // home period.
   const placement = new Map<string, Array<{ weekIndex: number; cents: number }>>();
 
   for (const w of withMeta) {
-    placement.set(w.bill.id, [{ weekIndex: w.naturalIdx, cents: w.amountCents }]);
+    placement.set(w.key, [{ weekIndex: w.naturalIdx, cents: w.amountCents }]);
     perWeek[w.naturalIdx] += w.amountCents;
   }
 
-  // Phase 2: iterative split refinement.
+  // Phase 2: iterative split refinement. Splits act on individual OCCURRENCES —
+  // splitting one occurrence of a bill doesn't touch the other.
   const shortfallOf = (i: number) => Math.max(0, -( budget[i] - perWeek[i]));
   const maxShortfall = () => {
     let m = 0;
@@ -584,7 +756,6 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
   let lastMax = maxShortfall();
 
   while (lastMax > 0) {
-    // Find week with the largest shortfall.
     let worstWeek = -1;
     let worstShort = 0;
     for (let i = 0; i < N; i++) {
@@ -596,29 +767,26 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     }
     if (worstWeek < 0) break;
 
-    // Find candidates in worstWeek that could be split.
-    const meta = new Map(withMeta.map((w) => [w.bill.id, w]));
+    const meta = new Map(withMeta.map((w) => [w.key, w]));
     const candidates = Array.from(placement.entries())
-      .filter(([billId, allocs]) =>
+      .filter(([key, allocs]) =>
         allocs.some((a) => a.weekIndex === worstWeek) &&
-        !splitAttempted.has(billId),
+        !splitAttempted.has(key),
       )
-      .map(([billId, allocs]) => ({ billId, allocs, w: meta.get(billId)! }))
+      .map(([key, allocs]) => ({ key, allocs, w: meta.get(key)! }))
       .filter((x) =>
         x.w &&
         !x.w.bill.neverSplit &&
         x.w.eligible.length >= 2 &&
         x.w.amountCents >= MIN_SPLIT_CENTS,
       )
-      // Prefer larger bills — bigger lever on the shortfall.
       .sort((a, b) => b.w.amountCents - a.w.amountCents);
 
     if (candidates.length === 0) break;
 
     const pick = candidates[0];
-    splitAttempted.add(pick.billId);
+    splitAttempted.add(pick.key);
 
-    // Compute existing bills per eligible week EXCLUDING the pick.
     const existingForEligible = pick.w.eligible.map((i) => {
       let e = perWeek[i];
       for (const a of pick.allocs) {
@@ -627,21 +795,10 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       return e;
     });
 
-    // Also need to include the per-week budget in the leveling target. The
-    // "level" isn't quite mean-of-existing; we want the SURPLUS to level, not
-    // bills. Because surplus = budget_slot - existing_bills, leveling surplus
-    // means placing bills proportional to how much room each week has above
-    // the running low. Simpler equivalent: level (existing + allocation)
-    // relative to per-week budget. We reduce to: level `existing - budget[i]`
-    // so weeks with higher budget can absorb more.
-    //
-    // Concretely: treat "over-budget amount" (existing - budget) as the thing
-    // to level. distributeBillLevel operates on that space.
     const budgetForEligible = pick.w.eligible.map((i) => budget[i]);
     const overForEligible = existingForEligible.map((e, k) => e - budgetForEligible[k]);
     const alloc = distributeBillLevel(pick.w.amountCents, overForEligible);
 
-    // Apply new allocations: subtract old, add new.
     for (const a of pick.allocs) perWeek[a.weekIndex] -= a.cents;
     const newAllocs: Array<{ weekIndex: number; cents: number }> = [];
     for (let k = 0; k < pick.w.eligible.length; k++) {
@@ -653,28 +810,54 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       }
     }
     if (newAllocs.length === 0) {
-      // Distribution collapsed to nothing (shouldn't happen when amount > 0);
-      // revert.
       for (const a of pick.allocs) perWeek[a.weekIndex] += a.cents;
       break;
     }
-    placement.set(pick.billId, newAllocs);
+    placement.set(pick.key, newAllocs);
 
     const newMax = maxShortfall();
     if (newMax >= lastMax) {
-      // No improvement — revert this split (keep the bill as it was) and stop.
       for (const a of newAllocs) perWeek[a.weekIndex] -= a.cents;
       for (const a of pick.allocs) perWeek[a.weekIndex] += a.cents;
-      placement.set(pick.billId, pick.allocs);
+      placement.set(pick.key, pick.allocs);
       break;
     }
     lastMax = newMax;
   }
 
   const allocations: BalanceAllocation[] = [];
-  for (const [billId, allocs] of placement.entries()) {
-    for (const a of allocs) {
-      allocations.push({ billId, weekIndex: a.weekIndex, amountCents: a.cents });
+  for (const w of withMeta) {
+    const rows = placement.get(w.key) ?? [];
+    for (const a of rows) {
+      allocations.push({
+        billId: w.bill.id,
+        weekIndex: a.weekIndex,
+        amountCents: a.cents,
+        occurrenceCoord: w.coord,
+      });
+    }
+  }
+
+  // Invariant check: every non-past occurrence must be at least fully funded
+  // (allocations + locked cents >= bill.amount). Under-funding is a
+  // silent-drop bug that callers should surface (ideally via
+  // `assertNoUnderfundedBills`). Over-funding by a cent or two is fine —
+  // historical splits sometimes carry ±1 cent rounding artifacts and we
+  // shouldn't scream about that. Past-window occurrences are exempt: they're
+  // historical data gaps the algorithm can't retroactively fill.
+  for (const b of bills) {
+    const occs = getBillOccurrencesInView(Number(b.dueDate), periods);
+    const fullCents = Math.round(b.amount * 100);
+    for (const occ of occs) {
+      const k = occKey(b.id, occ.coord);
+      if (pastWindowOccs.has(k)) continue;
+      if (underfunded.includes(k)) continue;
+      const placedRows = placement.get(k) ?? [];
+      const placedCents = placedRows.reduce((s, r) => s + r.cents, 0);
+      const lockedCents = lockedCentsPerOcc.get(k) ?? 0;
+      if (placedCents + lockedCents < fullCents) {
+        underfunded.push(k);
+      }
     }
   }
 
@@ -683,6 +866,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     perWeekBillCents: perWeek,
     feasible: maxShortfall() === 0,
     unplaced,
+    underfunded,
   };
 }
 

@@ -38,6 +38,10 @@ interface AllocatedBill {
   occDay: number;
   occInNextMonth: boolean;
   coord: number;
+  /** Cumulative cents allocated toward this occurrence through this pay week
+   * (sum of all splits for the same billId+occurrenceCoord with weekIndex ≤
+   * this period). Lets a split card show "$99.43 of $156.38" progress. */
+  cumulativeCents: number;
 }
 
 export const BillsOverview: React.FC<BillsOverviewProps> = ({
@@ -59,8 +63,6 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
   const periods = getPayPeriodsForMonth(year, month, payWeekday, today, biWeekly);
   const monthKey = monthKeyOf(year, month);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const firstStart = periods[0]?.startDay ?? 1;
-  const lastEnd = periods[periods.length - 1]?.endDay ?? daysInMonth;
   const nextMonthAbbr = new Date(year, month + 1, 1).toLocaleString("default", {
     month: "short",
   });
@@ -71,33 +73,16 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
     return s[(v - 20) % 10] || s[v] || s[0];
   };
 
-  // View-window occurrence for a bill: the calendar-day the bill actually
-  // fires. Independent of split placement — the split just spreads the
-  // payment mentally across weeks, but the real transaction still hits on
-  // dueDate.
-  const occForView = (
-    dueDate: number,
-  ): { coord: number; inNextMonth: boolean; day: number } | null => {
-    const nextCoord = dueDate + daysInMonth;
-    if (nextCoord >= firstStart && nextCoord <= lastEnd) {
-      return { coord: nextCoord, inNextMonth: true, day: dueDate };
-    }
-    if (dueDate >= firstStart && dueDate <= lastEnd) {
-      return { coord: dueDate, inNextMonth: false, day: dueDate };
-    }
-    // Orphan fallback: bill fires before the first payday and next-month
-    // occurrence is past the forward-extension window. Treat like forward ext.
-    if (dueDate < firstStart && nextCoord > lastEnd) {
-      return { coord: nextCoord, inNextMonth: true, day: dueDate };
-    }
-    return null;
-  };
+  // Each allocation carries its own occurrenceCoord — that's the coord of the
+  // specific bill occurrence being funded. Derive display fields from THAT,
+  // not from a bill-level "first occurrence" — otherwise the "Due Sep 5" text
+  // would be wrong for a P5 row funding the Oct 5 occurrence.
+  const dayFromCoord = (coord: number) =>
+    coord > daysInMonth ? coord - daysInMonth : coord;
 
   const resolvePeriodBills = (period: PayPeriod): AllocatedBill[] => {
     const out: AllocatedBill[] = [];
     for (const b of bills) {
-      const occ = occForView(Number(b.dueDate));
-      if (!occ) continue;
       const allocs = getBillAllocationsForBill(
         b.id,
         Number(b.dueDate),
@@ -108,13 +93,24 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
       );
       for (const a of allocs) {
         if (a.periodKey !== period.key) continue;
+        const inNextMonth = a.occurrenceCoord > daysInMonth;
+        // Cumulative through this pay week for THIS occurrence only —
+        // splits for a different occurrence of the same bill don't count.
+        const cumulativeCents = allocs
+          .filter(
+            (x) =>
+              x.occurrenceCoord === a.occurrenceCoord &&
+              x.weekIndex <= period.index,
+          )
+          .reduce((s, x) => s + x.amountCents, 0);
         out.push({
           bill: b,
           amountCents: a.amountCents,
           isSplit: a.isSplit,
-          occDay: occ.day,
-          occInNextMonth: occ.inNextMonth,
-          coord: occ.coord,
+          occDay: dayFromCoord(a.occurrenceCoord),
+          occInNextMonth: inNextMonth,
+          coord: a.occurrenceCoord,
+          cumulativeCents,
         });
       }
     }
@@ -229,15 +225,41 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
           </Box>
 
           <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-            {periodBills.map(({ bill, amountCents, isSplit, occDay, occInNextMonth }) => {
+            {periodBills.map(({ bill, amountCents, isSplit, occDay, occInNextMonth, cumulativeCents }) => {
               const clampedDay = clampDayToMonth(occDay, year, month);
-              const dueBase = occInNextMonth
-                ? `Due ${nextMonthAbbr} ${occDay}${getOrdinal(occDay)}`
-                : `Due on the ${clampedDay}${getOrdinal(clampedDay)}`;
+              // Only prefix the month abbreviation for NEXT-month (forward-
+              // extended) occurrences — in the current view an in-month bill
+              // reads more naturally as just "the 5th". A bill firing twice
+              // in the view still disambiguates cleanly: "5th" vs "Sep 5th".
+              const dateChunk = occInNextMonth
+                ? `${nextMonthAbbr} ${occDay}${getOrdinal(occDay)}`
+                : `${clampedDay}${getOrdinal(clampedDay)}`;
               const totalDollars = Number(bill.amount) || 0;
-              const subtitle = isSplit
-                ? `Split · $${totalDollars.toFixed(2)} total · ${dueBase.toLowerCase()}`
-                : dueBase;
+              const cumulativeDollars = cumulativeCents / 100;
+              const totalCents = Math.round(totalDollars * 100);
+              const fullySaved = cumulativeCents >= totalCents;
+              // For splits, render two lines: the split/date header, then a
+              // progress line. Two Box spans keep the amounts on their own
+              // row so narrow 5-week cards don't wrap mid-word. When the
+              // cumulative already matches the total (this is the final
+              // slice), drop the redundant "Saved $X /" prefix.
+              const subtitle = isSplit ? (
+                <Box>
+                  <Box component="span" sx={{ display: "block" }}>
+                    Split · {dateChunk}
+                  </Box>
+                  <Box
+                    component="span"
+                    sx={{ display: "block", opacity: 0.85 }}
+                  >
+                    {fullySaved
+                      ? `Total $${totalDollars.toFixed(2)}`
+                      : `Saved $${cumulativeDollars.toFixed(2)} / Total $${totalDollars.toFixed(2)}`}
+                  </Box>
+                </Box>
+              ) : (
+                `Due ${dateChunk}`
+              );
               return (
                 <Box
                   key={`${bill.id}-${period.key}`}
