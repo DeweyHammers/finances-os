@@ -1,3 +1,16 @@
+/**
+ * CashFlowOverview — pay-week surplus grid on the Overview page.
+ *
+ * For each pay period in the current view, computes income − (bills + fixed
+ * personal + distributed split personal) and displays the resulting surplus
+ * plus a monthly aggregate card. Splits use `computeSplitPersonalAllocations`
+ * so per-week surplus-target headroom is honored proportionally rather than
+ * dumping the whole monthly amount into one week.
+ *
+ * Read-only. Consumes `bills`, `personalBills`, `incomes`, `settings`, and
+ * `splits` (persisted BillSplit rows) already fetched by the Overview page.
+ */
+
 import { FC } from "react";
 import { Box, Grid, Typography, Paper, Tooltip } from "@mui/material";
 import {
@@ -9,6 +22,11 @@ import {
   BillSplitRecord,
   PayPeriod,
 } from "../../lib/pay-period-utils";
+import {
+  TooltipBody,
+  TooltipTitle,
+  tooltipStyleProps,
+} from "../../lib/tooltip-styles";
 
 interface CashFlowOverviewProps {
   settings: any;
@@ -44,10 +62,15 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
   const monthKey = monthKeyOf(year, month);
 
 
+  // Fallback: if no explicit Income records exist, synthesize a single source
+  // from AppSettings so first-run users still see numbers instead of $0.
   const allSources = incomes.length > 0
     ? incomes
     : [{ name: "Income", amount: settings.w2Amount, paymentCycle: settings.paymentCycle, payDay: settings.payDay, payWeekOffset: 0 }];
 
+  // Which income sources fire inside this pay period. Bi-weekly sources use
+  // payWeekOffset (0 or 1) to pick alternating paydays — offset lets two
+  // bi-weekly incomes sit on opposite weeks even when they share a payDay.
   const getIncomeBreakdown = (period: PayPeriod): { name: string; amount: number }[] => {
     const result: { name: string; amount: number }[] = [];
     allSources.forEach((income: any) => {
@@ -105,8 +128,8 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
     getIncomeBreakdown(period).reduce((s, x) => s + x.amount, 0),
   );
 
-  // Distribute each split personal proportionally across weeks so the wife
-  // target still clears in each week.
+  // Distribute each split personal proportionally across weeks so the surplus
+  // target still clears in each week. Default target = $300/wk (30000c).
   const targetSurplusCents = Number(settings?.wifeWeeklyTargetCents ?? 30000);
   const splitPersonals = personalBills.filter((p) => p.splitAcrossWeeks);
   const splitAlloc = computeSplitPersonalAllocations({
@@ -118,6 +141,10 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
     splits: splitPersonals.map((p) => ({ id: p.id, amount: Number(p.amount) || 0 })),
   });
 
+  // ── Aggregate per-period rows for the AllowanceCard grid ──
+  // Order matters: split allocations from computeSplitPersonalAllocations
+  // must be added on top of the fixed personal baseline used as input to
+  // that same function, so the two never double-count the same dollar.
   const periodData = periods.map((period, i) => {
     const incomeSources = getIncomeBreakdown(period);
     const income = incomePerPeriodDollars[i];
@@ -139,6 +166,10 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
     0,
   );
 
+  // Big-number display: the dollar sign, integer part and decimal use
+  // different font sizes/weights so the amount reads at a glance. Split
+  // into components rather than a single Typography so the styling can
+  // differ per segment (small $ prefix, huge digits, medium .XX suffix).
   const AmountDisplay = ({
     amount,
     color,
@@ -230,6 +261,8 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
     incomeSources: { name: string; amount: number }[];
     expensesBreakdown: { bills: number; personal: number };
   }) => {
+    // Negative surplus → red regardless of the period's usual color, so
+    // shortfall weeks visually pop against the standard color-coded grid.
     const cardColor = amount < 0 ? "#f43f5e" : period.color;
 
     return (
@@ -318,31 +351,21 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
               <Tooltip
                 placement="top"
                 arrow
-                slotProps={{
-                  tooltip: {
-                    sx: {
-                      bgcolor: "rgba(15, 23, 42, 0.96)",
-                      border: "1px solid rgba(129, 140, 248, 0.25)",
-                      borderRadius: 2,
-                      p: 1.5,
-                      boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-                      "& .MuiTooltip-arrow": { color: "rgba(15, 23, 42, 0.96)" },
-                    },
-                  },
-                }}
+                {...tooltipStyleProps(period.color)}
                 title={
-                  <Box>
+                  <>
+                    <TooltipTitle color={period.color}>Income sources</TooltipTitle>
                     {incomeSources.length === 0 ? (
-                      <Typography sx={{ fontSize: "0.8rem", color: "text.secondary" }}>No income this week</Typography>
+                      <TooltipBody>No income this week</TooltipBody>
                     ) : (
                       incomeSources.map((s) => (
                         <Box key={s.name} sx={{ display: "flex", justifyContent: "space-between", gap: 3 }}>
-                          <Typography sx={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.7)" }}>{s.name}</Typography>
-                          <Typography sx={{ fontSize: "0.8rem", fontWeight: 800, color: "#3DBC83" }}>${s.amount.toFixed(2)}</Typography>
+                          <Typography sx={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.85)", lineHeight: 1.4 }}>{s.name}</Typography>
+                          <Typography sx={{ fontSize: "0.72rem", fontWeight: 800, color: "#3DBC83", lineHeight: 1.4 }}>${s.amount.toFixed(2)}</Typography>
                         </Box>
                       ))
                     )}
-                  </Box>
+                  </>
                 }
               >
                 <Typography variant="body1" sx={{ fontWeight: 900, color: "success.light", cursor: "default", display: "inline-block" }}>
@@ -361,36 +384,26 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
               <Tooltip
                 placement="top"
                 arrow
-                slotProps={{
-                  tooltip: {
-                    sx: {
-                      bgcolor: "rgba(15, 23, 42, 0.96)",
-                      border: "1px solid rgba(129, 140, 248, 0.25)",
-                      borderRadius: 2,
-                      p: 1.5,
-                      boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-                      "& .MuiTooltip-arrow": { color: "rgba(15, 23, 42, 0.96)" },
-                    },
-                  },
-                }}
+                {...tooltipStyleProps(period.color)}
                 title={
-                  <Box>
+                  <>
+                    <TooltipTitle color={period.color}>Expenses breakdown</TooltipTitle>
                     {expensesBreakdown.bills > 0 && (
                       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 3 }}>
-                        <Typography sx={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.7)" }}>Bills</Typography>
-                        <Typography sx={{ fontSize: "0.8rem", fontWeight: 800, color: "#f43f5e" }}>${expensesBreakdown.bills.toFixed(2)}</Typography>
+                        <Typography sx={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.85)", lineHeight: 1.4 }}>Bills</Typography>
+                        <Typography sx={{ fontSize: "0.72rem", fontWeight: 800, color: "#f43f5e", lineHeight: 1.4 }}>${expensesBreakdown.bills.toFixed(2)}</Typography>
                       </Box>
                     )}
                     {expensesBreakdown.personal > 0 && (
                       <Box sx={{ display: "flex", justifyContent: "space-between", gap: 3 }}>
-                        <Typography sx={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.7)" }}>Personal</Typography>
-                        <Typography sx={{ fontSize: "0.8rem", fontWeight: 800, color: "#f43f5e" }}>${expensesBreakdown.personal.toFixed(2)}</Typography>
+                        <Typography sx={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.85)", lineHeight: 1.4 }}>Personal</Typography>
+                        <Typography sx={{ fontSize: "0.72rem", fontWeight: 800, color: "#f43f5e", lineHeight: 1.4 }}>${expensesBreakdown.personal.toFixed(2)}</Typography>
                       </Box>
                     )}
                     {expensesBreakdown.bills === 0 && expensesBreakdown.personal === 0 && (
-                      <Typography sx={{ fontSize: "0.8rem", color: "text.secondary" }}>No expenses this week</Typography>
+                      <TooltipBody>No expenses this week</TooltipBody>
                     )}
-                  </Box>
+                  </>
                 }
               >
                 <Typography variant="body1" sx={{ fontWeight: 900, color: "#f43f5e", cursor: "default", display: "inline-block" }}>

@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * StatisticsPage — top-level page component for the /Statistics route.
+ *
+ * Provides two orthogonal toggles: Spending vs Income (series) and Yearly vs
+ * Month-to-Month (view). Fetches all transactions/items/groups/payees via
+ * Refine and derives everything else in-memory through stats-utils helpers.
+ * Clicking a bar in the yearly chart jumps to that month's donut breakdown.
+ */
+
 import { useMemo, useState } from "react";
 import {
   Box,
@@ -33,6 +42,7 @@ import {
 import { formatMoney } from "../../../lib/cents";
 import { MONTHS } from "../../../lib/constants";
 
+// Outer card wrapping both series tabs + view tabs + chart.
 const sectionPaperSx = {
   p: { xs: 2.5, md: 3.5 },
   borderRadius: 4,
@@ -48,16 +58,22 @@ const sectionPaperSx = {
 type StatsView = "yearly" | "monthly";
 type StatsSeries = "spending" | "income";
 
+// Series-level accent colors — red for spending (outflow), green for income.
+// Reused as tab indicator, section header border, and inner card top border.
 const SPENDING_ACCENT = "#f87171";
 const INCOME_ACCENT = "#34d399";
 
 export const StatisticsPage = () => {
+  // Memoized `now` so the "Current Year/Month" sublabels don't flicker on
+  // every re-render caused by hover/scroll state elsewhere.
   const now = useMemo(() => new Date(), []);
   const [year, setYear] = useState(now.getFullYear());
   const [monthIndex, setMonthIndex] = useState(now.getMonth());
   const [view, setView] = useState<StatsView>("yearly");
   const [series, setSeries] = useState<StatsSeries>("spending");
 
+  // Pull everything unpaginated — stats aggregate over all-time data and we
+  // filter to `year` client-side.
   const { query: txnsQuery } = useList({
     resource: "AccountTransaction",
     pagination: { mode: "off" },
@@ -115,47 +131,13 @@ export const StatisticsPage = () => {
     [year, transactions],
   );
 
-  const toWifeKpi = useMemo(() => {
-    let total = 0;
-    let activeMonths = 0;
-    yearlySpending.forEach((m) => {
-      const w = m.items.find(
-        (it) => it.itemName.trim().toLowerCase() === "to wife",
-      );
-      if (w && w.cents > 0) {
-        total += w.cents;
-        activeMonths += 1;
-      }
-    });
-    return {
-      total,
-      activeMonths,
-      avg: activeMonths > 0 ? total / activeMonths : 0,
-    };
-  }, [yearlySpending]);
-
-  const savingsKpi = useMemo(() => {
-    let total = 0;
-    let activeMonths = 0;
-    yearlySpending.forEach((m) => {
-      const s = m.items.find(
-        (it) => it.itemName.trim().toLowerCase() === "savings",
-      );
-      if (s && s.cents > 0) {
-        total += s.cents;
-        activeMonths += 1;
-      }
-    });
-    return {
-      total,
-      activeMonths,
-      avg: activeMonths > 0 ? total / activeMonths : 0,
-    };
-  }, [yearlySpending]);
-
   const selectedSpendingMonth: MonthlySpend = yearlySpending[monthIndex];
   const selectedIncomeMonth: MonthlySpend = yearlyIncome[monthIndex];
 
+  // Month navigation with automatic year-crossover.
+  // The `((total % 12) + 12) % 12` idiom yields a proper non-negative modulo
+  // (JS's % returns negative for negative operands), and Math.floor handles
+  // the year rollover in both directions.
   const shiftMonth = (delta: number) => {
     const total = monthIndex + delta;
     const newYear = year + Math.floor(total / 12);
@@ -194,6 +176,9 @@ export const StatisticsPage = () => {
           <CircularProgress />
         </Box>
       ) : (
+        // IIFE keeps series-dependent locals (accent, tiles, empty labels) scoped
+        // to render, so the JSX below reads as one branch even though it toggles
+        // on spending vs income.
         (() => {
           const isSpending = series === "spending";
           const accent = isSpending ? SPENDING_ACCENT : INCOME_ACCENT;
@@ -371,28 +356,6 @@ export const StatisticsPage = () => {
                             },
                           ]
                     }
-                    extraTiles={
-                      isSpending
-                        ? [
-                            {
-                              label: "To Wife Average",
-                              value: formatMoney(Math.round(toWifeKpi.avg)),
-                              hint:
-                                toWifeKpi.activeMonths > 0
-                                  ? `per active month`
-                                  : undefined,
-                            },
-                            {
-                              label: "Saved This Year",
-                              value: formatMoney(savingsKpi.total),
-                              hint:
-                                savingsKpi.activeMonths > 0
-                                  ? `${formatMoney(Math.round(savingsKpi.avg))}/mo · ${savingsKpi.activeMonths} ${savingsKpi.activeMonths === 1 ? "month" : "months"}`
-                                  : "no activity",
-                            },
-                          ]
-                        : []
-                    }
                     onMonthClick={(idx) => {
                       setMonthIndex(idx);
                       setView("monthly");
@@ -462,6 +425,8 @@ export const StatisticsPage = () => {
   );
 };
 
+// KPI card used across both series (Total, Monthly Avg, Highest Month, and
+// series-specific extras like Weekly Average).
 const StatTile = ({
   label,
   value,
@@ -516,6 +481,10 @@ const StatTile = ({
   </Box>
 );
 
+// Prev/Next date picker used in both the yearly and monthly headers. `sublabel`
+// shows "Current Year"/"Current Month" so the user immediately knows whether
+// they're viewing live-current or a historical navigation. Uses NavigateBefore/
+// NavigateNext because ChevronLeft/Right are hidden globally via CSS.
 const ChevronPill = ({
   label,
   sublabel,
@@ -650,6 +619,10 @@ const innerCardSx = (accent: string) => ({
   boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
 });
 
+// Yearly panel: KPI tiles above the MonthlyStackedBars chart. Grid column
+// count is dynamically computed from tilesAfterAverage so all tiles stay
+// evenly spaced regardless of series (income adds Weekly Average, spending
+// doesn't — so spending has 3 tiles, income has 4).
 const YearlySection = ({
   title,
   icon,
@@ -661,7 +634,6 @@ const YearlySection = ({
   emptyTotalLabel,
   onMonthClick,
   tilesAfterAverage = [],
-  extraTiles = [],
 }: {
   title: string;
   icon: React.ReactNode;
@@ -673,7 +645,6 @@ const YearlySection = ({
   emptyTotalLabel: string;
   onMonthClick?: (idx: number) => void;
   tilesAfterAverage?: { label: string; value: string; hint?: string }[];
-  extraTiles?: { label: string; value: string; hint?: string }[];
 }) => (
   <Paper
     elevation={0}
@@ -694,7 +665,7 @@ const YearlySection = ({
         gridTemplateColumns: {
           xs: "1fr",
           sm: "repeat(2, 1fr)",
-          md: `repeat(${3 + tilesAfterAverage.length + extraTiles.length}, 1fr)`,
+          md: `repeat(${3 + tilesAfterAverage.length}, 1fr)`,
         },
         gap: 2,
         mb: 3,
@@ -731,14 +702,6 @@ const YearlySection = ({
             : undefined
         }
       />
-      {extraTiles.map((t) => (
-        <StatTile
-          key={t.label}
-          label={t.label}
-          value={t.value}
-          hint={t.hint}
-        />
-      ))}
     </Box>
     <Box
       sx={{
@@ -758,6 +721,9 @@ const YearlySection = ({
   </Paper>
 );
 
+// Monthly panel: single donut breakdown for the selected month. Thin wrapper
+// around MonthlyPie so the section styling (border, header, accent) stays
+// consistent with YearlySection.
 const MonthlySection = ({
   title,
   icon,

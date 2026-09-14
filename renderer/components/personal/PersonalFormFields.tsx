@@ -1,5 +1,17 @@
 "use client";
 
+/**
+ * PersonalFormFields — shared input set for Personal create + edit modals.
+ *
+ * Personal cadence is tri-state: FIXED (specific week or day-of-month),
+ * REPEAT (every pay week — flat allowance), SPLIT (monthly total spread across
+ * pay weeks). The three schema flags — `repeatWeekly`, `splitAcrossWeeks`,
+ * `weekOfMonth`, `dueDate` — are collapsed into a single ToggleButtonGroup here
+ * and mapped back on change. Every branch backfills `dueDate` to a valid int
+ * because Prisma rejects empty strings for required Int columns (see
+ * ensureDueDate).
+ */
+
 import {
   TextField,
   Grid,
@@ -24,6 +36,7 @@ export const PersonalFormFields = ({ formProps }: PersonalFormFieldsProps) => {
     watch,
   } = formProps;
 
+  // Live-watch the four cadence-related fields so the toggles react as the user clicks.
   const repeatWeekly = !!watch("repeatWeekly");
   const splitAcrossWeeks = !!watch("splitAcrossWeeks");
   const dueDate = watch("dueDate");
@@ -33,6 +46,9 @@ export const PersonalFormFields = ({ formProps }: PersonalFormFieldsProps) => {
   type Cadence = "FIXED" | "REPEAT" | "SPLIT";
   const cadence: Cadence = splitAcrossWeeks ? "SPLIT" : repeatWeekly ? "REPEAT" : "FIXED";
 
+  // Called when the top ToggleButtonGroup changes. Sets the two boolean flags plus
+  // clears/backfills weekOfMonth/dueDate to keep the record in a consistent state
+  // (no cadence permits `weekOfMonth != null` alongside repeatWeekly/split).
   const handleCadenceChange = (_: any, val: Cadence | null) => {
     if (val == null || val === cadence) return;
     // Backfill dueDate to 1 whenever it's empty/invalid — the schema requires
@@ -61,6 +77,9 @@ export const PersonalFormFields = ({ formProps }: PersonalFormFieldsProps) => {
   // Toggle value: 1|2|3|4 for a specific week, "day" for day-of-month mode
   const scheduleValue: number | "day" = weekOfMonth != null ? weekOfMonth : DAY_MODE_SENTINEL;
 
+  // Only rendered when cadence === FIXED. Picks one of four pay-week buckets or the
+  // Day sub-mode. When Day is selected, weekOfMonth clears and a numeric input for
+  // dueDate appears below.
   const handleScheduleChange = (_: any, val: number | "day" | null) => {
     if (val == null) return;
     if (val === DAY_MODE_SENTINEL) {
@@ -68,6 +87,8 @@ export const PersonalFormFields = ({ formProps }: PersonalFormFieldsProps) => {
       setValue("dueDate", (!dueDate || isNaN(Number(dueDate))) ? 1 : dueDate);
     } else {
       setValue("weekOfMonth", val);
+      // Even in Week-N mode dueDate must be a valid Int for Prisma. Backfill to 1
+      // so the row is savable even before the user opens the Day sub-input.
       if (!dueDate || isNaN(Number(dueDate))) setValue("dueDate", 1);
     }
   };
@@ -113,7 +134,7 @@ export const PersonalFormFields = ({ formProps }: PersonalFormFieldsProps) => {
           helperText={
             (errors.amount?.message as any) ??
             (cadence === "SPLIT"
-              ? "Split across pay weeks so the wife target still clears"
+              ? "Split across pay weeks so the surplus target still clears"
               : undefined)
           }
         />

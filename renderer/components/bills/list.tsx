@@ -1,18 +1,22 @@
 "use client";
 
+/**
+ * BillList — DataGrid table of recurring Bills (Settings > Bills).
+ *
+ * Delegates chrome (toolbar, edit/create modals, delete confirm) to ResourceList.
+ * Renders Name / Amount / Due Day columns with a small ordinal-suffix helper
+ * ("5th", "1st") for human-friendly due day formatting. Sorted by dueDate asc.
+ */
+
 import { useMemo } from "react";
 import { GridColDef } from "@mui/x-data-grid";
 import { Typography } from "@mui/material";
 import { BillCreate } from "./create";
 import { BillEdit } from "./edit";
 import { ResourceList } from "../shared/ResourceList";
-export const BillList = () => {
-  const getOrdinal = (n: number) => {
-    const s = ["th", "st", "nd", "rd"];
-    const v = n % 100;
-    return s[(v - 20) % 10] || s[v] || s[0];
-  };
+import { getOrdinal } from "../../lib/date-utils";
 
+export const BillList = () => {
   const columns = useMemo<GridColDef[]>(
     () => [
       {

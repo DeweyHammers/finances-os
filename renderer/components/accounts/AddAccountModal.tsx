@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * AddAccountModal — create a new Account (checking, savings, credit, etc).
+ *
+ * Two-step create when a non-zero starting balance is entered:
+ *  1. Create the Account row.
+ *  2. Create a matching "Starting Balance" AccountTransaction (isAdjustment=true,
+ *     cleared=true) so the ledger opens with the correct opening amount.
+ * If balance is $0 or blank, step 2 is skipped and only the account is created.
+ */
+
 import { useEffect, useState } from "react";
 import {
   Dialog,
@@ -64,6 +74,8 @@ export const AddAccountModal = ({
         onSuccess: (created) => {
           const accountId = (created as any)?.data?.id;
           const startingCents = toCents(workingBalance);
+          // Skip the starting-balance txn when nothing was entered — a $0
+          // adjustment row would just be clutter in the ledger.
           if (!accountId || startingCents === 0) {
             setSubmitting(false);
             onCreated?.(accountId);
@@ -71,6 +83,8 @@ export const AddAccountModal = ({
             return;
           }
 
+          // Negative starting balance (credit card debt, overdraft) is
+          // recorded as an outflow so the running balance ends up negative.
           createTxn(
             {
               resource: "AccountTransaction",

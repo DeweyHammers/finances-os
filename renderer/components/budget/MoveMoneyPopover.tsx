@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * MoveMoneyPopover — anchored popover for reallocating funds out of a category.
+ *
+ * Opens from an AvailableCell click. Destination can be either another
+ * category (grouped by group name) OR a synthetic "Ready to Assign" option
+ * (kind="ready") which sends the money back to the top-level pool by
+ * simply decrementing the source's assignedCents. Prefills the amount with
+ * the source's full available balance when positive.
+ */
+
 import { useState, useEffect, useMemo } from "react";
 import {
   Popover,
@@ -29,6 +39,9 @@ interface DestOption {
   groupKey: string;
 }
 
+// Sentinel value distinguishes the "Ready to Assign" destination from real
+// category IDs. handleMove translates it to `destItemId: null` before firing
+// onMove — the parent (BudgetPage) treats null as "just decrement the source".
 const READY_TO_ASSIGN_VALUE = "__ready__";
 
 const READY_OPTION: DestOption = {
@@ -72,6 +85,7 @@ export const MoveMoneyPopover = ({
   onClose,
   onMove,
 }: MoveMoneyPopoverProps) => {
+  // Filter self out — moving a category to itself would be a no-op double-write.
   const destinations = useMemo(
     () => options.filter((o) => o.itemId !== sourceItemId),
     [options, sourceItemId],
@@ -94,6 +108,8 @@ export const MoveMoneyPopover = ({
   }, [destinations]);
 
   useEffect(() => {
+    // Prefill the input with the source's full available balance — the most
+    // common intent is "sweep the leftover out of this category".
     if (open) {
       const defaultAmount =
         sourceAvailableCents > 0 ? fromCents(sourceAvailableCents) : 0;

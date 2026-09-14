@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * PayeesList — DataGrid table of Payee records (Settings > Payees).
+ *
+ * Payees back the transaction PayeeAutocomplete lookup. This is intentionally
+ * minimal — payees are just names; there's no amount, schedule, or metadata.
+ * Sorted alphabetically by name.
+ */
+
 import { useMemo } from "react";
 import { GridColDef } from "@mui/x-data-grid";
 import { Typography } from "@mui/material";

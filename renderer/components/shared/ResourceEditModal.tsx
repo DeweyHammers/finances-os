@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * ResourceEditModal — generic "Edit <Resource>" modal wired to Refine's useModalForm.
+ *
+ * Companion to ResourceCreateModal for the edit action. Hydrates the form with
+ * the loaded record (formatting any Date-like fields into YYYY-MM-DD for native
+ * <input type="date">), shows a spinner while loading, and surfaces load
+ * errors. Caller wires `useModalForm({ action: "edit" })` and passes it in.
+ */
+
 import { useEffect, FC, ReactNode } from "react";
 import { UseModalFormReturnType } from "@refinedev/react-hook-form";
 import { BaseRecord, HttpError } from "@refinedev/core";
@@ -29,6 +38,10 @@ export const ResourceEditModal: FC<ResourceEditModalProps> = ({
   children,
   maxWidth = "sm",
 }) => {
+  // ── Refine modal-form bindings ──
+  //  - modal.{close,visible}: open state + programmatic close
+  //  - reset: react-hook-form form reset (used to hydrate with fetched record)
+  //  - refineCore.query: the useOne() query for the record being edited
   const {
     modal: { close, visible },
     saveButtonProps,
@@ -40,6 +53,10 @@ export const ResourceEditModal: FC<ResourceEditModalProps> = ({
   const editData = queryResult?.data?.data;
   const editLoading = queryResult?.isLoading;
 
+  // ── Hydrate + normalize dates for <input type="date"> ──
+  // Native date inputs require "YYYY-MM-DD"; ISO timestamps or Date objects
+  // won't render. This effect converts any string field whose name hints at a
+  // date into that format before reset() so react-hook-form binds cleanly.
   useEffect(() => {
     let timer: NodeJS.Timeout;
 
@@ -50,11 +67,13 @@ export const ResourceEditModal: FC<ResourceEditModalProps> = ({
       Object.keys(formattedData).forEach((key) => {
         const value = formattedData[key];
         const lowerKey = key.toLowerCase();
-        
+
         // Exclude specific numeric fields that contain date-like words but are just numbers
-        const isExcluded = 
-          lowerKey === "duedate" || 
-          lowerKey === "month" || 
+        // (e.g. `dueDate` on Bills is a day-of-month integer 1-31, `month` on
+        // BudgetMonth is a Unix ms timestamp we handle separately, etc.)
+        const isExcluded =
+          lowerKey === "duedate" ||
+          lowerKey === "month" ||
           lowerKey === "day" ||
           lowerKey === "hours" ||
           lowerKey === "weeklyhours";
@@ -70,7 +89,9 @@ export const ResourceEditModal: FC<ResourceEditModalProps> = ({
               const d = new Date(value);
               if (!isNaN(d.getTime()) && typeof value === "string") {
                 // Only format if it looks like a valid ISO string or date string
-                // and NOT if it's a small number that could be a timestamp or ID
+                // and NOT if it's a small number that could be a timestamp or ID.
+                // Year > 1970 guard filters out small-integer millis (< 1 year
+                // of epoch) that would parse as a valid Date but represent IDs.
                 const year = d.getUTCFullYear();
                 if (year > 1970) {
                   const month = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -85,7 +106,9 @@ export const ResourceEditModal: FC<ResourceEditModalProps> = ({
         }
       });
 
-      // Use a small timeout to ensure the form is mounted before resetting
+      // Use a small timeout to ensure the form is mounted before resetting.
+      // Without this deferral, reset() can race the initial render and leave
+      // some fields empty on first open.
       timer = setTimeout(() => {
         reset(formattedData);
       }, 0);
@@ -97,6 +120,7 @@ export const ResourceEditModal: FC<ResourceEditModalProps> = ({
   }, [editData, visible, reset]);
 
   // If the query failed, we should show an error or at least know why
+  // (rendered as a red banner in place of the form body below).
   const queryError = queryResult?.error;
 
   return (

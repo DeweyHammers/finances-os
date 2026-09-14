@@ -1,3 +1,20 @@
+/**
+ * budget-utils — YNAB-style budget math + auto-assign resolvers.
+ *
+ * Pure functions consumed by BudgetPage, AssignMoneyPopover, and any Overview
+ * widget that needs "how much should this category get this pay-week?".
+ * All money is in integer cents. Bill.amount / Personal.amount live in the
+ * DB as Decimal dollars — the resolvers cast via `Number(...)` and
+ * `Math.round(x * 100)` to convert.
+ *
+ * Two auto-assign flavors:
+ *  - `resolveAutoAssignAmount` — month-level (matches item's withdrawalCycle
+ *    to a Q1..Q4 quarter).
+ *  - `resolveAutoAssignAmountForPeriod` — pay-period-aware (uses the actual
+ *    pay-week the bill/personal lands in, honoring BillSplit rows for
+ *    cumulative funding). See CLAUDE.md "Auto-assign amounts" for the
+ *    precise semantics per source type.
+ */
 export interface BudgetTransaction {
   date: string | Date;
   categoryItemId: string | null;
@@ -41,6 +58,11 @@ export interface PersonalRecordExtended {
   splitAcrossWeeks?: boolean;
 }
 
+// ── Month key helpers ──
+// All month math uses UTC components so a user in PST doesn't shift a
+// midnight-UTC date back into the previous month locally.
+
+/** "YYYY-MM" key used for grouping monthly rows (BudgetMonth, BillSplit). */
 export const monthKey = (date: string | Date): string => {
   const d = typeof date === "string" ? new Date(date) : date;
   const y = d.getUTCFullYear();
@@ -48,22 +70,27 @@ export const monthKey = (date: string | Date): string => {
   return `${y}-${m}`;
 };
 
+/** First-of-previous-month at UTC midnight. Used by carryover computation. */
 export const prevMonth = (monthIso: string | Date): Date => {
   const d = typeof monthIso === "string" ? new Date(monthIso) : monthIso;
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
 };
 
+/** First-of-current-month at UTC midnight. */
 export const monthStart = (date: string | Date): Date => {
   const d = typeof date === "string" ? new Date(date) : date;
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 };
 
+/** True iff `date` and `month` fall in the same calendar month (UTC). */
 export const isInMonth = (
   date: string | Date,
   month: string | Date,
 ): boolean => {
   return monthKey(date) === monthKey(month);
 };
+
+// ── YNAB-style monthly rollup math ──
 
 /**
  * Activity = sum of (outflow - inflow) for transactions in the month against this category.
@@ -132,6 +159,8 @@ export const computeAccountBalance = (
   );
 };
 
+// ── Auto-assign resolvers ──
+
 /**
  * Resolves how much to auto-assign for a category item in a given quarter cycle.
  * - BILL: Bill.amount (in cents) when the bill's withdrawalCycle matches the cycle.
@@ -167,6 +196,8 @@ export const resolveAutoAssignAmount = (params: {
 
   if (item.sourceType === "CUSTOM") {
     if (item.customAmountCents == null) return 0;
+    // A null customCycle means "assign every cycle" (repeat monthly). Only
+    // when a specific cycle is set do we require an exact match.
     if (item.customCycle == null) return item.customAmountCents;
     if (item.customCycle === cycle) return item.customAmountCents;
     return 0;
@@ -214,6 +245,9 @@ export const resolveAutoAssignAmountForPeriod = (params: {
   if (item.sourceType === "BILL") {
     const bill = bills.find((b) => b.id === item.sourceBillId);
     if (!bill) return 0;
+    // Preferred path: consult persisted BillSplit rows so we honor the
+    // auto-balance algorithm's per-week decisions (may split a single bill
+    // across multiple pay weeks to level the total).
     if (splits && monthKey) {
       const allocs = getBillAllocationsForBill(
         bill.id,
@@ -254,7 +288,12 @@ export const resolveAutoAssignAmountForPeriod = (params: {
       // through the target period (matches the split-bill semantics above).
       return splitAllocationsByPersonalName?.[item.sourcePersonalName] ?? 0;
     }
+    // repeatWeekly personals (Gas, Spending) always get a fresh full amount
+    // each pay week — deliberately NOT a cumulative top-up. See CLAUDE.md.
     if (match.repeatWeekly) return Math.round(match.amount * 100);
+    // Single-fire personals attribute either by explicit weekOfMonth (P1..P4)
+    // or by dueDate via getBillPeriodKey (with the same forward-extension
+    // rules as bills).
     const attributedKey =
       match.weekOfMonth != null
         ? `P${match.weekOfMonth}`
@@ -264,6 +303,9 @@ export const resolveAutoAssignAmountForPeriod = (params: {
   }
 
   if (item.sourceType === "CUSTOM") {
+    // In period-aware mode we only honor customCycle=null (monthly repeat).
+    // Cycle-specific customs are ambiguous under pay-period thinking and are
+    // deliberately skipped rather than guessed.
     if (item.customAmountCents == null) return 0;
     if (item.customCycle == null) return item.customAmountCents;
     return 0;
@@ -271,6 +313,98 @@ export const resolveAutoAssignAmountForPeriod = (params: {
 
   return 0;
 };
+
+/**
+ * Returns the cents that a category item's `assignedCents` SHOULD contain by
+ * the end of pay week `throughPeriodIdx` (0-based, e.g. 2 = "cumulative
+ * through P3"). Mirrors the auto-assign flow: for each period 0..idx we ask
+ * `resolveAutoAssignAmountForPeriod` what Auto would target for that period,
+ * then combine per the item's cadence:
+ *
+ *   - REPEATING (personal.repeatWeekly, custom w/ null cycle handled as flat
+ *     each period): SUM targets — each pay week adds a fresh allowance.
+ *   - CUMULATIVE (bills w/ splits, split personals): MAX targets — the
+ *     resolver already returns the running total through the target period,
+ *     so max is equivalent to "the highest cumulative snapshot seen so far".
+ *   - ONE-SHOT (un-split bills, dated personals, custom w/ specific cycle):
+ *     MAX targets — the resolver returns full amount in the natural period
+ *     and 0 elsewhere, so max latches on once that period passes.
+ *
+ * Custom items with `customCycle == null` fire once per month (not per pay
+ * week), so we treat them as MAX (single fire) rather than SUM.
+ *
+ * Returns 0 when idx < 0 (no pay week of the current month has started yet).
+ * Used by the Plan page to detect envelopes whose assigned amount lags what
+ * the current bill schedule expects.
+ */
+export const computeExpectedAssignedThroughPeriod = (params: {
+  item: CategoryItem;
+  throughPeriodIdx: number;
+  periods: PayPeriod[];
+  bills: BillRecordWithDueDate[];
+  personals: PersonalRecordExtended[];
+  splits?: BillSplitRecord[];
+  monthKey?: string;
+  splitAllocationsByPersonalNameThroughPeriod?: Record<string, number[]>;
+}): number => {
+  const {
+    item,
+    throughPeriodIdx,
+    periods,
+    bills,
+    personals,
+    splits,
+    monthKey,
+    splitAllocationsByPersonalNameThroughPeriod,
+  } = params;
+
+  if (throughPeriodIdx < 0) return 0;
+
+  // Decide combine mode from the item's source.
+  const personalMatch =
+    item.sourceType === "PERSONAL_NAME"
+      ? personals.find((p) => p.name === item.sourcePersonalName)
+      : null;
+  const isRepeating =
+    item.sourceType === "PERSONAL_NAME" && Boolean(personalMatch?.repeatWeekly);
+  // (CUSTOM null-cycle repeats monthly not weekly, so MAX is the right mode.)
+
+  let expected = 0;
+  for (let i = 0; i <= throughPeriodIdx && i < periods.length; i++) {
+    // For split-personals we need the cumulative slice sum through period i
+    // (not through the final target period). Pull the caller-computed slice
+    // array and truncate here so each i sees the right cumulative view.
+    const splitAllocationsByPersonalName: Record<string, number> = {};
+    if (
+      splitAllocationsByPersonalNameThroughPeriod &&
+      item.sourceType === "PERSONAL_NAME" &&
+      item.sourcePersonalName
+    ) {
+      const slices =
+        splitAllocationsByPersonalNameThroughPeriod[item.sourcePersonalName] ??
+        [];
+      splitAllocationsByPersonalName[item.sourcePersonalName] = slices
+        .slice(0, i + 1)
+        .reduce((a, b) => a + b, 0);
+    }
+
+    const target = resolveAutoAssignAmountForPeriod({
+      item,
+      periodKey: periods[i].key,
+      periods,
+      bills,
+      personals,
+      splits,
+      monthKey,
+      splitAllocationsByPersonalName,
+    });
+    if (isRepeating) expected += target;
+    else expected = Math.max(expected, target);
+  }
+  return expected;
+};
+
+// ── Money-move + balance-adjustment builders ──
 
 /**
  * Returns a pair of {sourceDelta, destDelta} (in cents) for moving money

@@ -1,5 +1,27 @@
 "use client";
 
+/**
+ * AssignMoneyPopover — anchored popover from the "Assign" button on the RTA pill.
+ *
+ * Two tabs:
+ *   1. Manually — pick a single category + amount, add that to its assignedCents.
+ *   2. Auto — pick a *pay week* (period). Parent's handleAutoAssign then
+ *      walks every budget item and applies the correct auto-assign mode per
+ *      source type. Only the CURRENT pay week(s) are shown here (filtered by
+ *      BudgetPage before passing `periods` in) — historical/future weeks
+ *      auto-assign would be nonsensical from the Plan page's monthly view.
+ *
+ * The three auto-assign modes (see BudgetPage.handleAutoAssign for logic):
+ *   - FLAT (repeatWeekly Personal, custom-no-cycle): add a fixed per-period
+ *     slice every click; never diff against existing available. Weekly
+ *     allowances need fresh money each pay period regardless of prior state.
+ *   - CUMULATIVE (splitAcrossWeeks personals, bills w/ BillSplit rows): target =
+ *     sum of per-week slices through the clicked week; top up available so
+ *     already-funded prior weeks don't double-count.
+ *   - NATURAL-PERIOD (single-week bills): full bill amount, but only in the
+ *     pay week whose payday naturally covers the bill's due date.
+ */
+
 import { useState, useEffect } from "react";
 import {
   Popover,
@@ -53,6 +75,8 @@ export const AssignMoneyPopover = ({
   const [amount, setAmount] = useState<string>("");
 
   useEffect(() => {
+    // Reset local state on open so a re-open never surfaces a stale selection
+    // (e.g., user cancelled last time on the Auto tab; next open starts fresh).
     if (open) {
       setTab("manually");
       setAmount("");
@@ -257,6 +281,10 @@ export const AssignMoneyPopover = ({
           </Box>
         </Box>
       ) : (
+        // ── Auto-assign tab ──
+        // `periods` is already pre-filtered by BudgetPage to only current pay
+        // weeks. Each button dispatches to onAutoAssign(period) which runs
+        // the flat/cumulative/natural-period logic per item.
         <Box sx={{ p: 2.5, display: "flex", flexDirection: "column", gap: 1.5 }}>
           <Typography
             variant="caption"

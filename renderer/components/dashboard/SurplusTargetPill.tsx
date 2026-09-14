@@ -1,5 +1,20 @@
 "use client";
 
+/**
+ * SurplusTargetPill — inline editor for the weekly surplus target.
+ *
+ * Displays the current target ($X/wk) as a clickable pill in the Overview
+ * toolbar; clicking opens a Popover with a number field. Value is persisted
+ * to `AppSettings.wifeWeeklyTargetCents` (DB column name kept for backward
+ * compat) via Refine's useUpdate. Draft state is only seeded on open so the
+ * input keeps the user's typed value during the mutation's flight (no flash
+ * back to old value).
+ *
+ * Consumed by the Overview header alongside the always-visible Optimize
+ * button. Target drives split-personal distribution in CashFlowOverview
+ * and PersonalOverview.
+ */
+
 import { useRef, useState } from "react";
 import {
   Box,
@@ -12,7 +27,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import { useOne, useUpdate } from "@refinedev/core";
 import { fromCents, toCents } from "../../lib/cents";
 
-export const WifeTargetPill = () => {
+export const SurplusTargetPill = () => {
   const { query } = useOne({
     resource: "AppSettings",
     id: "global",
@@ -35,6 +50,11 @@ export const WifeTargetPill = () => {
     setTimeout(() => inputRef.current?.select(), 0);
   };
 
+  // Only mutate when the value actually changed — cheap short-circuit that
+  // avoids spurious Refine invalidations (which would re-render every
+  // consumer of AppSettings). `successNotification:false` because the
+  // Overview page already mounts AppSettings; a second success key would
+  // collide and trigger React key warnings.
   const commit = () => {
     const cents = toCents(draft);
     if (cents !== remoteCents) {
@@ -74,11 +94,11 @@ export const WifeTargetPill = () => {
             bgcolor: "rgba(129, 140, 248, 0.08)",
             borderColor: "rgba(129, 140, 248, 0.35)",
           },
-          "&:hover .wife-edit-icon": { color: "primary.light" },
+          "&:hover .surplus-edit-icon": { color: "primary.light" },
         }}
       >
         <Box
-          className="wife-edit-icon"
+          className="surplus-edit-icon"
           sx={{
             display: "flex",
             alignItems: "center",
@@ -120,7 +140,7 @@ export const WifeTargetPill = () => {
               mt: 0.3,
             }}
           >
-            Wife Target
+            Surplus Target
           </Typography>
         </Box>
         <Box sx={{ width: 40 }} />
@@ -149,7 +169,7 @@ export const WifeTargetPill = () => {
           <Typography
             sx={{ fontSize: "0.7rem", fontWeight: 700, color: "text.secondary", textTransform: "uppercase", letterSpacing: 0.8 }}
           >
-            Wife Target
+            Surplus Target
           </Typography>
           <TextField
             inputRef={inputRef}

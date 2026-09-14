@@ -1,5 +1,17 @@
 "use client";
 
+/**
+ * AddItemModal — create a new BudgetCategoryItem inside a group.
+ *
+ * Three source modes drive auto-assign behavior downstream:
+ *   - CUSTOM: user names it manually; nothing auto-syncs.
+ *   - BILL: bound to a Bill (sourceBillId). Amount/cycle live on the Bill,
+ *     display name auto-syncs via resolveItemDisplay unless later overridden
+ *     in EditItemModal.
+ *   - PERSONAL_NAME: bound to all Personal rows sharing that name (a name
+ *     can have multiple cycles). Chip preview shows per-cycle contributions.
+ */
+
 import { useState, useMemo, useEffect } from "react";
 import {
   Dialog,
@@ -57,6 +69,9 @@ export const AddItemModal = ({
   const bills = (billsQuery.data?.data as any[]) || [];
   const personals = (personalsQuery.data?.data as any[]) || [];
 
+  // Personal rows can share names across cycles (e.g. "Groceries" WEEKLY +
+  // "Groceries" BI_WEEKLY). We bind BudgetItems by name so a single item
+  // aggregates every cycle contribution — dedupe to distinct names for the picker.
   const distinctPersonalNames = useMemo(() => {
     const seen = new Set<string>();
     personals.forEach((p) => seen.add(p.name));
@@ -89,6 +104,9 @@ export const AddItemModal = ({
     if (!groupId || submitting) return;
     setSubmitting(true);
 
+    // Shape the create payload per mode. `sourceType` drives auto-assign logic
+    // in BudgetPage.handleAutoAssign — CUSTOM behaves as repeatWeekly-flat,
+    // BILL/PERSONAL_NAME resolve through the pay-period allocation utilities.
     const buildValues = () => {
       if (mode === "BILL") {
         const bill = bills.find((b) => b.id === selectedBillId);

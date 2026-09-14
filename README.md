@@ -20,6 +20,7 @@ The app opens on the **Plan** (zero-based budget) by default. Other sections liv
 - Inline-edit the **Assigned** cell; calculator-style (`+50` to add) supported.
 - **Move Money** popover off any Available pill to cover overspending YNAB-style.
 - Activity + Available are derived live from your transactions.
+- **Out-of-sync ⚠ badges + Sync Plan button** — Bill envelopes flag with an amber warning icon when their funding drifts from the Overview's schedule (fires for both OVER and UNDER). Hovering explains the shortfall or excess in "still-to-save" terms. A **Sync Plan** button (top-left of the Plan page, mirroring Add Group on the right) applies every delta in one click: pulls extra back to Ready to Assign, tops up under-funded envelopes from RTA. Disabled when RTA can't cover the shortfall — tooltip shows how short you are. Both the badge and the button are silenced on payday-morning "haven't assigned this week's paycheck yet" cases (previous pay week's target was already met) so the Plan doesn't shout at you before you sit down to budget. Overview changes that redistribute splits mid-period naturally break the suppression → warnings return.
 
 ### 📊 Statistics
 
@@ -43,10 +44,10 @@ The app opens on the **Plan** (zero-based budget) by default. Other sections liv
 
 ### 📅 Expenses
 
-- **Overview:** Two-panel landing page: a **Monthly** section (month navigator + Wife Target pill + Optimize button + Cash Flow & Allowance pay-week cards + Bills + Personal) and a **Yearly Overview** section below it.
+- **Overview:** Landing page with three at-a-glance **summary tiles** at the top (**Bills** $/month, **Personal** $/month, **Yearly Costs** $/year — colored by section), followed by a **Monthly** section (month navigator + Surplus Target pill + Optimize button + Cash Flow & Allowance pay-week cards + Bills + Personal) and a **Yearly Costs** section below it. Every hover tooltip across the page (cash-flow breakdowns, split badges, warnings) shares the same dark-bg + section-colored-border visual language via `renderer/lib/tooltip-styles.tsx`.
   - **Month navigator** (`< June 2026 >`) lets you browse any month; defaults to the current month and shows a "CURRENT MONTH" label when on it.
   - **Wife Target pill** — a compact editor left of the month picker showing the current per-week wife allowance target. Click the pencil to edit; Enter commits, Escape cancels, blur saves.
-  - **Optimize button** — always-visible pill in the toolbar to re-run the pay-week balance on demand.
+  - **Optimize button** — always-visible pill in the toolbar to re-run the pay-week balance on demand. Plans the next **36 months (3 years)** so future-month navigation stays fully funded.
   - **Pay periods belong to their payday's month.** Each pay week starts on an in-month payday and runs until the day before the next payday. The last period of a month forward-extends into the next month up to the day before that month's first payday (e.g. July's P5 runs Jul 29 – Aug 4). There is **no backward extension** — bills due Aug 1-4 don't appear under August; they surface under July's P5 because Jul 29's paycheck funds them. This matches how the money actually moves.
   - **Multi-occurrence bills** — when a bill's next-month firing lands inside the forward extension AND the following view can't naturally cover it (its first payday falls after the due date), a bill can appear TWICE in one view. Example: in September 2026 Starlink (due 4th) appears in P1 for Sep 4 (in-month, natural) AND in P5-area splits for Oct 4 (Oct's first payday is Oct 7 — too late to fund Oct 4, so September must pre-save). Each occurrence is placed independently by the balancer.
   - **Orphan skip** — the algorithm refuses to double-count a payment across two views. If a bill's next-month firing IS naturally covered by the next view (that view's first payday ≤ due date), the current view leaves it alone.
@@ -54,17 +55,17 @@ The app opens on the **Plan** (zero-based budget) by default. Other sections liv
   - **Underfunded invariant** — `assertNoUnderfundedBills` throws if any bill occurrence ends up with `allocations + locked cents < bill.amount`. Past-window occurrences (already-passed pay weeks with no locked funding) are exempt.
   - Balance splits live in a `BillSplit(billId, monthKey, weekIndex, amountCents, occurrenceCoord)` table (one row per bill-occurrence per week per month). They're recomputed automatically; no manual controls.
   - **Stale-data alert** — amber warning banner appears when bills / income / personal / wife target change after the Overview loads, or when legacy split rows are detected. Persists across navigation and app restarts (stored in `localStorage`) and only clears when you click **Optimize**. A success toast confirms the re-plan completed.
-- **Bills:** Recurring monthly bills with a name, amount, and due day. Grouped into pay-period windows via auto-balance (funded-by-paycheck attribution). Due days past the end of the current month clamp to the last valid day for both display AND occurrence-coord math (a bill due the 31st fires on Sep 30 in September, not "Oct 1"). Card subtitles read `Due 5th` for in-month occurrences and `Due Oct 4th` for next-month/forward-extended ones so a bill firing twice reads as distinct dates. Split cards show two lines: `Split · Oct 4th` on top, `Saved $99.43 / Total $156.38` (or just `Total $X` when fully saved) below.
+- **Bills:** Recurring monthly bills with a name, amount, and due day. Grouped into pay-period windows via auto-balance (funded-by-paycheck attribution). Due days past the end of the current month clamp to the last valid day for both display AND occurrence-coord math (a bill due the 31st fires on Sep 30 in September, not "Oct 1"). Card subtitles read `Due 5th` for in-month occurrences and `Due Oct 4th` for next-month/forward-extended ones so a bill firing twice reads as distinct dates. Split cards show `Split · Oct 4th` on the header, with a `Saved $X` line on non-first slices (first-slice cards omit it — the card's own amount IS the saved figure). The bill total lives in the CallSplit badge tooltip.
 - **Personal:** Personal/household items with a name, amount, and one of three **cadences**:
   - **Fixed Week / Day** — fires on a specific `weekOfMonth` (1-4) or a day-of-month.
   - **Every Pay Week** — full amount hits every pay period.
-  - **Split Monthly** — `amount` is a **monthly total** that gets distributed across pay weeks proportional to each week's leftover room after bills + fixed personal + wife target. Splits are computed after the auto-balance runs so they only consume genuinely spare cash and never breach the wife target. Great for savings goals ("$100/mo into Savings, spread wherever it fits").
+  - **Split Monthly** — `amount` is a **monthly total** that gets distributed across pay weeks proportional to each week's leftover room after bills + fixed personal + surplus target. Splits are computed after the auto-balance runs so they only consume genuinely spare cash and never breach the surplus target. Great for savings goals ("$100/mo into Savings, spread wherever it fits").
 - **Yearly Costs:** Annual expenses scheduled by month and day.
 
 ### ⚙️ Income & Auto-Balance Settings
 
 - **Income Sources:** Define one or more income sources, each with its own name, amount, payment cycle (Weekly / Bi-Weekly), pay day (Mon–Fri), and biweekly offset (1st & 3rd vs. 2nd & 4th weeks). The **Primary** income drives the pay-period windows used throughout the Plan and Overview.
-- **Wife Weekly Target** — configured inline via the Overview's Wife Target pill (`AppSettings.wifeWeeklyTargetCents`, default $300). Changing it triggers an auto-balance re-run for the current month.
+- **Weekly Surplus Target** — configured inline via the Overview's Surplus Target pill (`AppSettings.wifeWeeklyTargetCents` — DB column name kept for backward compat, default $300). Changing it triggers an auto-balance re-run for the current month.
 
 ## 🧪 Tests
 
@@ -74,7 +75,7 @@ npm run test:watch # Watch mode
 npm run test:ui    # Vitest UI dashboard
 ```
 
-Vitest + Testing Library + Supertest. **179 tests** covering the budget math (cents, activity, available, RTA, auto-assign period resolver, move-money, balance adjustments), the pay-period calendar logic (payday-month attribution, `getBillPeriodKey`, `getBillOccurrencesInView` multi-occurrence enumeration, `clampDayToMonth`, override lookup, `balancePayWeeks` per-occurrence placement + retroactive planning, `distributeSplitAcrossWeeks` largest-remainder rounding), a **full-year cross-view coverage invariant** (every real-world firing of every user bill from Aug 2026 → Jul 2027 is attributed to exactly one view — no double-count, no drops), a **locked-allocation preservation regression** (past-week partial payments count toward remaining amount, algo never re-places the full bill), the form components (AssignedCell, PayeeAutocomplete, SiderAccountRow), and the API server's body coercion.
+Vitest + Testing Library + Supertest. **186 tests** covering the budget math (cents, activity, available, RTA, auto-assign period resolver, move-money, balance adjustments), the pay-period calendar logic (payday-month attribution, `getBillPeriodKey`, `getBillOccurrencesInView` multi-occurrence enumeration, `clampDayToMonth`, override lookup, `balancePayWeeks` per-occurrence placement + retroactive planning, `distributeSplitAcrossWeeks` largest-remainder rounding), a **full-year cross-view coverage invariant** (every real-world firing of every user bill from Aug 2026 → Jul 2027 is attributed to exactly one view — no double-count, no drops), a **locked-allocation preservation regression** (past-week partial payments count toward remaining amount, algo never re-places the full bill), the form components (AssignedCell, PayeeAutocomplete, SiderAccountRow), and the API server's body coercion.
 
 ## 🛠 Technical Architecture
 

@@ -1,18 +1,35 @@
+/**
+ * stats-utils — pure aggregation helpers for the /Statistics page.
+ *
+ * Given raw AccountTransactions + BudgetCategoryItems/Groups/Payees, produces
+ * the derived `MonthlySpend[]` shape consumed by MonthlyStackedBars and
+ * MonthlyPie, plus KPI helpers (yearly totals, weekly income avg, item colors).
+ * All amounts are in cents throughout; only the chart's y-axis converts to dollars.
+ */
+
 import { SHORT_MONTHS } from "../../../lib/constants";
 
+// Raw transaction shape (narrower than the full Prisma model — only the fields
+// stats actually touches). Accepts either ISO string or Date since Refine can
+// yield either depending on the resource adapter.
 export interface StatsTransaction {
   date: string | Date;
   categoryItemId: string | null;
-  categoryName: string | null;
+  categoryName: string | null;   // snapshot copied at write time; survives category deletion
   payeeId: string | null;
   memo: string | null;
   inflowCents: number;
   outflowCents: number;
 }
 
+// Synthetic bucket used when a transaction's category has been deleted from the
+// budget. Preserves the historical `categoryName` snapshot instead of dropping
+// the money from stats. All orphans coalesce into a single "Removed Items" group.
 const REMOVED_GROUP_ID = "__removed__";
 const REMOVED_GROUP_NAME = "Removed Items";
 
+// Deterministic key so multiple transactions that reference the same
+// (now-deleted) category name still group into one slice/bar segment.
 const orphanItemId = (snapshotName: string): string =>
   `__removed__${snapshotName.trim().toLowerCase()}`;
 
@@ -34,6 +51,9 @@ export interface StatsPayee {
   name: string;
 }
 
+// Convention: only inflow transactions whose memo is exactly "income" count
+// toward income stats. This distinguishes real paychecks from refunds/transfers
+// (which are also inflows but should not inflate income KPIs).
 export const INCOME_MEMO = "income";
 
 export const isIncomeTransaction = (t: StatsTransaction): boolean => {
@@ -60,6 +80,9 @@ export interface MonthlySpend {
 const toDate = (v: string | Date): Date =>
   typeof v === "string" ? new Date(v) : v;
 
+// Returns every year that has at least one transaction, plus the current year
+// (so the picker still lets you jump to "now" even when no data exists yet).
+// Descending order — most recent first.
 export const listYearsForData = (transactions: StatsTransaction[]): number[] => {
   const years = new Set<number>();
   transactions.forEach((t) => {
@@ -70,6 +93,16 @@ export const listYearsForData = (transactions: StatsTransaction[]): number[] => 
   return Array.from(years).sort((a, b) => b - a);
 };
 
+// Build the 12-month spending series for a given year.
+// Rules:
+//  - `cents = outflow - inflow` per txn; refunds (positive inflow against a
+//    category) reduce that item's spend total for the month.
+//  - Only positive net-outflow transactions count toward spending.
+//  - Live categories (still in the budget) resolve to their current name.
+//  - Deleted categories fall back to the snapshot `categoryName` and bucket
+//    into the synthetic "Removed Items" group.
+//  - Fully-uncategorized outflows (no live item, no snapshot) are dropped —
+//    they can't be attributed to any bar segment.
 export const computeYearlySpending = (params: {
   year: number;
   transactions: StatsTransaction[];
@@ -88,6 +121,7 @@ export const computeYearlySpending = (params: {
       if (!Number.isFinite(d.getTime())) return;
       if (d.getUTCFullYear() !== year || d.getUTCMonth() !== monthIndex) return;
 
+      // Net-of-refund spend for this transaction. Skip zero/negative rows.
       const cents = (t.outflowCents || 0) - (t.inflowCents || 0);
       if (cents <= 0) return;
 
@@ -128,6 +162,8 @@ export const computeYearlySpending = (params: {
       }
     });
 
+    // Descending sort → biggest categories render at the bottom of each
+    // stacked bar and appear first in the pie legend.
     const ordered = Array.from(itemMap.values()).sort(
       (a, b) => b.cents - a.cents,
     );
@@ -141,6 +177,9 @@ export const computeYearlySpending = (params: {
   });
 };
 
+// Fixed palette shared by pies + stacked bars. Chosen for good contrast on the
+// dark slate-900 background AND acceptable distinctness up to ~16 items
+// (typical budgets have far fewer live categories at once).
 const ITEM_PALETTE = [
   "#818cf8", // indigo
   "#2dd4bf", // teal
@@ -160,6 +199,9 @@ const ITEM_PALETTE = [
   "#fcd34d", // gold
 ];
 
+// Mirror of computeYearlySpending but for income transactions (memo="income").
+// Instead of grouping by category/group, groups by payee (income "source").
+// Reuses the MonthlySpend/ItemSpend shape so both charts render identically.
 export const computeYearlyIncome = (params: {
   year: number;
   transactions: StatsTransaction[];
@@ -167,6 +209,7 @@ export const computeYearlyIncome = (params: {
 }): MonthlySpend[] => {
   const { year, transactions, payees } = params;
   const payeeById = new Map(payees.map((p) => [p.id, p]));
+  // Coalesces every payeeless income row into one "Unknown source" bucket.
   const UNKNOWN = "__unknown_payee__";
 
   return Array.from({ length: 12 }, (_, monthIndex) => {
@@ -210,6 +253,11 @@ export const computeYearlyIncome = (params: {
   });
 };
 
+// Compute ISO-8601 week identifier ("2026-W7").
+// ISO weeks start on Monday and week 1 is the one containing Jan 4th.
+// The "+4 - day" trick pins the date to the Thursday of its ISO week, which is
+// how ISO-8601 defines the week's year — this correctly attributes Dec 30 2024
+// (a Monday) to "2025-W1" instead of "2024-W53".
 const isoWeekKey = (date: Date): string => {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const day = d.getUTCDay() || 7;
@@ -219,6 +267,9 @@ const isoWeekKey = (date: Date): string => {
   return `${d.getUTCFullYear()}-W${weekNum}`;
 };
 
+// "Weekly Average" KPI for the income series. Averages over active weeks only
+// (weeks that had at least $0.01 of income), so a mid-year start doesn't drag
+// the average toward zero.
 export const computeWeeklyIncomeKpi = (params: {
   year: number;
   transactions: StatsTransaction[];
@@ -252,6 +303,9 @@ export const computeWeeklyIncomeKpi = (params: {
   };
 };
 
+// Roll-up used by the tile row above the yearly chart. Avg is over active
+// months only (same rationale as computeWeeklyIncomeKpi) — a partial year
+// shouldn't average as though the missing months were $0.
 export const computeKpis = (months: MonthlySpend[]) => {
   const total = months.reduce((s, m) => s + m.totalCents, 0);
   const nonZeroMonths = months.filter((m) => m.totalCents > 0).length;
@@ -263,6 +317,12 @@ export const computeKpis = (months: MonthlySpend[]) => {
   return { total, nonZeroMonths, avg, highest };
 };
 
+// Deterministic color for an item/payee id.
+//  - Live items: color = palette[index-in-list] so a category's color stays
+//    stable as long as the item ordering doesn't shift.
+//  - Orphaned items (deleted; not in `allItems`): fall back to a djb2-style
+//    string hash of the id, so historical rows still get a consistent color
+//    across renders without relying on any lookup.
 export const itemColor = (
   itemId: string,
   allItems: { id: string }[],

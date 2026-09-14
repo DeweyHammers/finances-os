@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * ResourceCreateModal — generic "New <Resource>" modal wired to Refine's useModalForm.
+ *
+ * Renders a titled Dialog with a form body (supplied by the caller either as
+ * static JSX or as a render function receiving `register`) and a Cancel/Save
+ * button pair. Used by ResourceList and other CRUD hosts — the caller wires
+ * `useModalForm({ action: "create" })` and passes the return value in as
+ * `modalProps`. Zero-exit-duration keeps the modal snappy on close.
+ */
+
 import { FC, ReactNode } from "react";
 import { UseModalFormReturnType } from "@refinedev/react-hook-form";
 import { BaseRecord, HttpError } from "@refinedev/core";
@@ -27,6 +37,10 @@ export const ResourceCreateModal: FC<ResourceCreateModalProps> = ({
   children,
   maxWidth = "sm",
 }) => {
+  // Destructure the pieces of Refine's useModalForm we actually need:
+  //  - modal.{close,visible}: open state + programmatic close
+  //  - register: react-hook-form field binder passed to children
+  //  - saveButtonProps: pre-wired onClick/disabled for the submit button
   const {
     modal: { close, visible },
     register,
@@ -54,6 +68,10 @@ export const ResourceCreateModal: FC<ResourceCreateModalProps> = ({
         New {title}
       </DialogTitle>
       <DialogContent sx={{ px: 4, pb: 2 }}>
+        {/* Children can be static JSX (already wired to their own register)
+            or a render function that receives our `register` — the latter
+            keeps callers from having to thread useModalForm's return value
+            through their JSX manually. */}
         <Box
           component="form"
           sx={{ display: "flex", flexDirection: "column", gap: 3, mt: 2 }}

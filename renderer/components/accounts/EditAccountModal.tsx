@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * EditAccountModal — edit an existing Account or close it entirely.
+ *
+ * Name/notes updates are straightforward. Working-balance changes trigger a
+ * "Manual Balance Adjustment" AccountTransaction (built via buildBalanceAdjustment)
+ * so the running balance matches the new target without touching historical
+ * transactions. Delete is a two-click confirm to avoid accidental account removal.
+ */
+
 import { useState, useEffect } from "react";
 import {
   Dialog,
@@ -64,6 +73,9 @@ export const EditAccountModal = ({
   const transactions = (txnsQuery.data?.data as any[]) || [];
   const currentBalanceCents = computeAccountBalance(transactions);
 
+  // Populate local state from the fetched account. Also re-runs when
+  // currentBalanceCents changes (e.g., a background txn write) so the working
+  // balance field mirrors the true balance until the user edits it.
   useEffect(() => {
     if (account && open) {
       setName(account.name || "");
@@ -91,6 +103,9 @@ export const EditAccountModal = ({
       },
       {
         onSuccess: () => {
+          // Only write an adjustment if the balance actually changed.
+          // buildBalanceAdjustment returns null when current == new, so we
+          // skip the txn write and just close.
           const newCents = toCents(workingBalance);
           const adjustment = buildBalanceAdjustment({
             accountId,
@@ -223,6 +238,9 @@ export const EditAccountModal = ({
       <DialogActions
         sx={{ p: 4, pt: 1, justifyContent: "space-between" }}
       >
+        {/* Two-click delete confirmation: first click flips the button label
+            and reveals a red Delete button on the right side. Prevents a stray
+            click from wiping the account. */}
         <Button
           onClick={() => setConfirmDelete(true)}
           color="error"

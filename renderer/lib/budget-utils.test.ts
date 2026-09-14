@@ -10,6 +10,7 @@ import {
   computeAccountBalance,
   resolveAutoAssignAmount,
   resolveAutoAssignAmountForPeriod,
+  computeExpectedAssignedThroughPeriod,
   moveMoney,
   buildBalanceAdjustment,
 } from "./budget-utils";
@@ -575,6 +576,235 @@ describe("resolveAutoAssignAmountForPeriod", () => {
         }),
       ).toBe(2000);
     }
+  });
+});
+
+describe("resolveAutoAssignAmountForPeriod — multi-occurrence bills (Plan ↔ Overview alignment)", () => {
+  // September 2026: Wednesdays land on 2, 9, 16, 23, 30 → 5 pay weeks.
+  // A monthly bill due the 5th fires TWICE in this view:
+  //   - Sep 5 (coord=5)  → P1 (weekIndex 0)
+  //   - Oct 5 (coord=35) → P5 (weekIndex 4, forward-extended)
+  // The Overview optimizer writes BillSplit rows tagged with occurrenceCoord
+  // so each firing is funded independently. Auto-assign is a CUMULATIVE
+  // top-up (envelope must hold $X by end of period P), so expected totals
+  // include every occurrence whose home period ≤ target.
+  //
+  // Regression guard: if BudgetPage.tsx ever strips occurrenceCoord from
+  // its splits mapping again (or `getBillAllocationsForBill` stops
+  // grouping by coord), the totals below will overshoot — because the
+  // legacy-fallback path double-attributes the secondary occurrence (once
+  // via natural attribution, once via the primary's legacy bucket).
+  const periods = getPayPeriodsForMonth(2026, 8, 3);
+  const monthKey = "2026-09";
+  const bill = { id: "starlink", amount: 101, dueDate: 5 };
+  const item = {
+    id: "i-starlink",
+    sourceType: "BILL" as const,
+    sourceBillId: "starlink",
+  };
+
+  it("REGRESSION: coord-tagged single-slice occurrences cumulate correctly", () => {
+    // Both occurrences fully funded in their natural home week. The Sep 5
+    // slice sits in P1 with coord=5; the Oct 5 slice sits in P5 with coord=35.
+    const splits = [
+      { billId: "starlink", monthKey, weekIndex: 0, amountCents: 10100, occurrenceCoord: 5 },
+      { billId: "starlink", monthKey, weekIndex: 4, amountCents: 10100, occurrenceCoord: 35 },
+    ];
+
+    // Sep 5 needs to be funded by end of P1 → $101.
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item, periodKey: "P1", periods,
+        bills: [bill], personals: [], splits, monthKey,
+      }),
+    ).toBe(10100);
+
+    // Between P2 and P4, Sep 5 is fully funded but Oct 5 hasn't landed yet.
+    // Cumulative envelope stays at $101 (NOT $202 — the bug would inflate
+    // this by double-counting the secondary via legacy fallback).
+    for (const key of ["P2", "P3", "P4"]) {
+      expect(
+        resolveAutoAssignAmountForPeriod({
+          item, periodKey: key, periods,
+          bills: [bill], personals: [], splits, monthKey,
+        }),
+      ).toBe(10100);
+    }
+
+    // By end of P5 both occurrences must be funded → $202.
+    // With the pre-fix bug this returned $303 (Sep 5's $101 natural +
+    // primary's stripped-coord split misattribution).
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item, periodKey: "P5", periods,
+        bills: [bill], personals: [], splits, monthKey,
+      }),
+    ).toBe(20200);
+  });
+
+  it("REGRESSION: intra-occurrence splits stay isolated from other occurrences", () => {
+    // Sep 5 occurrence split across P1+P2 ($50 + $51); Oct 5 lump in P5.
+    const splits = [
+      { billId: "starlink", monthKey, weekIndex: 0, amountCents: 5000,  occurrenceCoord: 5 },
+      { billId: "starlink", monthKey, weekIndex: 1, amountCents: 5100,  occurrenceCoord: 5 },
+      { billId: "starlink", monthKey, weekIndex: 4, amountCents: 10100, occurrenceCoord: 35 },
+    ];
+
+    // P1: first Sep 5 slice → $50.
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item, periodKey: "P1", periods,
+        bills: [bill], personals: [], splits, monthKey,
+      }),
+    ).toBe(5000);
+    // P2: Sep 5 slices 1+2 = $101. Bug would return $151 (adding Oct 5 too
+    // via legacy fallback stripping the coord tag).
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item, periodKey: "P2", periods,
+        bills: [bill], personals: [], splits, monthKey,
+      }),
+    ).toBe(10100);
+    // P5: Sep fully funded + Oct 5 slice = $202. Bug would return $303.
+    expect(
+      resolveAutoAssignAmountForPeriod({
+        item, periodKey: "P5", periods,
+        bills: [bill], personals: [], splits, monthKey,
+      }),
+    ).toBe(20200);
+  });
+});
+
+describe("computeExpectedAssignedThroughPeriod", () => {
+  // August 2026 pay-week grid — same setup as the resolveAuto tests above.
+  // P1 = Aug 5-11, P2 = Aug 12-18, P3 = Aug 19-25, P4 = Aug 26 – Sep 1
+  const periods = getPayPeriodsForMonth(2026, 7, 3, new Date(2026, 7, 5), false);
+  const monthKey = "2026-08";
+
+  it("returns 0 when no pay week has started (idx < 0)", () => {
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item: { id: "x", sourceType: "BILL", sourceBillId: "b" },
+        throughPeriodIdx: -1,
+        periods,
+        bills: [{ id: "b", amount: 100, dueDate: 5 }],
+        personals: [],
+        splits: [],
+        monthKey,
+      }),
+    ).toBe(0);
+  });
+
+  it("BILL with splits: reflects cumulative slices through the current pay week", () => {
+    // Bill split $80 in P1, $120 in P2. By end of P2 the envelope should
+    // hold $200 total; by end of P1 only $80.
+    const bill = { id: "climb", amount: 200, dueDate: 15 };
+    const item = {
+      id: "i-climb",
+      sourceType: "BILL" as const,
+      sourceBillId: "climb",
+    };
+    const splits = [
+      { billId: "climb", monthKey, weekIndex: 0, amountCents: 8000 },
+      { billId: "climb", monthKey, weekIndex: 1, amountCents: 12000 },
+    ];
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 0, periods,
+        bills: [bill], personals: [], splits, monthKey,
+      }),
+    ).toBe(8000);
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 1, periods,
+        bills: [bill], personals: [], splits, monthKey,
+      }),
+    ).toBe(20000);
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 3, periods,
+        bills: [bill], personals: [], splits, monthKey,
+      }),
+    ).toBe(20000);
+  });
+
+  it("BILL without splits: latches full amount once natural period passes", () => {
+    // Phone Bill due=5 → natural attribution is P1. Before P1 the envelope
+    // has no expectation; from P1 onward it should hold the full amount.
+    const bill = { id: "phone", amount: 101, dueDate: 5 };
+    const item = {
+      id: "i-phone",
+      sourceType: "BILL" as const,
+      sourceBillId: "phone",
+    };
+    // In this test we intentionally leave splits undefined so the resolver
+    // falls back to due-date attribution (mirrors an un-optimized bill).
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 0, periods,
+        bills: [bill], personals: [], monthKey,
+      }),
+    ).toBe(10100);
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 2, periods,
+        bills: [bill], personals: [], monthKey,
+      }),
+    ).toBe(10100);
+  });
+
+  it("PERSONAL repeatWeekly: sums flat allowance across elapsed pay weeks", () => {
+    // Gas $50/wk expected: after P1 → $50, after P3 → $150, after P4 → $200.
+    const item = {
+      id: "i-gas",
+      sourceType: "PERSONAL_NAME" as const,
+      sourcePersonalName: "Gas",
+    };
+    const personals = [
+      { name: "Gas", amount: 50, repeatWeekly: true, splitAcrossWeeks: false },
+    ];
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 0, periods,
+        bills: [], personals, monthKey,
+      }),
+    ).toBe(5000);
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 2, periods,
+        bills: [], personals, monthKey,
+      }),
+    ).toBe(15000);
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 3, periods,
+        bills: [], personals, monthKey,
+      }),
+    ).toBe(20000);
+  });
+
+  it("CUSTOM with null cycle: stays flat regardless of pay week", () => {
+    // A custom envelope with null cycle repeats monthly (not weekly); the
+    // resolver returns the same amount every period so MAX combine keeps
+    // the expectation at the single monthly value, never multiplied.
+    const item = {
+      id: "i-custom",
+      sourceType: "CUSTOM" as const,
+      customAmountCents: 7500,
+      customCycle: null,
+    };
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 0, periods,
+        bills: [], personals: [], monthKey,
+      }),
+    ).toBe(7500);
+    expect(
+      computeExpectedAssignedThroughPeriod({
+        item, throughPeriodIdx: 3, periods,
+        bills: [], personals: [], monthKey,
+      }),
+    ).toBe(7500);
   });
 });
 

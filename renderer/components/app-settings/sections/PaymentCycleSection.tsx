@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * PaymentCycleSection — global payment-cycle + payday picker (AppSettings).
+ *
+ * Writes `paymentCycle` (WEEKLY | BI_WEEKLY) and `payDay` (1-5) to the singleton
+ * AppSettings record. These two values drive how many pay periods appear in the
+ * Plan and Overview each month (WEEKLY → 4-5, BI_WEEKLY → 2-3) and where each
+ * pay-week window starts. Note: individual Income records also carry their own
+ * paymentCycle/payDay — this section edits the app-wide default.
+ */
+
 import {
   Box,
   Typography,
@@ -13,6 +23,9 @@ import {
   PaymentCycle,
 } from "../../../lib/cycle-utils";
 
+// ── Constants ──
+// Weekday values match JS Date.getDay() (1=Mon … 5=Fri). Weekend paydays are
+// omitted intentionally — pay-period utilities require a weekday anchor.
 const PAY_DAY_OPTIONS = [
   { value: 1, label: "Mon" },
   { value: 2, label: "Tue" },
@@ -45,11 +58,17 @@ export const PaymentCycleSection = ({
   currentValue,
   currentPayDay,
 }: PaymentCycleSectionProps) => {
+  // normalizePaymentCycle coerces legacy/unknown strings to a valid PaymentCycle
+  // so the ToggleButtonGroup always has a selected value.
   const current = normalizePaymentCycle(currentValue);
+  // Fall back to Tuesday if payDay hasn't been set yet — matches the historical
+  // default before payDay was user-configurable.
   const payDay = currentPayDay ?? 2;
 
   const { mutate: updateSettings } = useUpdate();
 
+  // ToggleButtonGroup passes `null` when the user clicks the already-selected
+  // button (deselect); guard so we never wipe the value or send a no-op update.
   const handleChange = (_: unknown, next: PaymentCycle | null) => {
     if (!next || next === current) return;
     updateSettings({

@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * YearlyCostList — DataGrid table of once-per-year costs (Settings > Yearly Costs).
+ *
+ * Yearly costs model annual expenses (car registration, property tax) with month
+ * (1-12) + day (1-31) columns. The Date column formats the pair as "Mar 15" via
+ * SHORT_MONTHS and provides a custom sort comparator so month-then-day ordering
+ * works despite the column being backed by only the `month` field.
+ */
+
 import { useMemo } from "react";
 import { GridColDef } from "@mui/x-data-grid";
 import { Typography } from "@mui/material";
@@ -38,6 +47,9 @@ export const YearlyCostList = () => {
         ),
       },
       {
+        // Column is bound to `month` but rendered as "Mmm DD" using month+day.
+        // Custom sortComparator is required because comparing the pre-formatted
+        // string ("Feb 10" vs "Jan 5") would sort alphabetically, not chronologically.
         field: "month",
         headerName: "Date",
         width: 150,

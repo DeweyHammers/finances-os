@@ -1,19 +1,25 @@
 "use client";
 
+/**
+ * PersonalList — DataGrid table of Personal expense records (Settings > Personal).
+ *
+ * Personal items model non-bill recurring spending (Gas, Spending, etc.). Each row
+ * lands in one of four cadences, rendered as chips in the Schedule column:
+ *   - Split Monthly  (splitAcrossWeeks): monthly total spread across pay weeks
+ *   - Every Week     (repeatWeekly):     flat per-pay-week amount
+ *   - Week N         (weekOfMonth):      one-shot in the Nth pay week
+ *   - Due <day>      (dueDate):          one-shot on a specific day-of-month
+ */
+
 import { useMemo } from "react";
 import { GridColDef } from "@mui/x-data-grid";
 import { Box, Typography } from "@mui/material";
 import { PersonalCreate } from "./create";
 import { PersonalEdit } from "./edit";
 import { ResourceList } from "../shared/ResourceList";
+import { getOrdinal } from "../../lib/date-utils";
 
 export const PersonalList = () => {
-  const getOrdinal = (n: number) => {
-    const s = ["th", "st", "nd", "rd"];
-    const v = n % 100;
-    return s[(v - 20) % 10] || s[v] || s[0];
-  };
-
   const columns = useMemo<GridColDef[]>(
     () => [
       {
@@ -43,6 +49,8 @@ export const PersonalList = () => {
         ),
       },
       {
+        // Column is bound to `repeatWeekly` but the renderer inspects three fields to
+        // decide which chip to draw. Precedence: split > weekly > weekOfMonth > dueDate.
         field: "repeatWeekly",
         headerName: "Schedule",
         width: 180,

@@ -624,8 +624,8 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
     // BillShield ($156.38) live in P2, those P2 rows must count as "already
     // committed" so the algorithm only places the REMAINDER ($78.19) into P3
     // or P4 — not the full amount. Deleting the P2 history and re-placing
-    // the full $156.38 in unlocked weeks was the bug that pushed P3+P4 wife
-    // allowance down to $67 each.
+    // the full $156.38 in unlocked weeks was the bug that pushed P3+P4 surplus
+    // down to $67 each.
     const result = balancePayWeeks({
       bills: [{ id: "billShield", amount: 156.38, dueDate: 31 }],
       periods,

@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * W2Section — single-field editor for the legacy `w2Amount` AppSettings value.
+ *
+ * Renders a numeric input for the user's take-home per pay period. The label
+ * and helper text change based on the active paymentCycle (Weekly/Bi-Weekly/
+ * Monthly) so the field reads naturally regardless of cadence. Wired via
+ * react-hook-form's `register` from a parent form (AppSettingsModal).
+ */
+
 import { Box, Typography, TextField, Divider } from "@mui/material";
 import { UseFormRegister } from "react-hook-form";
 import { usePaymentCycle } from "../../../lib/usePaymentCycle";
@@ -9,6 +18,11 @@ interface W2SectionProps {
 }
 
 export const W2Section = ({ register }: W2SectionProps) => {
+  // ── Cadence-aware copy ──
+  // Label + helper text swap based on the app's current paymentCycle setting so
+  // the field reads naturally ("Weekly Amount" / "each weekly pay period" etc.).
+  // Note: MONTHLY is handled here for forward compat even though the settings
+  // UI currently only exposes WEEKLY and BI_WEEKLY.
   const { paymentCycle } = usePaymentCycle();
   const isBiWeekly = paymentCycle === "BI_WEEKLY";
   const isMonthly = paymentCycle === "MONTHLY";

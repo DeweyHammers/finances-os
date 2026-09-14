@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * DashboardCard — small currency/label card used across Overview sections.
+ *
+ * Consistent visual container for a single line item (bill, personal expense,
+ * yearly cost). Left accent bar tinted per pay-period color; right side shows
+ * the amount formatted per `precision`/`isCurrency`/`suffix`. `subtitle`
+ * accepts either a string (whitespace-trimmed) or a ReactNode (passed through
+ * as-is, so BillsOverview can pack multi-line split progress into it).
+ */
+
 import { ReactNode } from "react";
 import { Card, CardContent, Typography, Box } from "@mui/material";
 
@@ -22,6 +32,8 @@ export const DashboardCard: React.FC<DashboardCardProps> = ({
   suffix = "",
   precision = 2,
 }) => {
+  // Strip both ASCII and non-breaking (\u00A0) whitespace \u2014 user-entered
+  // names sometimes contain NBSPs pasted from browser sources.
   const cleanName = name.replace(/^[\s\u00A0]+|[\s\u00A0]+$/g, "");
   // Only trim when it's a plain string; JSX subtitles are passed through as-is
   // so callers can wrap multi-line content in <Box> without losing structure.

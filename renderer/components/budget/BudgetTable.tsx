@@ -1,5 +1,20 @@
 "use client";
 
+/**
+ * BudgetTable — renders the collapsible group → (subsection?) → item hierarchy on the Plan page.
+ *
+ * Owns:
+ *   - Drag-and-drop reordering via @dnd-kit (items across groups/subsections,
+ *     and subsections within a group).
+ *   - Group/subsection expand/collapse state (persisted only in-memory).
+ *   - Row action affordances (edit/delete on hover) and confirm-delete dialogs.
+ *
+ * Data flows in via `propGroups` from BudgetPage; user gestures fire mutations
+ * through Refine's useUpdate/useDelete, and the parent's data queries drive
+ * the next render. Local `groups` mirrors props so drags render immediately
+ * without waiting for a round-trip.
+ */
+
 import { useState, useEffect, useRef } from "react";
 import {
   Box,
@@ -7,6 +22,7 @@ import {
   IconButton,
   Button,
   Collapse,
+  Tooltip,
 } from "@mui/material";
 import { ConfirmDeleteDialog } from "../shared/ConfirmDeleteDialog";
 import { EditSubsectionModal } from "./EditSubsectionModal";
@@ -16,6 +32,7 @@ import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import {
   DndContext,
   closestCorners,
@@ -41,6 +58,12 @@ import { AvailableCell } from "./AvailableCell";
 import { formatMoney } from "../../lib/cents";
 import { resolveItemDisplay } from "../../lib/budget-display";
 import { PayPeriod } from "../../lib/pay-period-utils";
+import {
+  TOOLTIP_AMBER,
+  TooltipBody,
+  TooltipTitle,
+  tooltipStyleProps,
+} from "../../lib/tooltip-styles";
 
 export interface BudgetItem {
   id: string;
@@ -56,6 +79,25 @@ export interface BudgetItem {
   assignedCents: number;
   activityCents: number;
   availableCents: number;
+  /** Cents the plan expects to be assigned by the end of the current pay
+   * week. Any mismatch beyond the $1 tolerance (over OR under) triggers the
+   * out-of-sync badge in BudgetItemRow. Computed by BudgetPage; optional so
+   * callers that don't need the badge don't have to provide it. */
+  expectedAssignedCents?: number;
+  /** Cents the plan expected through the PREVIOUS pay week (one period back
+   * from current). Used to suppress under-fund alerts when the previous
+   * period's target was already met — that shortfall is just "the new pay
+   * week hasn't been assigned yet" (typical on payday morning) rather than
+   * real drift from an Overview change. When previous is 0 (start of month)
+   * or unset, the suppression naturally applies and no warning fires. */
+  expectedAssignedThroughPreviousCents?: number;
+  /** For BILL envelopes: the subset of this month's activity that falls
+   * inside the bill's per-occurrence grace windows (`[dueDate, dueDate+5]`
+   * per occurrence). Used in place of raw `activityCents` when computing
+   * whether the envelope is funded — a payment for the PREVIOUS month's
+   * occurrence that happens to land in this calendar month is excluded.
+   * Undefined for non-BILL envelopes (they fall back to `activityCents`). */
+  activityInBillGraceWindowCents?: number;
 }
 
 export interface BudgetSubsection {
@@ -99,6 +141,10 @@ interface BudgetTableProps {
   onEditItem?: (item: BudgetItem) => void;
 }
 
+// ── Drag-and-drop id helpers ──
+// dnd-kit uses opaque string ids on droppable/sortable nodes. We prefix
+// container-level droppables so `resolveOver` can distinguish "dropped on a
+// group's direct-items zone" vs "on a subsection" vs "on a specific item".
 const groupContainerId = (groupId: string) => `gc:${groupId}`;
 const subsectionContainerId = (subsectionId: string) => `sc:${subsectionId}`;
 
@@ -106,6 +152,10 @@ type GroupRow =
   | { kind: "item"; id: string; sortOrder: number }
   | { kind: "subsection"; id: string; sortOrder: number };
 
+// Interleave direct items and subsections into a single ordered row list.
+// Items and subsections share the same sortOrder space at the group level so
+// the user can drag a subsection between two direct items. Ties break with
+// items first — matches how the popover destination list orders things too.
 const unifiedGroupRows = (g: BudgetGroup): GroupRow[] => {
   const rows: GroupRow[] = [
     ...g.items.map(
@@ -125,6 +175,9 @@ const unifiedGroupRows = (g: BudgetGroup): GroupRow[] => {
   });
 };
 
+// Locate an item's container: either directly under a group or inside one of
+// its subsections. Used constantly by drag handlers to know where an item is
+// coming from before deciding how to move it.
 type ItemLoc =
   | { kind: "direct"; groupId: string }
   | { kind: "sub"; groupId: string; subsectionId: string };
@@ -154,6 +207,9 @@ const findSubsectionGroupId = (
   return null;
 };
 
+// Interpret dnd-kit's "over" target — could be a container droppable, an
+// item id, or (special case) a subsection header id at the group level.
+// `overItemId` becomes the insert-before anchor for within-container drops.
 type OverContainer =
   | { kind: "direct"; groupId: string; overItemId?: string }
   | { kind: "sub"; groupId: string; subsectionId: string; overItemId?: string };
@@ -189,6 +245,10 @@ const resolveOver = (
   return null;
 };
 
+// Immutably relocate an item between containers, preserving all other data.
+// Two-pass: (1) strip the item from its source container, capturing it into
+// `movingItem`; (2) re-insert into the target container at `overItemId`'s
+// index (or append if none). subsectionId is nulled/set to match the target.
 const moveItemBetweenContainers = (
   groups: BudgetGroup[],
   itemId: string,
@@ -292,6 +352,9 @@ export const BudgetTable = ({
     useState<BudgetSubsection | null>(null);
 
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Local mirror of props so drags render optimistically. We only re-sync from
+  // props when NOT mid-drag; otherwise Refine's cache invalidation could snap
+  // rows back to their pre-drag positions mid-gesture and confuse the user.
   const [groups, setGroups] = useState<BudgetGroup[]>(propGroups);
   const propsRef = useRef(propGroups);
 
@@ -304,6 +367,9 @@ export const BudgetTable = ({
     }
   }, [propGroups, activeId]);
 
+  // Default-open: unset entries render as expanded — user must explicitly
+  // collapse to hide. Simplifies onboarding (nothing hidden by default) at
+  // the cost of losing collapse state across renders/nav.
   const isOpen = (id: string) =>
     openGroups[id] === undefined ? true : openGroups[id];
   const isOpenSub = (id: string) =>
@@ -313,6 +379,10 @@ export const BudgetTable = ({
     setActiveId(e.active.id as string);
   };
 
+  // Cross-container item moves happen live during onDragOver so the user
+  // sees the item enter the target container as they hover. Within-container
+  // sort ordering and subsection reordering are finalized in onDragEnd —
+  // reordering mid-hover would fight dnd-kit's own transforms.
   const handleDragOver = (e: DragOverEvent) => {
     const { active, over } = e;
     if (!over) return;
@@ -342,6 +412,9 @@ export const BudgetTable = ({
     });
   };
 
+  // Diff the final drag layout against the original props snapshot and fire
+  // targeted useUpdate calls for anything that moved container or shifted
+  // index. Diffing avoids N writes on every drop when only one row changed.
   const persistChanges = (
     original: BudgetGroup[],
     final: BudgetGroup[],
@@ -413,6 +486,9 @@ export const BudgetTable = ({
     });
   };
 
+  // Final commit for both item and subsection drags. Restores props on
+  // "dropped outside a valid target" (over === null) so the optimistic
+  // in-progress state doesn't stick around after an abandoned drag.
   const handleDragEnd = (e: DragEndEvent) => {
     setActiveId(null);
     const { active, over } = e;
@@ -427,6 +503,8 @@ export const BudgetTable = ({
       let next = prev;
 
       // Subsection drag: reorder rows at group level.
+      // Subsections and direct items share sortOrder space, so a subsection
+      // moving up "past" a direct item must renumber both to stay consistent.
       const subGroupId = findSubsectionGroupId(prev, activeIdStr);
       if (subGroupId) {
         next = prev.map((g) => {
@@ -841,6 +919,8 @@ interface GroupDroppableProps {
   children: React.ReactNode;
 }
 
+// Empty-container droppable so dragging into a group with no items still
+// hits a valid target. Highlights subtly when hovered mid-drag.
 const GroupDroppable = ({ groupId, children }: GroupDroppableProps) => {
   const { setNodeRef, isOver } = useDroppable({
     id: groupContainerId(groupId),
@@ -874,6 +954,10 @@ interface SubsectionBlockProps {
   onEditItem?: (item: BudgetItem) => void;
 }
 
+// ── SubsectionBlock ──
+// Simultaneously a `useSortable` node (draggable within its group) AND a
+// `useDroppable` target (accepts items being dragged in). Own header row
+// with edit/delete affordances plus its own item list.
 const SubsectionBlock = ({
   subsection,
   bills,
@@ -1070,6 +1154,10 @@ const formatItemDisplay = (
   return { displayName, cycles };
 };
 
+// ── BudgetItemRow ──
+// Sortable row rendering one BudgetCategoryItem. The Available cell is the
+// primary interactive element — clicking opens MoveMoneyPopover. Drag handle
+// and hover actions (edit/delete) fade in on row hover.
 const BudgetItemRow = ({
   item,
   bills,
@@ -1095,6 +1183,114 @@ const BudgetItemRow = ({
   };
 
   const { displayName } = formatItemDisplay(item, bills, personals);
+
+  // ── Out-of-sync badge visibility ──
+  // Compares expected against TOTAL FUNDING this month: available + activity.
+  //   available = max(0, prior_carryover) + assigned - activity
+  //   available + activity = max(0, prior_carryover) + assigned
+  // That's "money that has ever been in this envelope this month" — the
+  // right yardstick for "did the plan get its funding". Two cases neither
+  // `assigned` nor `available` alone gets right:
+  //   1. Prior-month carryover funded the bill without a fresh assign
+  //      → assigned would false-flag (assigned=$0 but $X carried over).
+  //   2. Bill was assigned AND paid this month, so available is now $0
+  //      → available would false-flag (envelope did its job then emptied).
+  // available + activity handles both.
+  //
+  // For BILL envelopes we swap `activityCents` for `activityInBillGraceWindowCents`
+  // when available — that excludes payments dated in this calendar month
+  // that were actually FOR THE PREVIOUS month's occurrence (e.g. a bill due
+  // Jul 31 paid Aug 1 lands in Aug's activity but belongs to July). Non-bill
+  // envelopes fall back to raw activityCents since they don't have due
+  // dates to define grace windows.
+  //
+  // Personal envelopes are excluded — repeatWeekly items (Gas, Spending)
+  // fluctuate too much week to week to flag meaningfully, and dated
+  // personals aren't tracked with the same pay-week rigor as bills.
+  // $1 tolerance — bill.amount is an estimate, actual bills often vary by
+  // pennies (utility variance, taxes, rounding in balancePayWeeks cent-splits
+  // where a $101 bill gets split into P1=$33.66, P2=$33.67, P3=$33.67 that
+  // sum to $101 exactly but a per-week snapshot might round to $101.01
+  // cumulatively). Anything under a dollar is noise.
+  // For BILL envelopes: subtract already-consumed grace-window activity from
+  // BOTH `expected` and `fundedCents`. This surfaces "still-to-save" numbers
+  // instead of aggregate month-totals. Example (Starlink Sept view — Sep 4
+  // firing paid, Oct 4 firing pending): aggregate says "expects $176.46,
+  // currently $178.95, extra $2.49" — mathematically right but confusing.
+  // Subtracting the paid $130 from both sides: "expects $46.46, currently
+  // $48.95, extra $2.49" — same $2.49 diff, but the numbers are the ones the
+  // user is actually thinking about (remaining need for Oct 4 vs available
+  // balance right now). The identity holds because
+  // (avail + activity) - expected_full == avail - (expected_full - activity).
+  //
+  // Non-BILL envelopes (CUSTOM null-cycle) keep the aggregate formula —
+  // they have no per-occurrence concept and their activity isn't tied to a
+  // scheduled event.
+  const SYNC_TOLERANCE_CENTS = 100;
+  const expectedFullCents = item.expectedAssignedCents ?? 0;
+  let expected: number;
+  let fundedCents: number;
+  if (item.sourceType === "BILL") {
+    // Clamp graceActivity to ≥ 0 so an inflow (refund) doesn't ADD to expected;
+    // clamp `expected` to ≥ 0 so overpayment on a past occurrence doesn't
+    // drive it negative (it just means that occ was fully covered).
+    const graceActivity = Math.max(
+      0,
+      item.activityInBillGraceWindowCents ?? 0,
+    );
+    expected = Math.max(0, expectedFullCents - graceActivity);
+    fundedCents = item.availableCents;
+  } else {
+    const activityForFunding = item.activityCents;
+    expected = expectedFullCents;
+    fundedCents = item.availableCents + activityForFunding;
+  }
+  // Bidirectional sync check — fire the badge whenever the envelope doesn't
+  // match the plan schedule, whether short OR over. Over-funding matters
+  // because the extra can be moved to a category that actually needs it
+  // (e.g. Spending) instead of sitting idle in a bill envelope.
+  //
+  // Payday suppression for under-fund: when the PREVIOUS pay week's target
+  // was already met, an under-fund vs current is treated as "haven't done
+  // today's payday assignment yet" and silenced. If Overview changed (real
+  // drift) the previous target won't be met either → warning fires. Over-
+  // fund always fires because the shortfall-timing story doesn't apply.
+  const diffCents = fundedCents - expected;
+  const isOverfunded = diffCents > SYNC_TOLERANCE_CENTS;
+  const isUnderfundedRaw = diffCents < -SYNC_TOLERANCE_CENTS;
+  const expectedPrevious = item.expectedAssignedThroughPreviousCents ?? 0;
+  // Apply the same BILL grace-window subtraction to the previous target so
+  // the "previous met" comparison uses like-for-like numbers with fundedCents.
+  const expectedPreviousAdjusted =
+    item.sourceType === "BILL"
+      ? Math.max(
+          0,
+          expectedPrevious - Math.max(0, item.activityInBillGraceWindowCents ?? 0),
+        )
+      : expectedPrevious;
+  const previousMet = fundedCents >= expectedPreviousAdjusted - SYNC_TOLERANCE_CENTS;
+  const isUnderfunded = isUnderfundedRaw && !previousMet;
+  const outOfSyncCents = Math.abs(diffCents);
+  const showOutOfSync =
+    item.sourceType !== "PERSONAL_NAME" &&
+    // Use expectedFullCents (not the reduced `expected`) as the in-play guard:
+    // a fully-paid bill's expected == 0 after subtracting activity, but the
+    // envelope is still worth checking for over/under (e.g. leftover cash
+    // sitting in a paid Starlink envelope should still flag).
+    expectedFullCents > 0 &&
+    (isOverfunded || isUnderfunded);
+  // Find the last-started pay week for the tooltip label — matches the
+  // period BudgetPage used when computing `expected` (last period whose
+  // startDay is ≤ today.getDate()). Falls back to a neutral phrase when
+  // no pay week has started yet or periods is empty.
+  const currentPayWeekLabel = (() => {
+    const today = new Date();
+    let match: PayPeriod | undefined;
+    periods.forEach((p) => {
+      if (p.startDay <= today.getDate()) match = p;
+    });
+    return match?.label ?? "this pay week";
+  })();
 
   return (
     <Box
@@ -1138,6 +1334,30 @@ const BudgetItemRow = ({
         >
           {displayName}
         </Typography>
+        {showOutOfSync && (
+          <Tooltip
+            placement="top"
+            arrow
+            {...tooltipStyleProps(TOOLTIP_AMBER)}
+            title={
+              <>
+                <TooltipTitle color={TOOLTIP_AMBER}>Out of sync with plan</TooltipTitle>
+                <TooltipBody>
+                  Plan expects {formatMoney(expected)} funded by {currentPayWeekLabel} — currently {formatMoney(fundedCents)} funded. {isOverfunded ? `Extra ${formatMoney(outOfSyncCents)} can be moved elsewhere.` : `Short ${formatMoney(outOfSyncCents)}.`}
+                </TooltipBody>
+              </>
+            }
+          >
+            <WarningAmberIcon
+              sx={{
+                fontSize: 16,
+                color: TOOLTIP_AMBER,
+                flexShrink: 0,
+                cursor: "help",
+              }}
+            />
+          </Tooltip>
+        )}
       </Box>
       <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
         <AvailableCell

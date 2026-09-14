@@ -34,7 +34,7 @@ model AppSettings {
   upworkExpensesHoldAmount  Float   @default(0.00)
   upworkMinWithdrawalAmount Float   @default(0.00)
   wifeMonthlyAmount         Float   @default(0.00)
-  wifeWeeklyTargetCents     Int     @default(30000)  // auto-balance target: min surplus per pay week after bills+personal
+  wifeWeeklyTargetCents     Int     @default(30000)  // Surplus Target (UI label). Column name kept from original design; auto-balance treats as min surplus per pay week after bills+personal.
 }
 
 model Earning {

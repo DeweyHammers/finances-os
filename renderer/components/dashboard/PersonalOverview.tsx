@@ -1,5 +1,21 @@
 "use client";
 
+/**
+ * PersonalOverview — pay-week breakdown of personal (non-bill) expenses.
+ *
+ * Renders three flavors of personal item per pay period:
+ *   1. `repeatWeekly` — a flat entry every pay week (Gas, Spending, etc.).
+ *   2. Fixed with `weekOfMonth` or `dueDate` — appears in exactly one week.
+ *   3. `splitAcrossWeeks` — monthly amount distributed proportionally via
+ *      `computeSplitPersonalAllocations` so surplus-target headroom is honored
+ *      each pay week (the split's share shrinks in weeks with heavy bills).
+ *
+ * Read-only presenter. Needs `bills` + `incomes` in addition to
+ * `personalBills` because split distribution depends on per-week room
+ * (income − bills − fixed personal). `splits` are the BillSplit rows so
+ * bill-side allocations aren't miscounted while sizing split personals.
+ */
+
 import { Box, Grid, Typography, Paper } from "@mui/material";
 import { SummarySection } from "./SummarySection";
 import { DashboardCard } from "./DashboardCard";
@@ -57,17 +73,25 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   const periods = getPayPeriodsForMonth(year, month, payWeekday, today, biWeekly);
   const monthKey = monthKeyOf(year, month);
 
+  // ── Partition personals by allocation strategy ──
+  // fixed = single-week or repeat-weekly items (amount displayed as-is).
+  // split = monthly amount that needs to be sliced across pay weeks.
   const fixedPersonals = personalBills.filter((p) => !p.splitAcrossWeeks);
   const splitPersonals = personalBills.filter((p) => p.splitAcrossWeeks);
 
   // Monthly personal total: repeats × N, split as monthly total once, fixed once.
+  // Multiplying repeatWeekly items by period count is intentional — user sees
+  // "Gas $80" but the real monthly obligation is $80 × pay weeks in this view.
   const totalPersonal = personalBills.reduce((acc, curr) => {
     const amount = Number(curr.amount) || 0;
     if (curr.repeatWeekly) return acc + amount * periods.length;
     return acc + amount;
   }, 0);
 
-  // Compute room per period so splits can be distributed.
+  // ── Room-per-period inputs for split distribution ──
+  // These three arrays (income, bills, fixed personal) feed
+  // computeSplitPersonalAllocations so it can compute what's left after fixed
+  // obligations in each week and keep the surplus target satisfied.
   const incomePerPeriodCents: number[] = periods.map((period) => {
     let total = 0;
     incomes.forEach((income: any) => {
@@ -127,6 +151,10 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
     splits: splitPersonals.map((p) => ({ id: p.id, amount: Number(p.amount) || 0 })),
   });
 
+  // Two ways to bind a fixed personal to a pay week:
+  //   - explicit `weekOfMonth` (user override, always wins) → `P{n}`
+  //   - fallback to natural attribution by `dueDate` via `getBillPeriodKey`
+  //     which handles forward-extension across the view boundary.
   const getFixedPeriodKey = (b: PersonalBill) => {
     if (b.weekOfMonth != null) return `P${b.weekOfMonth}`;
     return getBillPeriodKey(Number(b.dueDate), periods);
@@ -137,6 +165,8 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
       (b) => b.repeatWeekly || getFixedPeriodKey(b) === period.key,
     );
 
+  // Drop zero-cent split slices — a split can legitimately allocate $0 to a
+  // week if all room is consumed by bills, and rendering a $0 card is noise.
   const getPeriodSplitAllocations = (period: PayPeriod, i: number) =>
     splitPersonals
       .map((sp) => {
@@ -152,10 +182,15 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   );
 
   const renderPeriod = (period: PayPeriod, i: number) => {
+    // Prefer occurrence-in-period coord for sort (handles next-month forward
+    // extension correctly); fall back to raw dueDate when the item has no
+    // resolved occurrence in this period (e.g. weekOfMonth-pinned items).
     const occCoord = (b: PersonalBill): number => {
       const occ = getBillOccurrenceInPeriod(Number(b.dueDate), period);
       return occ ? occ.coord : Number(b.dueDate) || 0;
     };
+    // Sort order: repeatWeekly items first (they anchor every week), then
+    // dated items in chronological order within the week.
     const fixedForPeriod = getPeriodFixedBills(period).sort((a, b) => {
       if (a.repeatWeekly && !b.repeatWeekly) return -1;
       if (!a.repeatWeekly && b.repeatWeekly) return 1;
@@ -170,6 +205,8 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
       splitsForPeriod.reduce((acc, x) => acc + x.cents / 100, 0);
 
     return (
+      // Responsive width based on ACTIVE (non-empty) periods — mirrors the
+      // pattern in BillsOverview so both sections align column-by-column.
       <Grid
         key={period.key}
         size={{
@@ -289,8 +326,6 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
     <SummarySection
       title="Personal"
       icon={<PersonIcon />}
-      totalLabel="Personal Total"
-      totalAmount={totalPersonal}
     >
       <Grid container spacing={3}>
         {personalBills.length > 0 ? (

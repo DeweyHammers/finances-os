@@ -1,3 +1,15 @@
+/**
+ * budget-display — Resolves the "current" display label for a budget item.
+ *
+ * A CategoryItem in the Plan is a lightweight pointer: `sourceType` is BILL,
+ * PERSONAL_NAME, or CUSTOM, and it references a Bill.id / Personal.name /
+ * inline custom amount. When the underlying Bill (amount, dueDate) or
+ * Personal (amount) changes, we want the Plan UI to reflect the LIVE values
+ * without editing the item's own denormalized `name`. `resolveItemDisplay`
+ * does the join at render time and gracefully falls back to the item's own
+ * stored name when the source has been removed (so the Plan doesn't crash
+ * on an orphaned reference — the user just sees the old label).
+ */
 import { getOrdinal } from "./date-utils";
 
 export interface DisplayBill {
@@ -47,12 +59,17 @@ export const resolveItemDisplay = (
     const bill = bills.find((b) => b.id === item.sourceBillId);
     if (bill) {
       const amount = Number(bill.amount).toFixed(2);
+      // Rich label format: "Netflix ($15.99 - 5th)". Includes the live
+      // amount + due date so the Plan surfaces bill changes without needing
+      // the user to re-add the item.
       return {
         liveName: bill.name,
         displayName: `${bill.name} ($${amount} - ${bill.dueDate}${getOrdinal(bill.dueDate)})`,
         cycles: [bill.withdrawalCycle],
       };
     }
+    // Bill was deleted — keep the item's own stored name so the Plan row
+    // still renders. User can manually delete or re-link.
     return { liveName: item.name, displayName: item.name, cycles: [] };
   }
 
@@ -73,6 +90,8 @@ export const resolveItemDisplay = (
   }
 
   if (item.sourceType === "CUSTOM") {
+    // Custom items store all display data on themselves — no join needed.
+    // A null customCycle means "every cycle" (renders without a chip).
     return {
       liveName: item.name,
       displayName: item.name,
@@ -80,5 +99,6 @@ export const resolveItemDisplay = (
     };
   }
 
+  // Unknown sourceType — degrade to raw name rather than crash.
   return { liveName: item.name, displayName: item.name, cycles: [] };
 };

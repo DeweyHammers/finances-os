@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * SummarySection — titled Paper wrapper used by every Overview section.
+ *
+ * Renders a consistent header (icon + title + optional totals pill) followed
+ * by arbitrary children. Used by BillsOverview / PersonalOverview / YearlyOverview
+ * so all sections share the same card chrome. Set either `totalAmount` (formatted
+ * as USD) or `customTotal` (raw string) — the totals pill hides when neither
+ * is provided.
+ */
+
 import { Box, Typography, Paper, Divider } from "@mui/material";
 
 interface SummarySectionProps {
@@ -21,6 +31,8 @@ export const SummarySection: React.FC<SummarySectionProps> = ({
   sx = {},
   icon,
 }) => {
+  // Totals pill requires BOTH a label AND some value — a label alone would
+  // render an empty pill, and a value alone has no context.
   const showSummary =
     totalLabel !== undefined &&
     (totalAmount !== undefined || customTotal !== undefined);
