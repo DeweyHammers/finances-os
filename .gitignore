@@ -17,6 +17,9 @@ next-env.d.ts
 *.sqlite-journal
 /prisma/dev.db
 /prisma/dev.db-journal
+# Timestamped auto-backups from db:pull / db:push (scripts/db-sync.cjs) —
+# kept on disk as rollback insurance, never committed.
+/prisma/*.db.*.bak
 
 # claude
 .claude
