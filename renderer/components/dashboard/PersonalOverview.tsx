@@ -79,15 +79,6 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   const fixedPersonals = personalBills.filter((p) => !p.splitAcrossWeeks);
   const splitPersonals = personalBills.filter((p) => p.splitAcrossWeeks);
 
-  // Monthly personal total: repeats × N, split as monthly total once, fixed once.
-  // Multiplying repeatWeekly items by period count is intentional — user sees
-  // "Gas $80" but the real monthly obligation is $80 × pay weeks in this view.
-  const totalPersonal = personalBills.reduce((acc, curr) => {
-    const amount = Number(curr.amount) || 0;
-    if (curr.repeatWeekly) return acc + amount * periods.length;
-    return acc + amount;
-  }, 0);
-
   // ── Room-per-period inputs for split distribution ──
   // These three arrays (income, bills, fixed personal) feed
   // computeSplitPersonalAllocations so it can compute what's left after fixed
