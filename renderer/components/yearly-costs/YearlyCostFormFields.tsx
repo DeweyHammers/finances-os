@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * YearlyCostFormFields — shared input set for YearlyCost create + edit modals.
+ *
+ * Fields: name (string), amount (dollars, number), month (1-12 dropdown backed
+ * by MONTHS constant), day (1-31 integer). All four are required. Month uses
+ * Controller because MUI's Select needs a controlled value; the other fields
+ * use plain register() with react-hook-form validators.
+ */
+
 import { TextField, MenuItem, Grid } from "@mui/material";
 import { Controller, UseFormReturn } from "react-hook-form";
 import { MONTHS } from "../../lib/constants";

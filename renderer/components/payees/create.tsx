@@ -1,5 +1,12 @@
 "use client";
 
+/**
+ * PayeeCreate — Refine create-modal wrapper for the Payee resource.
+ *
+ * Rare in practice: most payees are created ad hoc via PayeeAutocomplete's
+ * freeSolo path. This modal exists mainly for renames-via-delete-and-create.
+ */
+
 import { UseModalFormReturnType } from "@refinedev/react-hook-form";
 import { BaseRecord, HttpError } from "@refinedev/core";
 import { FieldValues } from "react-hook-form";

@@ -1,5 +1,16 @@
 "use client";
 
+/**
+ * ResourceList — generic CRUD list page (DataGrid + create/edit modals + delete confirm).
+ *
+ * The workhorse behind every resource route (/Bill, /Personal, /Payees,
+ * /YearlyCosts, etc.). Renders a search bar, optional extra filters, an MUI
+ * DataGrid with a per-row Edit/Delete actions column, a "Create New" button,
+ * and hosts caller-supplied create/edit modal components. Wires everything to
+ * Refine.dev (useDataGrid, useModalForm, useDelete). Kept resource-agnostic —
+ * callers pass in `resource`, `columns`, and the modal components.
+ */
+
 import { useState, useMemo, FC, ChangeEvent } from "react";
 import { useDataGrid } from "@refinedev/mui";
 import { DataGrid, GridColDef, GridSortModel } from "@mui/x-data-grid";
@@ -24,6 +35,10 @@ import AddIcon from "@mui/icons-material/Add";
 import SearchIcon from "@mui/icons-material/Search";
 import { FieldValues } from "react-hook-form";
 
+// Props shape for the generic list. `createModal` / `editModal` receive the
+// Refine useModalForm return-value so callers can wire their own field JSX.
+// `renderExtraFilters` lets a caller add resource-specific filter controls
+// (e.g. a category dropdown on /Bill) beside the built-in search box.
 interface ResourceListProps {
   resource: string;
   title: string;
@@ -58,9 +73,15 @@ export const ResourceList: FC<ResourceListProps> = ({
   searchField = "name",
   gridSx = {},
 }) => {
+  // ── Delete flow state ──
+  // deleteId non-null = ConfirmDeleteDialog is open for that row.
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const { mutate: deleteMutate } = useDelete();
 
+  // ── Default sorters ──
+  // If the caller didn't supply sorters, auto-sort by `date` (preferred) or
+  // `dueDate` descending so newest records surface first — matches the
+  // convention across every list page.
   const initialSorters = useMemo(() => {
     if (userInitialSorters) return userInitialSorters;
 
@@ -79,15 +100,23 @@ export const ResourceList: FC<ResourceListProps> = ({
     }
     return [];
   }, [userColumns, userInitialSorters]);
+  // Memoize the caller-supplied filters so useDataGrid doesn't reset on every
+  // parent render (its "initial" arg is captured by reference).
   const memoizedInitialFilters = useMemo(
     () => initialFilters,
     [initialFilters],
   );
 
+  // Local sort model — we use client-side sorting (see sortingMode="client"
+  // below) so this state is the source of truth for the DataGrid header UI.
   const [sortModel, setSortModel] = useState<GridSortModel>(() =>
     initialSorters.map((s) => ({ field: s.field, sort: s.order })),
   );
 
+  // ── Refine DataGrid binding ──
+  // sorters.mode="off" disables Refine's server-side sort orchestration
+  // because we sort client-side. syncWithLocation persists filter/pagination
+  // state in the URL so back-nav restores the list view.
   const {
     dataGridProps,
     setFilters,
@@ -104,19 +133,16 @@ export const ResourceList: FC<ResourceListProps> = ({
     },
   });
 
-  const resourcesWithDate: string[] = [];
-
+  // ── Modal form bindings ──
+  // Two independent useModalForm instances (create + edit). syncWithLocation
+  // pushes ?modal=create|edit&id=... to the URL so browser back closes the
+  // modal instead of leaving the app.
   const createModalProps = useModalForm<BaseRecord, HttpError, FieldValues>({
     refineCoreProps: {
       resource: resource,
       action: "create",
     },
     syncWithLocation: true,
-    defaultValues: resourcesWithDate.includes(resource)
-      ? {
-          date: new Date().toISOString().split("T")[0],
-        }
-      : {},
   });
 
   const editModalProps = useModalForm<BaseRecord, HttpError, FieldValues>({
@@ -144,6 +170,9 @@ export const ResourceList: FC<ResourceListProps> = ({
     }
   };
 
+  // ── Column set ──
+  // Caller-supplied columns + a right-aligned Actions column with per-row
+  // edit and delete IconButtons. Actions column is not sortable.
   const columns = useMemo<GridColDef[]>(
     () => [
       ...userColumns,
@@ -197,6 +226,9 @@ export const ResourceList: FC<ResourceListProps> = ({
     [userColumns, showEdit],
   );
 
+  // Search box handler — merges into current filters so extra filters (from
+  // renderExtraFilters) survive. Passing `undefined` for empty input clears
+  // the search filter cleanly instead of filtering on empty string.
   const handleSearch = (e: ChangeEvent<HTMLInputElement>) => {
     setFilters(
       [
@@ -247,6 +279,9 @@ export const ResourceList: FC<ResourceListProps> = ({
           <Typography variant="h4" sx={{ fontWeight: 900, color: "white" }}>
             {title}
           </Typography>
+          {/* "Create New <Singular>" — replace(/s$/) is a naive singularizer
+              that works for our resource names (Bill, Personal, Payee, etc.).
+              Doesn't handle irregular plurals; add manual handling if needed. */}
           <Button
             variant="contained"
             disableElevation
@@ -320,6 +355,11 @@ export const ResourceList: FC<ResourceListProps> = ({
             flexDirection: "column",
           }}
         >
+          {/* DataGrid: client-side sorting because our datasets are small and
+              server-side sort adds latency + complexity. Row selection is off
+              (each row's actions column carries the interactions we care
+              about); column menu/filter icons are hidden because we surface
+              those controls in the toolbar above. */}
           <DataGrid
             {...(dataGridProps as any)}
             columns={columns}
@@ -375,6 +415,8 @@ export const ResourceList: FC<ResourceListProps> = ({
         </Paper>
       </Box>
 
+      {/* Caller-supplied modals — we own the useModalForm state, they own the
+          field JSX. Delete uses our shared ConfirmDeleteDialog. */}
       <CreateModal modalProps={createModalProps} />
       <EditModal modalProps={editModalProps} />
 

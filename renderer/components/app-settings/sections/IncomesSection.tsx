@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * IncomesSection — CRUD editor for the Income resource (embeddable + standalone).
+ *
+ * Renders a list of income sources with per-row edit/delete plus a modal for
+ * add/edit. Mounted inside the AppSettingsModal AND as the standalone /Income
+ * route. Exactly one income must be marked Primary — the Primary income's
+ * paymentCycle + payDay drive bill grouping and the Plan/Overview pay periods.
+ */
+
 import { useState } from "react";
 import {
   Box,
@@ -25,6 +34,10 @@ import StarIcon from "@mui/icons-material/Star";
 import { useList, useCreate, useUpdate, useDelete } from "@refinedev/core";
 import { CancelButton } from "../../shared/CancelButton";
 
+// ── Constants ──
+// Weekday values match JS Date.getDay() convention (0=Sun … 6=Sat). Weekend
+// paydays are intentionally omitted — no real-world payroll runs Sat/Sun and
+// the pay-period utilities assume a weekday anchor.
 const PAY_DAY_OPTIONS = [
   { value: 1, label: "Mon" },
   { value: 2, label: "Tue" },
@@ -33,6 +46,7 @@ const PAY_DAY_OPTIONS = [
   { value: 5, label: "Fri" },
 ];
 
+// Fast value→label lookup used to render each income row's cadence pill.
 const PAY_DAY_LABEL: Record<number, string> = Object.fromEntries(
   PAY_DAY_OPTIONS.map((o) => [o.value, o.label]),
 );
@@ -42,6 +56,9 @@ const CYCLE_OPTIONS = [
   { value: "BI_WEEKLY", label: "Bi-Weekly" },
 ];
 
+// Local form state — `amount` is stored as string so the raw TextField input
+// survives editing (empty, partial decimals, etc.) and is coerced on save.
+// `payWeekOffset` only matters for BI_WEEKLY (0 = 1st & 3rd week, 1 = 2nd & 4th).
 interface IncomeFormState {
   name: string;
   amount: string;
@@ -51,6 +68,8 @@ interface IncomeFormState {
   isPrimary: boolean;
 }
 
+// Defaults: WEEKLY / Wednesday payday / not primary. `isPrimary` gets flipped
+// to true in openAdd() when this is the very first income being created.
 const DEFAULT_FORM: IncomeFormState = {
   name: "",
   amount: "",
@@ -61,11 +80,15 @@ const DEFAULT_FORM: IncomeFormState = {
 };
 
 export const IncomesSection = () => {
+  // ── Local UI state ──
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<IncomeFormState>(DEFAULT_FORM);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  // ── Data ──
+  // Sort primary first so it shows at the top of the list with its distinctive
+  // border/badge treatment.
   const { query } = useList({
     resource: "Income",
     pagination: { mode: "off" },
@@ -90,6 +113,10 @@ export const IncomesSection = () => {
     currentPrimary !== null &&
     (editingId === null || editingIncome?.id !== currentPrimary.id);
 
+  // ── Handlers ──
+  // First income created is auto-marked primary — the app REQUIRES exactly one
+  // primary income to compute pay periods; we can't let the user save a state
+  // with zero.
   const openAdd = () => {
     setEditingId(null);
     setForm({ ...DEFAULT_FORM, isPrimary: incomes.length === 0 });
@@ -110,6 +137,8 @@ export const IncomesSection = () => {
   };
 
   const handleSave = () => {
+    // payWeekOffset is only meaningful for BI_WEEKLY. Force to 0 for WEEKLY so
+    // stale offsets from a prior bi-weekly cycle don't leak into the record.
     const values = {
       name: form.name.trim(),
       amount: Number(form.amount),
@@ -118,6 +147,9 @@ export const IncomesSection = () => {
       payWeekOffset: form.paymentCycle === "BI_WEEKLY" ? form.payWeekOffset : 0,
       isPrimary: form.isPrimary,
     };
+    // Notifications suppressed because IncomesSection can be mounted twice
+    // (settings modal + /Income route) — duplicate Refine toasts would produce
+    // React duplicate-key warnings.
     if (editingId) {
       updateIncome({
         resource: "Income",
@@ -145,8 +177,11 @@ export const IncomesSection = () => {
     setDeleteId(null);
   };
 
+  // Primary income cannot be deleted — the app needs one to compute pay periods.
+  // User must first promote another income to primary, then delete this one.
   const canDelete = (income: any) => !income.isPrimary;
 
+  // ── Render ──
   return (
     <Box>
       <Box
@@ -291,7 +326,7 @@ export const IncomesSection = () => {
         </Box>
       )}
 
-      {/* Add / Edit Modal */}
+      {/* ── Add / Edit Modal ── */}
       <Dialog
         open={modalOpen}
         onClose={() => setModalOpen(false)}
@@ -529,7 +564,7 @@ export const IncomesSection = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Delete Confirmation */}
+      {/* ── Delete Confirmation ── */}
       <Dialog
         open={!!deleteId}
         onClose={() => setDeleteId(null)}

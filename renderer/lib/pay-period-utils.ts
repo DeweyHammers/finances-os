@@ -1,3 +1,52 @@
+/**
+ * pay-period-utils — Pay-period model + bill placement / auto-balance algorithm.
+ *
+ * This is the largest and highest-stakes utility in the app. It encodes how
+ * a month's paychecks are sliced into "pay weeks" (P1..PN), how monthly
+ * recurring bills are attributed to those weeks, and how the auto-balance
+ * optimizer levels bill totals across weeks while preserving locked
+ * (already-past) allocations.
+ *
+ * KEY CONCEPTS
+ *
+ * 1. FORWARD EXTENSION (no backward extension). A pay period BELONGS to the
+ *    month of its payday. If a month's last paycheck lands on the 29th and
+ *    the next payday is Aug 5, the July view's final period runs Jul 29 →
+ *    Aug 4. Bills firing on Aug 1-4 are funded from the Jul 29 paycheck and
+ *    surface in July's view. There is NO backward extension — an Aug 6 bill
+ *    funded by the Aug 5 paycheck is in August's view, not July's.
+ *
+ * 2. "COORD" SPACE. Every day in the view has a coord = day-of-current-month
+ *    (1..31), extended past daysInMonth to represent forward-extension days
+ *    (e.g. Aug 3 seen from July = coord 34 when July has 31 days). Occurrence
+ *    matching + eligibility checks all work in coord space.
+ *
+ * 3. MULTI-OCCURRENCE BILLS. A view can contain up to TWO occurrences of the
+ *    same monthly bill: the in-month firing AND the next-month forward-
+ *    extended firing (when 5 paydays land in the month). `getBillOccurrencesInView`
+ *    enumerates both. `BillSplit.occurrenceCoord` distinguishes which one a
+ *    persisted split funds. `balancePayWeeks` places each as an independent
+ *    unit so a bill never silently disappears.
+ *
+ * 4. ORPHAN-FALLBACK SKIP. When a bill fires BEFORE this view's first payday
+ *    AND its next-month occurrence is past the forward-extension window, we
+ *    attribute it to the last period as a fallback (never drop the bill).
+ *    EXCEPT: when the NEXT view's first payday is ≤ the bill's dueDate, the
+ *    next view naturally covers the firing and orphaning here would double-
+ *    count. See `nextViewFirstPayday` on PayPeriod.
+ *
+ * 5. LOCKED WEEKS. Past pay weeks (endDay < todayCoord) have their existing
+ *    BillSplit rows preserved verbatim (`lockedAllocations`). The algorithm
+ *    is still ALLOWED to plan placement into locked weeks — "locked" means
+ *    "preserve existing splits", not "refuse to plan there". This enables
+ *    retroactive suggestions ("you should have saved from Aug P4 for the
+ *    Sept P1 crush").
+ *
+ * See CLAUDE.md → "Multi-occurrence bills", "Orphan-fallback skip",
+ * "DueDate > daysInMonth clamping", "Retroactive planning" for more.
+ */
+
+/** Per-period accent color — indexed by 0-based pay-week position. */
 const PERIOD_COLORS = ["#818cf8", "#ec4899", "#38bdf8", "#c084fc", "#f59e0b", "#22d3ee"];
 
 export interface PayPeriod {
@@ -51,6 +100,9 @@ export function getPayPeriodsForMonth(
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const reference = today ?? new Date();
 
+  // Enumerate the payday days-of-month for a given (year, month). For
+  // BI_WEEKLY, keep every other weekly payday starting from the first (so
+  // 5-payday months collapse to 3 BI_WEEKLY payments, 4-payday to 2, etc).
   const listPayDays = (y: number, m: number): number[] => {
     const dim = new Date(y, m + 1, 0).getDate();
     const days: number[] = [];
@@ -70,6 +122,10 @@ export function getPayPeriodsForMonth(
   const nextFirstPayday =
     nextMonthPayDays.length > 0 ? nextMonthPayDays[0] : null;
 
+  // Each period starts on its payday and ends the day BEFORE the next payday.
+  // The final period gets special treatment: it extends past daysInMonth to
+  // capture bills funded by this month's last paycheck that land in the
+  // opening days of next month.
   const starts: number[] = [...monthPayDays];
   const ends: number[] = starts.slice(1).map((s) => s - 1);
   // Forward-extend the last period. If next month starts on a payday, no
@@ -91,6 +147,8 @@ export function getPayPeriodsForMonth(
   return starts.map((startDay, i) => {
     const endDay = ends[i];
 
+    // Human label for the period: "Aug 12 – Aug 18", or "Aug 29 – Sep 4"
+    // when the period forward-extends into next month.
     const startLabel = `${monthAbbr} ${startDay}`;
     const endLabel =
       endDay > daysInMonth
@@ -99,6 +157,9 @@ export function getPayPeriodsForMonth(
     const dateRange =
       startLabel === endLabel ? startLabel : `${startLabel} – ${endLabel}`;
 
+    // "isCurrent" highlights today's pay week in the Overview. Two cases:
+    //  (a) today is in this view's month AND its day is in the period, or
+    //  (b) today is in next month AND within the forward-extension slice.
     const refY = reference.getFullYear();
     const refM = reference.getMonth();
     const refD = reference.getDate();
@@ -132,6 +193,12 @@ export function getPayPeriodsForMonth(
   });
 }
 
+/**
+ * Clamps a day-of-month to the given month's actual length. Used when a bill
+ * with dueDate=31 needs to be rendered in a 30-day month — clamp to 30
+ * rather than leak into next-month coord space (which would falsely display
+ * as "Sept 1st"). See CLAUDE.md → "DueDate > daysInMonth clamping".
+ */
 export function clampDayToMonth(day: number, year: number, month: number): number {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   return Math.min(day, daysInMonth);
@@ -178,6 +245,8 @@ export function getBillOccurrencesInView(
   const daysInMonth = periods[0].daysInMonth;
   const firstStart = periods[0].startDay;
   const lastEnd = periods[periods.length - 1].endDay;
+  // Coordinate the next-month firing would land at inside THIS view (day-of
+  // current-month + daysInMonth). E.g. Aug view with Sept 4 firing → coord 35.
   const nextMonthCoord = dueDate + daysInMonth;
   const nextViewFirstPayday = periods[0].nextViewFirstPayday;
 
@@ -214,6 +283,9 @@ export function getBillOccurrencesInView(
     }
   }
 
+  // Locates the pay week whose range contains the coord. Orphans always
+  // fall into the LAST period — the paycheck closest to the (now-past) due
+  // date is the best proxy for where a user would have covered it from.
   const findWeekIdx = (coord: number, isOrphan: boolean): number => {
     if (isOrphan) return periods.length - 1;
     for (let i = 0; i < periods.length; i++) {
@@ -252,6 +324,8 @@ export function getBillPeriodKey(
   const nextMonth = occs.find((o) => o.inNextMonth);
   return (nextMonth ?? occs[0]).periodKey;
 }
+
+// ── BillSplit schema + allocation helpers ──
 
 /**
  * Month-key ("YYYY-MM") derived from a view's year/month. Used to identify
@@ -313,6 +387,9 @@ export function getBillAllocationsForBill(
       s.weekIndex < periods.length,
   );
 
+  // Primary occurrence = the "next-month-preferred" one (matches the old
+  // getBillPeriodKey precedence). Legacy split rows written before
+  // occurrenceCoord existed are pinned to this occurrence for back-compat.
   const primaryOcc = occurrences.find((o) => o.inNextMonth) ?? occurrences[0];
   const amountCents = Math.round(amountDollars * 100);
   const result: BillAllocation[] = [];
@@ -328,6 +405,9 @@ export function getBillAllocationsForBill(
     }
 
     if (occSplits.length > 0) {
+      // Split rows exist for this occurrence — honor them verbatim.
+      // isSplit is per-occurrence: a bill with two occurrences that each
+      // sit in a single week is NOT considered "split".
       const sorted = [...occSplits].sort((a, b) => a.weekIndex - b.weekIndex);
       const isSplit = sorted.length > 1;
       for (const s of sorted) {
@@ -340,6 +420,9 @@ export function getBillAllocationsForBill(
         });
       }
     } else {
+      // No splits → natural attribution: full bill amount lands in the
+      // occurrence's home period. Ensures a bill never silently disappears
+      // just because BillSplit hasn't been populated yet.
       result.push({
         weekIndex: occ.weekIndex,
         periodKey: occ.periodKey,
@@ -412,6 +495,8 @@ export function getBillAllocationCentsForPeriod(
   const hit = allocs.find((a) => a.periodKey === periodKey);
   return hit ? hit.amountCents : 0;
 }
+
+// ── Auto-balance algorithm (balancePayWeeks) ──
 
 export interface BillForBalance {
   id: string;
@@ -506,6 +591,9 @@ export function distributeBillLevel(
   if (N === 0) return [];
   if (amountCents <= 0) return new Array(N).fill(0);
 
+  // Start with every week included; iteratively drop weeks whose existing
+  // bills already exceed the mean (they can't absorb any more without
+  // making things WORSE).
   const included = new Set<number>();
   for (let i = 0; i < N; i++) included.add(i);
 
@@ -555,7 +643,9 @@ export function distributeBillLevel(
     placed += result[x.i];
   }
   let leftover = amountCents - placed;
-  // Distribute remaining cents to the largest remainders.
+  // Distribute remaining cents to the largest remainders (Hamilton /
+  // largest-remainder method — guarantees the outputs sum to amountCents
+  // exactly while minimizing per-week rounding drift).
   ideals.sort((a, b) => (b.ideal - Math.floor(b.ideal)) - (a.ideal - Math.floor(a.ideal)));
   for (const x of ideals) {
     if (leftover <= 0) break;
@@ -609,6 +699,9 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     if (todayCoord > 0 && periods[i].endDay <= todayCoord) lockedWeeks.add(i);
   }
 
+  // "budget" per period = the cents available for bills after subtracting
+  // fixed personal expenses and the surplus-target we want to preserve.
+  // This is what perWeek needs to stay under (or shortfall exists).
   const budget: number[] = periods.map(
     (_, i) =>
       (incomePerPeriodCents[i] ?? 0) -
@@ -745,6 +838,16 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
 
   // Phase 2: iterative split refinement. Splits act on individual OCCURRENCES —
   // splitting one occurrence of a bill doesn't touch the other.
+  //
+  // Each iteration:
+  //   1. Find the pay week with the biggest shortfall (perWeek > budget).
+  //   2. Among bills in that week not yet attempted for splitting, pick the
+  //      largest splittable one (>= MIN_SPLIT_CENTS, not neverSplit, has ≥2
+  //      eligible weeks).
+  //   3. Redistribute its cents across ALL eligible weeks using
+  //      distributeBillLevel (levels the total bill load per week).
+  //   4. If the new max shortfall isn't lower, roll back and stop — we've
+  //      converged to whatever the constraints allow.
   const shortfallOf = (i: number) => Math.max(0, -( budget[i] - perWeek[i]));
   const maxShortfall = () => {
     let m = 0;
@@ -787,6 +890,10 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     const pick = candidates[0];
     splitAttempted.add(pick.key);
 
+    // Compute "existing bills in each eligible week EXCLUDING the current
+    // placement of the bill we're about to redistribute". distributeBillLevel
+    // uses OVER-BUDGET amounts (existing - budget) so it can level not just
+    // raw bill totals but shortfalls, giving weeks with more room priority.
     const existingForEligible = pick.w.eligible.map((i) => {
       let e = perWeek[i];
       for (const a of pick.allocs) {
@@ -799,6 +906,8 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     const overForEligible = existingForEligible.map((e, k) => e - budgetForEligible[k]);
     const alloc = distributeBillLevel(pick.w.amountCents, overForEligible);
 
+    // Apply the new distribution: remove old allocations from perWeek, add
+    // the new ones. Guarded with rollback if the reshuffle didn't help.
     for (const a of pick.allocs) perWeek[a.weekIndex] -= a.cents;
     const newAllocs: Array<{ weekIndex: number; cents: number }> = [];
     for (let k = 0; k < pick.w.eligible.length; k++) {
@@ -810,6 +919,8 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       }
     }
     if (newAllocs.length === 0) {
+      // Distribution collapsed to zero cents everywhere (degenerate case) —
+      // restore original placement and bail.
       for (const a of pick.allocs) perWeek[a.weekIndex] += a.cents;
       break;
     }
@@ -817,6 +928,9 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
 
     const newMax = maxShortfall();
     if (newMax >= lastMax) {
+      // Splitting this bill didn't reduce the max shortfall — roll back to
+      // preserve the strictly-better previous state and stop. Prevents
+      // infinite oscillation when constraints are already saturated.
       for (const a of newAllocs) perWeek[a.weekIndex] -= a.cents;
       for (const a of pick.allocs) perWeek[a.weekIndex] += a.cents;
       placement.set(pick.key, pick.allocs);
@@ -870,6 +984,8 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
   };
 }
 
+// ── Split-personal distribution (splitAcrossWeeks Personals) ──
+
 export interface SplitPersonalRef {
   id: string;
   /** Monthly total in dollars. */
@@ -888,7 +1004,7 @@ export interface SplitAllocationResult {
 /**
  * For a set of split personals, allocates each one's monthly total across the
  * given pay weeks proportional to the leftover room in each week (income
- * minus fixed personal, assigned bills, and the wife target). When multiple
+ * minus fixed personal, assigned bills, and the surplus target). When multiple
  * splits are present, they are processed in descending-amount order so the
  * biggest split gets first pick of room — subsequent splits use what remains.
  */
@@ -921,6 +1037,9 @@ export function computeSplitPersonalAllocations(params: {
   const totalSplitPerPeriod = new Array(N).fill(0);
   const unallocatedPerSplit = new Map<string, number>();
 
+  // Process largest splits first so they get first pick of leftover room.
+  // Smaller splits then fit into whatever remains. This mirrors the
+  // "biggest-first" heuristic used by balancePayWeeks Phase 1.
   const ordered = [...splits].sort((a, b) => b.amount - a.amount);
   for (const s of ordered) {
     const totalCents = Math.round(s.amount * 100);
@@ -929,7 +1048,7 @@ export function computeSplitPersonalAllocations(params: {
     unallocatedPerSplit.set(s.id, dist.unallocatedCents);
     for (let i = 0; i < N; i++) {
       totalSplitPerPeriod[i] += dist.perWeekCents[i];
-      room[i] -= dist.perWeekCents[i];
+      room[i] -= dist.perWeekCents[i]; // Deduct so next iteration sees remaining room.
     }
   }
 
@@ -938,7 +1057,7 @@ export function computeSplitPersonalAllocations(params: {
 
 /**
  * Distributes a monthly total across pay weeks proportional to each week's
- * leftover room (income − fixed personal − assigned bills − wife target).
+ * leftover room (income − fixed personal − assigned bills − surplus target).
  *
  * - Any week with room <= 0 gets 0 (can't add more without breaching target).
  * - Weeks with room absorb a share proportional to their room, capped at their
@@ -1002,6 +1121,8 @@ export function distributeSplitAcrossWeeks(
 
   return { perWeekCents: result, unallocatedCents: unallocated };
 }
+
+// ── Per-period occurrence helper (single-period lookup) ──
 
 export interface BillOccurrenceInPeriod {
   /** Day-of-current-month coordinate for the occurrence; > daysInMonth means

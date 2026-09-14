@@ -1,5 +1,12 @@
 "use client";
 
+/**
+ * PayeeFormFields — single required "name" input for Payee create + edit.
+ *
+ * Payees are pure lookup rows; no other fields on the schema. Kept as its own
+ * component only to match the Refine list/create/edit/FormFields convention.
+ */
+
 import { TextField, Grid } from "@mui/material";
 import { UseFormReturn } from "react-hook-form";
 

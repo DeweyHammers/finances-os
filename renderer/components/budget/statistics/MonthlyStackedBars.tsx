@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * MonthlyStackedBars — yearly stacked-bar chart used by the Statistics page.
+ *
+ * Draws 12 vertical bars (Jan..Dec) where each bar is stacked by budget item
+ * or income source. Hand-rolled SVG (no charting lib) so we can respond to
+ * container size via ResizeObserver, animate hover, and keep the click target
+ * pixel-perfect for the "click bar → jump to month" interaction.
+ */
+
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Typography, Paper } from "@mui/material";
 import { formatMoney } from "../../../lib/cents";
@@ -16,10 +25,15 @@ interface Props {
   onMonthClick?: (monthIndex: number) => void;
 }
 
+// ── Layout constants ──
+// Left padding is generous to fit y-axis dollar labels ("$12.5k" etc.).
 const PADDING = { top: 24, right: 24, bottom: 16, left: 64 };
-const X_AXIS_HEIGHT = 50;
-const MIN_CHART_HEIGHT = 220;
+const X_AXIS_HEIGHT = 50;    // reserved strip below the bars for month labels + year
+const MIN_CHART_HEIGHT = 220; // floor to keep bars readable even in tiny viewports
 
+// Round the axis max UP to a "nice" number (1, 2, 2.5, 5, 10 × 10^n) so
+// gridlines land on human-friendly values. Prevents axes like "$4,271" —
+// picks "$5k" instead. Called with dollars, not cents.
 const niceMax = (raw: number): number => {
   if (raw <= 0) return 100;
   const pow = Math.pow(10, Math.floor(Math.log10(raw)));
@@ -39,6 +53,8 @@ export const MonthlyStackedBars = ({
   year,
   onMonthClick,
 }: Props) => {
+  // Hover state captures mouse position (for tooltip placement) plus the
+  // month + item being hovered (for highlight + tooltip content).
   const [hover, setHover] = useState<{
     mouseX: number;
     mouseY: number;
@@ -46,6 +62,7 @@ export const MonthlyStackedBars = ({
     item: ItemSpend;
   } | null>(null);
   const [size, setSize] = useState({ width: 900, height: 320 });
+  // outerRef anchors mouse-relative tooltip coords; barsRef is what we measure.
   const outerRef = useRef<HTMLDivElement | null>(null);
   const barsRef = useRef<HTMLDivElement | null>(null);
 
@@ -58,6 +75,8 @@ export const MonthlyStackedBars = ({
       const w = el.clientWidth;
       const h = el.clientHeight;
       if (w <= 0 || h <= 0) return;
+      // 2px threshold prevents render thrashing from sub-pixel ResizeObserver
+      // deltas that would otherwise cause re-render loops.
       setSize((prev) =>
         Math.abs(prev.width - w) > 2 || Math.abs(prev.height - h) > 2
           ? { width: w, height: h }
@@ -73,17 +92,21 @@ export const MonthlyStackedBars = ({
   const { width } = size;
   const chartH = Math.max(MIN_CHART_HEIGHT, size.height);
 
+  // Cap the y-axis by the tallest bar (in dollars) so partial years / low
+  // months don't compress into an unreadable strip.
   const maxCents = useMemo(
     () => Math.max(0, ...data.map((m) => m.totalCents)),
     [data],
   );
   const yMax = niceMax(maxCents / 100);
 
+  // ── Chart geometry derived from the measured container ──
   const innerW = Math.max(100, width - PADDING.left - PADDING.right);
   const innerH = Math.max(0, chartH - PADDING.top - PADDING.bottom);
-  const bandW = innerW / 12;
-  const barW = Math.min(56, bandW * 0.6);
+  const bandW = innerW / 12;                    // width allotted per month
+  const barW = Math.min(56, bandW * 0.6);       // bar is 60% of its band, capped so wide viewports don't produce cartoonishly fat bars
 
+  // 6 evenly-spaced y-axis gridlines (0, 20%, 40%, 60%, 80%, 100% of yMax).
   const yTicks = useMemo(() => {
     const ticks: number[] = [];
     const step = yMax / 5;
@@ -91,6 +114,8 @@ export const MonthlyStackedBars = ({
     return ticks;
   }, [yMax]);
 
+  // Convert dollar amount → SVG y-coordinate. Origin is top-left in SVG, so
+  // we subtract from (PADDING.top + innerH) to draw bars bottom-up.
   const yScale = (dollars: number) =>
     PADDING.top + innerH - (dollars / yMax) * innerH;
 
@@ -150,10 +175,13 @@ export const MonthlyStackedBars = ({
           {data.map((m, i) => {
             const cx = PADDING.left + bandW * i + bandW / 2;
             const baseY = yScale(0);
+            // cursorY walks upward as we stack each item — starts at the x-axis.
             let cursorY = baseY;
             const hasData = m.totalCents > 0;
             return (
               <g key={m.monthIndex}>
+                {/* Invisible full-band hit target so clicking anywhere in the
+                    column (not just the bar itself) navigates to that month. */}
                 {hasData && onMonthClick && (
                   <rect
                     x={cx - bandW / 2}
@@ -173,6 +201,9 @@ export const MonthlyStackedBars = ({
                     !!hover &&
                     hover.month.monthIndex === m.monthIndex &&
                     hover.item.itemId === it.itemId;
+                  // Compute mouse position relative to outerRef so the tooltip
+                  // can be positioned in that same coordinate space regardless
+                  // of scroll or window resize.
                   const handleMove = (e: React.MouseEvent) => {
                     const outer = outerRef.current;
                     if (!outer) return;
@@ -292,8 +323,12 @@ export const MonthlyStackedBars = ({
       </Box>
 
       {hover && (() => {
+        // ── Tooltip positioning ──
+        // Default to bottom-right of cursor; flip to the opposite side when
+        // clipping the container edge. Clamp to an 8px inset so it never
+        // touches the outer border.
         const TOOLTIP_W = 230;
-        const TOOLTIP_H_EST = 88;
+        const TOOLTIP_H_EST = 88; // estimate — real height varies with text
         const CURSOR_OFFSET_X = 16;
         const CURSOR_OFFSET_Y = 20;
         const containerH =
@@ -312,6 +347,10 @@ export const MonthlyStackedBars = ({
           hover.month.totalCents > 0
             ? (hover.item.cents / hover.month.totalCents) * 100
             : 0;
+        // Border color matches the segment's own color so the tooltip visually
+        // ties back to the bar the cursor is over — same "section-colored
+        // outline" pattern used by the MUI Tooltips elsewhere in the app.
+        const segmentColor = itemColor(hover.item.itemId, allItems);
         return (
           <Paper
             elevation={6}
@@ -321,9 +360,10 @@ export const MonthlyStackedBars = ({
               left: tooltipLeft,
               p: 1.5,
               width: TOOLTIP_W,
-              bgcolor: "rgba(15, 23, 42, 0.96)",
-              border: "1px solid rgba(129, 140, 248, 0.25)",
+              bgcolor: "rgb(15, 23, 42)",
+              border: `1px solid ${segmentColor}59`,
               borderRadius: 2,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
               pointerEvents: "none",
               zIndex: 5,
             }}

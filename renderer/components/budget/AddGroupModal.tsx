@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * AddGroupModal — dialog for creating a top-level BudgetCategoryGroup.
+ *
+ * Top-level groups sit above items and subsections on the Plan page. Opened
+ * from the "Add Group" button in BudgetPage's toolbar or the empty-state CTA.
+ * `nextSortOrder` is passed in so the new group appends to the bottom of
+ * the current ordering (Refine sorts groups by sortOrder ascending).
+ */
+
 import { useEffect, useState } from "react";
 import {
   Dialog,

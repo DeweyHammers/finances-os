@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * CancelButton — themed rose-red Cancel button used across every modal.
+ *
+ * Thin wrapper around MUI Button that locks in the app's cancel styling
+ * (rose-500 text, transparent bg, subtle rose tint on hover). `color` is
+ * omitted from the props type because it's fixed. `sx` overrides are merged
+ * on top so callers can still tweak spacing per-usage.
+ */
+
 import { Button, ButtonProps } from "@mui/material";
 import { ReactNode } from "react";
 

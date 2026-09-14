@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * AccountLedger — full transaction ledger for a single Account.
+ *
+ * Rendered by the /Accounts page for whichever account is currently selected.
+ * Shows a summary header (cleared / uncleared / working balance) plus a
+ * searchable, paginated DataGrid of every AccountTransaction on this account.
+ * Row-level edit and delete open the Edit/Add transaction modals or the shared
+ * ConfirmDeleteDialog.
+ */
+
 import { useMemo, useState } from "react";
 import {
   Box,
@@ -60,6 +70,11 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
   const payees = (payeesQuery.data?.data as any[]) || [];
   const items = (itemsQuery.data?.data as any[]) || [];
 
+  // ── Header balances ──
+  // Working balance = every transaction on this account (running total).
+  // Cleared = the subset the user has marked reconciled (cleared !== false —
+  // treats a missing `cleared` field as cleared for backward compat).
+  // Uncleared is the delta (never re-computed separately to avoid drift).
   const balance = useMemo(
     () => computeAccountBalance(transactions),
     [transactions],
@@ -76,6 +91,10 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
   const itemName = (id: string | null) =>
     items.find((i) => i.id === id)?.name || "";
 
+  // Client-side search across every displayed field (payee, category, memo,
+  // and amount in BOTH formatted and raw-number form — so "$1,234.56" and
+  // "1234.56" both match). This mirrors what the DataGrid actually renders so
+  // the user sees consistent results.
   const filteredTransactions = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return transactions;
@@ -91,6 +110,8 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
       const liveCat = t.categoryItemId ? itemName(t.categoryItemId) : "";
       const category =
         liveCat || (t.categoryName as string) || "Ready to Assign";
+      // Include the formatted string AND a stripped variant so users can search
+      // either with or without $ and commas.
       const outflowStr =
         t.outflowCents > 0
           ? `${formatMoney(t.outflowCents)} ${formatMoney(t.outflowCents).replace(/[$,]/g, "")}`
@@ -123,6 +144,10 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
         headerName: "Payee",
         flex: 1,
         minWidth: 180,
+        // Payee cell has three special-case renderings:
+        //  1. Balance adjustments (isAdjustment=true) show a fixed label.
+        //  2. Transfers (no category + memo starts with Transfer to/from) show "Transfer".
+        //  3. Normal transactions display the resolved payee name.
         renderCell: (p) => (
           <Typography
             sx={{ fontWeight: 600, color: "white", fontSize: "0.95rem" }}
@@ -142,6 +167,11 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
         headerName: "Category",
         flex: 1,
         minWidth: 160,
+        // Category resolution order:
+        //  1. Live category → resolved name.
+        //  2. No live but snapshot present → historical label + "(deleted)"
+        //     styled in muted italic so users can see it was removed.
+        //  3. Neither → "Ready to Assign" placeholder.
         renderCell: (p) => {
           const liveName = p.value ? itemName(p.value) : "";
           const snapshot = (p.row.categoryName as string | undefined) || "";

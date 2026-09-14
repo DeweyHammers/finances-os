@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * CustomSider — app-wide left navigation (replaces Refine.dev's default Sider).
+ *
+ * Fixed 260px column pinned to the viewport; hosts the logo, grouped nav leaves
+ * (Budget: Plan/Statistics/Cash/Payees, Expenses: Overview/Bills/Personal/
+ * Yearly Costs/Income), and the expandable Cash section which lists every open
+ * Account with its live balance. Also owns the AddAccount / EditAccount modals
+ * so account CRUD flows can be triggered from any page via the sider.
+ */
+
 import { useState, useMemo } from "react";
 import {
   Box,
@@ -27,6 +37,10 @@ import { SiderAccountRow } from "./SiderAccountRow";
 import { AddAccountModal } from "../accounts/AddAccountModal";
 import { EditAccountModal } from "../accounts/EditAccountModal";
 
+// ── NavLeaf ──
+// Single clickable nav row. Handles the "am I the active route?" highlight and
+// keyboard activation (Enter). Kept private to this file — the sider is the
+// only place that renders them.
 interface NavLeafProps {
   href: string;
   label: string;
@@ -36,7 +50,11 @@ interface NavLeafProps {
 const NavLeaf = ({ href, label, icon }: NavLeafProps) => {
   const router = useRouter();
   const pathname = usePathname();
+  // Nextron static export produces URLs ending in /index.html — strip that so
+  // "/Overview/index.html" matches href="/Overview".
   const normalized = (pathname || "/").replace(/\/index\.html$/, "") || "/";
+  // For non-root leaves, treat any path starting with `${href}/` as active so
+  // nested routes (e.g. /Cash?id=…) keep the parent leaf highlighted.
   const active =
     href === "/"
       ? normalized === "/"
@@ -80,6 +98,8 @@ const NavLeaf = ({ href, label, icon }: NavLeafProps) => {
   );
 };
 
+// ── GroupHeader ──
+// Small uppercase caption used to separate "Budget" and "Expenses" groups.
 const GroupHeader = ({ label }: { label: string }) => (
   <Typography
     sx={{
@@ -98,15 +118,23 @@ const GroupHeader = ({ label }: { label: string }) => (
 );
 
 export const CustomSider = () => {
+  // ── Local UI state ──
+  // Cash section defaults to open so the user always sees their live balances
+  // without an extra click on app launch.
   const [cashOpen, setCashOpen] = useState(true);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [editAccountId, setEditAccountId] = useState<string | null>(null);
 
+  // ── Data ──
+  // Sorted by sortOrder so the user can drag-reorder accounts elsewhere and see
+  // the ordering respected in the sider.
   const { query: accountsQuery } = useList({
     resource: "Account",
     pagination: { mode: "off" },
     sorters: [{ field: "sortOrder", order: "asc" }],
   });
+  // Pull ALL transactions once and bucket per-account in memory below. Cheaper
+  // than N per-account queries for typical account counts (<20).
   const { query: txnsQuery } = useList({
     resource: "AccountTransaction",
     pagination: { mode: "off" },
@@ -115,6 +143,9 @@ export const CustomSider = () => {
   const accounts = (accountsQuery.data?.data as any[]) || [];
   const allTxns = (txnsQuery.data?.data as any[]) || [];
 
+  // ── Derived: per-account balances ──
+  // Closed accounts are excluded from the balance map (and rendered list) —
+  // they still exist in the DB for history but shouldn't clutter navigation.
   const balances = useMemo(() => {
     const map = new Map<string, number>();
     accounts
@@ -126,6 +157,7 @@ export const CustomSider = () => {
     return map;
   }, [accounts, allTxns]);
 
+  // Sum of all open-account balances shown next to the "Cash" section header.
   const cashTotal = useMemo(
     () =>
       Array.from(balances.values()).reduce((acc, v) => acc + v, 0),
@@ -172,6 +204,7 @@ export const CustomSider = () => {
         </Typography>
       </Box>
 
+      {/* ── Budget group ── */}
       <GroupHeader label="Budget" />
       <NavLeaf href="/Plan" label="Plan" icon={<PieChartIcon />} />
       <NavLeaf
@@ -180,6 +213,9 @@ export const CustomSider = () => {
         icon={<InsightsIcon />}
       />
 
+      {/* Cash section header — clickable to collapse/expand the account list.
+          Not a NavLeaf because it doesn't route anywhere on its own; individual
+          SiderAccountRow children route to /Cash?id=… */}
       <Box
         role="button"
         tabIndex={0}
@@ -272,6 +308,7 @@ export const CustomSider = () => {
 
       <NavLeaf href="/Payees" label="Payees" icon={<StorefrontIcon />} />
 
+      {/* ── Expenses group ── */}
       <GroupHeader label="Expenses" />
       <NavLeaf
         href="/Overview"
@@ -287,9 +324,14 @@ export const CustomSider = () => {
       />
       <NavLeaf href="/Income" label="Income" icon={<SavingsIcon />} />
 
+      {/* Flex spacer pushes any future footer content to the bottom; the 16px
+          box gives a little breathing room above the viewport edge. */}
       <Box sx={{ flex: 1 }} />
       <Box sx={{ height: 16 }} />
 
+      {/* Account CRUD modals live at the sider so they can be opened from any
+          page (add via the Cash section button, edit via SiderAccountRow's
+          pencil icon). */}
       <AddAccountModal
         open={addAccountOpen}
         onClose={() => setAddAccountOpen(false)}

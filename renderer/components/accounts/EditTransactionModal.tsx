@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * EditTransactionModal — edit an existing AccountTransaction.
+ *
+ * Fetches the transaction by id, converts it via valuesToState into the shared
+ * TransactionFormState, and writes back via useUpdate on save. Unlike Add,
+ * this modal does NOT re-derive transfers into paired writes — editing a
+ * transfer leg only mutates that one leg.
+ */
+
 import { useState, useEffect } from "react";
 import {
   Dialog,
@@ -51,6 +60,9 @@ export const EditTransactionModal = ({
     pagination: { mode: "off" },
   });
 
+  // Rehydrate form state whenever the fetched transaction changes.
+  // Passing the accounts list lets valuesToState recognize transfer legs by
+  // matching the memo suffix against known account names.
   useEffect(() => {
     const data = query.data?.data;
     const accounts = (accountsQuery.data?.data ?? []) as { id: string; name: string }[];

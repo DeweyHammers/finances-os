@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * EditItemModal — rename a BudgetCategoryItem's display name.
+ *
+ * Only the display name is editable here — amounts, cycles, and sourceType
+ * stay locked because BILL/PERSONAL_NAME items derive those from their
+ * upstream Bill/Personal record. The Alert callout warns the user that
+ * editing name here breaks the auto-sync with the source record's name.
+ */
+
 import { useEffect, useState } from "react";
 import {
   Dialog,

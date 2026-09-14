@@ -1,5 +1,12 @@
 "use client";
 
+/**
+ * YearlyCostCreate — Refine create-modal wrapper for the YearlyCost resource.
+ *
+ * ResourceCreateModal supplies chrome; YearlyCostFormFields supplies the
+ * name/amount/month/day inputs shared with the edit modal.
+ */
+
 import { UseModalFormReturnType } from "@refinedev/react-hook-form";
 import { BaseRecord, HttpError } from "@refinedev/core";
 import { FieldValues } from "react-hook-form";

@@ -1,5 +1,18 @@
 "use client";
 
+/**
+ * YearlyOverview — annual (non-monthly) costs grouped by calendar month.
+ *
+ * Renders YearlyCost records (things like annual insurance, subscriptions
+ * renewing once/year) grouped by their `month` field, each group sorted
+ * chronologically. Pink accent (#ec4899) distinguishes yearly items from
+ * monthly bills / personal in the Overview.
+ *
+ * Read-only. Props: `yearlyCosts` (raw list) and `months` (localized month
+ * names supplied by the parent — makes it locale-swappable without
+ * duplicating month arrays here).
+ */
+
 import { Box, Typography, Paper } from "@mui/material";
 import { SummarySection } from "./SummarySection";
 import { DashboardCard } from "./DashboardCard";
@@ -23,6 +36,9 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
   months,
 }) => {
   // Group yearly costs by month number, then sort chronologically
+  // Two-step so numeric ordering happens BEFORE the number→name conversion —
+  // sorting month name strings alphabetically ("April" before "January")
+  // would be wrong. `cost.month` is 1-indexed; `months` array is 0-indexed.
   const groupedByMonthNum = yearlyCosts.reduce((acc: any, cost: any) => {
     const m = cost.month;
     if (!acc[m]) acc[m] = { costs: [], total: 0 };
@@ -43,10 +59,8 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
 
   return (
     <SummarySection
-      title="Yearly Overview"
+      title="Yearly Costs"
       icon={<CalendarMonthIcon />}
-      totalLabel="Yearly Total"
-      totalAmount={yearlyTotal}
     >
       <Box sx={{ width: "100%" }}>
         {Object.keys(groupedYearly).length > 0 ? (

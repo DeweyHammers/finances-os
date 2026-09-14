@@ -1,5 +1,16 @@
 "use client";
 
+/**
+ * TransactionFormFields — shared form body for Add/Edit Transaction modals.
+ *
+ * Handles date, payee (via PayeeAutocomplete), category-or-transfer picker,
+ * memo, and inflow/outflow amount. Also exports the state shape + helpers used
+ * by both modals to convert between TransactionFormState ↔ Prisma AccountTransaction
+ * values. Category dropdown mirrors the Plan-page hierarchy (groups → subsections
+ * → items) and shows the "available" cents on the right so users can spot
+ * empty categories without leaving the modal.
+ */
+
 import { useMemo } from "react";
 import {
   TextField,
@@ -20,12 +31,18 @@ import {
 } from "../../lib/budget-utils";
 import { resolveItemDisplay } from "../../lib/budget-display";
 
+// Color-code the "available" amount shown next to each category in the picker.
+// Red = overspent, green = has funds, dim white = exactly zero.
 const availableColor = (cents: number): string => {
   if (cents < 0) return "#f43f5e";
   if (cents > 0) return "#3DBC83";
   return "rgba(255,255,255,0.45)";
 };
 
+// Sentinel prefix used inside the single Category <TextField select> to
+// distinguish transfer picks ("__transfer:<accountId>") from real category
+// item picks (raw item id). Kept as a constant so any consumer that needs to
+// parse a picked value doesn't have to hardcode the string.
 export const TRANSFER_PREFIX = "__transfer:";
 
 export interface TransactionFormState {
@@ -123,13 +140,21 @@ export const TransactionFormFields = ({
     (a) => a.id !== accountId && !a.closed,
   );
 
+  // ── Per-category "available" cumulative balance as of the current month ──
+  // Replicates the YNAB "available" calculation used on the Plan page so the
+  // dropdown's right-side number matches what the user sees there. For each
+  // item, walks month-by-month from the earliest assigned month up to today,
+  // rolling forward: available = prior + assigned - activity.
   const availableByItemId = useMemo(() => {
+    // Target = first day of current month (UTC, aligned to how BudgetMonth stores dates).
     const target = (() => {
       const d = new Date();
       return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
     })();
     const map = new Map<string, number>();
     items.forEach((i) => {
+      // Determine the earliest month to start summing from. If no BudgetMonth
+      // rows exist for this item, start at target so we skip the loop entirely.
       const dates = allMonths
         .filter((m) => m.categoryItemId === i.id)
         .map((m) => new Date(m.month));
@@ -142,6 +167,7 @@ export const TransactionFormFields = ({
             })();
       let cumulative = 0;
       let cursor = monthStart(earliest);
+      // Roll forward month-by-month accumulating the running available balance.
       while (cursor.getTime() <= target.getTime()) {
         const a =
           allMonths.find(
@@ -265,6 +291,10 @@ export const TransactionFormFields = ({
     ? `${TRANSFER_PREFIX}${state.transferAccountId}`
     : state.categoryItemId || "";
 
+  // Single onChange handles all three category-picker outcomes:
+  //  - "" → Ready to Assign (inflow allowed)
+  //  - "__transfer:<id>" → transfer (force outflow)
+  //  - "<itemId>" → normal category (force outflow)
   const handleCategoryChange = (raw: string) => {
     if (raw === "") {
       set({ categoryItemId: null, transferAccountId: null });
@@ -288,6 +318,8 @@ export const TransactionFormFields = ({
     });
   };
 
+  // Only "Ready to Assign / Uncategorized" allows an inflow amount — every
+  // other choice implies outflow. This drives which amount field renders below.
   const isInflowMode =
     !state.categoryItemId && !state.transferAccountId;
 
@@ -580,6 +612,10 @@ export const TransactionFormFields = ({
   );
 };
 
+// Today's date in LOCAL YYYY-MM-DD (not UTC).
+// Using new Date().toISOString().slice(0,10) would show yesterday's date for
+// users east of UTC late at night — this keeps the date field aligned with
+// the user's clock.
 const todayLocalIsoDate = (): string => {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -588,6 +624,8 @@ const todayLocalIsoDate = (): string => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+// Initial state used when opening the Add modal (or resetting the Edit modal
+// before data arrives). Everything blank + today's date.
 export const emptyTransactionState = (): TransactionFormState => ({
   date: todayLocalIsoDate(),
   payeeId: null,
@@ -599,6 +637,10 @@ export const emptyTransactionState = (): TransactionFormState => ({
   originalDateIso: undefined,
 });
 
+// Serialize form state to the Prisma AccountTransaction shape.
+// Always sets isAdjustment=false + cleared=true because the modal only
+// produces user-entered rows (adjustments are created programmatically by
+// Add/Edit Account flows, not here).
 export const stateToValues = (
   state: TransactionFormState,
   accountId: string,
@@ -614,6 +656,11 @@ export const stateToValues = (
   cleared: true,
 });
 
+// Inverse of stateToValues — used by EditTransactionModal to hydrate form
+// state from an existing row. Extra work: when a row looks like a transfer
+// (no category + memo prefixed "Transfer to "), parse the target account name
+// out of the memo and match it to a real account so the picker shows the
+// transfer option instead of "Ready to Assign".
 export const valuesToState = (
   txn: any,
   accounts?: { id: string; name: string }[],
@@ -625,6 +672,8 @@ export const valuesToState = (
   const memo = txn.memo || "";
   let transferAccountId: string | null = null;
   if (!txn.categoryItemId && accounts?.length && memo.startsWith("Transfer to ")) {
+    // Memo shape: "Transfer to <accountName>" or "Transfer to <accountName>: <userMemo>"
+    // Slice off the "Transfer to " prefix, then split on ": " to isolate the name.
     const rest = memo.slice("Transfer to ".length);
     const accountName = rest.includes(": ") ? rest.slice(0, rest.indexOf(": ")) : rest;
     const match = accounts.find((a) => a.name === accountName);

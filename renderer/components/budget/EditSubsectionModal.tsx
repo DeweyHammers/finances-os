@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * EditSubsectionModal — rename an existing BudgetCategorySubsection.
+ *
+ * Triggered from the pencil (edit) icon on the subsection header row in
+ * BudgetTable. Only the name field is editable — the group parent and
+ * sort order are managed via drag-and-drop on the Plan page.
+ */
+
 import { useEffect, useState } from "react";
 import {
   Dialog,

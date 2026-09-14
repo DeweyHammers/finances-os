@@ -1,5 +1,16 @@
 "use client";
 
+/**
+ * AddTransactionModal — create a new AccountTransaction on the given account.
+ *
+ * Two modes based on the category picker:
+ *  - Normal transaction: write ONE AccountTransaction with the user's inputs.
+ *  - Transfer to another account: write TWO paired AccountTransactions (outflow
+ *    on this account, inflow on the target) whose memos are prefixed
+ *    "Transfer to <name>" / "Transfer from <name>" so AccountLedger can
+ *    identify them as transfers instead of regular txns.
+ */
+
 import { useEffect, useState } from "react";
 import {
   Dialog,
@@ -67,6 +78,10 @@ export const AddTransactionModal = ({
 
     try {
       if (state.transferAccountId) {
+        // ── Transfer branch: write two paired transactions atomically ──
+        // Uses Promise.allSettled (not Promise.all) so a partial failure still
+        // resolves and closes the modal — the user will see whichever side did
+        // land on next re-fetch and can reconcile from there.
         const targetAccount = accounts.find(
           (a) => a.id === state.transferAccountId,
         );
@@ -76,6 +91,7 @@ export const AddTransactionModal = ({
           return;
         }
         const sourceAccount = accounts.find((a) => a.id === accountId);
+        // Share one composed ISO across both writes so ledger rows sort/reconcile as a pair.
         const dateIso = composeTransactionDateIso(state.date);
 
         await Promise.allSettled([

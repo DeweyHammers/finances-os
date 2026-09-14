@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * SiderAccountRow — one account entry in the sider's Cash section.
+ *
+ * Renders the account name + formatted balance and routes to /Cash?id=<id> on
+ * click. Highlights when active. Exposes an on-hover pencil icon that fires
+ * `onEdit(id)` (bubbling is stopped so the parent row's navigation doesn't
+ * also trigger). Rendered by CustomSider inside the Cash <Collapse>.
+ */
+
 import { Box, IconButton, Typography } from "@mui/material";
 import EditIcon from "@mui/icons-material/Edit";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
@@ -21,6 +30,9 @@ export const SiderAccountRow = ({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  // "Active" = we're on the /Cash page AND this row's account id matches the
+  // ?id= query. Two-part check so the highlight moves as the user clicks
+  // between accounts (path doesn't change, only the query does).
   const onCashPath = pathname === "/Cash" || pathname?.startsWith("/Cash/");
   const active = !!onCashPath && searchParams?.get("id") === id;
   const target = `/Cash?id=${id}`;
@@ -58,10 +70,14 @@ export const SiderAccountRow = ({
         },
       }}
     >
+      {/* Pencil is hidden by default and fades in via CSS on row hover (see
+          `.sider-account-pencil` opacity rules in the parent Box sx). */}
       <IconButton
         className="sider-account-pencil"
         aria-label={`Edit ${name}`}
         onClick={(e) => {
+          // Stop propagation so clicking the pencil doesn't ALSO trigger the
+          // row's navigation to /Cash?id=<id>.
           e.stopPropagation();
           onEdit(id);
         }}

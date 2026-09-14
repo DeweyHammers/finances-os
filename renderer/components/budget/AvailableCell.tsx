@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * AvailableCell — pill button showing a category's Available cents.
+ *
+ * Color-coded green/red/neutral based on sign (positive/negative/zero).
+ * Click surfaces MoveMoneyPopover anchored to the pill — this is the main
+ * entry point for moving funds between categories or back to Ready to Assign.
+ */
+
 import { Box, Typography } from "@mui/material";
 import { formatMoney } from "../../lib/cents";
 

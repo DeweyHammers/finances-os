@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * AssignedCell — inline-editable currency input for a BudgetMonth.assignedCents value.
+ *
+ * Not currently rendered from BudgetTable (the Available column drives edits via
+ * MoveMoneyPopover), but kept as a reusable primitive. Supports plain amounts
+ * ("12.50"), "+12.50" delta syntax (add to current), and Escape to abort.
+ */
+
 import { useState, useEffect, useRef } from "react";
 import { TextField } from "@mui/material";
 import { fromCents, toCents, formatMoney } from "../../lib/cents";
@@ -12,9 +20,13 @@ interface AssignedCellProps {
 export const AssignedCell = ({ cents, onCommit }: AssignedCellProps) => {
   const [text, setText] = useState<string>(formatMoney(cents));
   const [focused, setFocused] = useState(false);
+  // Escape sets this flag so the ensuing blur discards the pending edit
+  // instead of committing it — mirrors the "cancel" affordance in spreadsheets.
   const skipNextCommit = useRef(false);
 
   useEffect(() => {
+    // Only re-sync display text from props while unfocused; syncing during
+    // editing would clobber the user's in-progress typing.
     if (!focused) setText(formatMoney(cents));
   }, [cents, focused]);
 
@@ -29,6 +41,7 @@ export const AssignedCell = ({ cents, onCommit }: AssignedCellProps) => {
     if (trimmed === "") {
       next = 0;
     } else if (trimmed.startsWith("+")) {
+      // "+X" adds X to the current amount — quick top-up shorthand.
       next = cents + toCents(trimmed.slice(1));
     } else {
       next = toCents(trimmed);

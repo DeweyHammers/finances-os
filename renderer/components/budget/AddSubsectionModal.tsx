@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * AddSubsectionModal — dialog for creating a BudgetCategorySubsection under a group.
+ *
+ * Subsections are a single level of nesting inside a group (Group → Subsection → Item).
+ * Items can live either directly under a group OR inside one of its subsections.
+ * Triggered from the group header's "Subsection" button in BudgetTable.
+ */
+
 import { useState, useEffect } from "react";
 import {
   Dialog,

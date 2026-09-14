@@ -1,3 +1,12 @@
+/**
+ * ConfirmDeleteDialog — reusable "are you sure?" confirmation modal.
+ *
+ * Small controlled Dialog with a title, description, Cancel + destructive
+ * confirm button. Used by ResourceList for row deletions and anywhere else the
+ * app needs a light-weight confirmation before an irreversible action. Caller
+ * owns open state and both handlers.
+ */
+
 import { FC, ReactNode } from "react";
 import {
   Button,

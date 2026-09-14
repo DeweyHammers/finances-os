@@ -1,8 +1,19 @@
 "use client";
 
+/**
+ * AppSwitch — themed MUI Switch used across app settings.
+ *
+ * Wraps MUI's Switch with a compact 42x24 pill shape, brand-green (#3DBC83) checked
+ * track, and disabled ripple. Used anywhere the app needs a toggle that reads as a
+ * first-class setting control (e.g. AppSettingsModal sections, IncomesSection primary
+ * flag). Purely presentational — behaves identically to the underlying MUI Switch.
+ */
+
 import { styled } from "@mui/material/styles";
 import { Switch as MuiSwitch } from "@mui/material";
 
+// Custom size (42x24 with 3px margin → 18px thumb) fits inline next to labels
+// without dominating the row like MUI's default 58x38 Switch does.
 export const AppSwitch = styled(MuiSwitch)(({ theme }) => ({
   width: 42,
   height: 24,

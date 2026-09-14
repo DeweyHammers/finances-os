@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * ReadyToAssignPill — top-center pill on the Plan page showing zero-based-budget status.
+ *
+ * Three visual states, driven purely by the `cents` sign:
+ *   - to-assign (positive, green): unassigned inflows remain; user should assign.
+ *   - balanced (zero, neutral): every dollar has a job — YNAB nirvana.
+ *   - over-assigned (negative, red): assigned more than exists; must reduce somewhere.
+ * The Assign button opens AssignMoneyPopover anchored to the pill itself.
+ */
+
 import { useRef } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
