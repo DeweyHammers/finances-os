@@ -52,11 +52,6 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
       .map(([m, data]) => [months[Number(m) - 1], data]),
   );
 
-  const yearlyTotal = yearlyCosts.reduce(
-    (acc, curr) => acc + (Number(curr.amount) || 0),
-    0,
-  );
-
   return (
     <SummarySection
       title="Yearly Costs"

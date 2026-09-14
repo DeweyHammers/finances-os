@@ -155,14 +155,6 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
     (p) => resolvePeriodBills(p).length > 0,
   );
 
-  // Header total — sum of raw bill amounts (one full amount per bill),
-  // independent of occurrence count. Represents monthly obligation not
-  // per-view obligation, which is intentional for at-a-glance context.
-  const totalFullBills = bills.reduce(
-    (acc, curr) => acc + (Number(curr.amount) || 0),
-    0,
-  );
-
   const renderPeriod = (period: PayPeriod) => {
     const periodBills = resolvePeriodBills(period);
 
