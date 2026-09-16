@@ -20,6 +20,9 @@ next-env.d.ts
 # Timestamped auto-backups from db:pull / db:push (scripts/db-sync.cjs) —
 # kept on disk as rollback insurance, never committed.
 /prisma/*.db.*.bak
+# Ad-hoc debugging snapshots (readable state captures paired with .bak files).
+# Same rationale: local rollback aid, not source-controlled artifact.
+/prisma/*.snapshot.*
 
 # claude
 .claude
