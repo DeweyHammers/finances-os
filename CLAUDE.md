@@ -27,6 +27,15 @@ npx prisma db push --skip-generate --accept-data-loss   # Apply schema changes t
 
 **NEVER run `npm run db:push` without explicit user instruction.** DEV is for experimentation; PROD changes are deliberate.
 
+## Debugging artifacts (never committed)
+
+When taking pre-change safety snapshots (e.g. before an experimental UI test), drop them in `prisma/` using these naming conventions so `.gitignore` already covers them and they never surface in `git status` / VSCode source control:
+
+- **DB copy** → `prisma/dev.db.<label>.bak` (matches `/prisma/*.db.*.bak`)
+- **Readable state dump** (assignments table, txn list, etc.) → `prisma/<name>.snapshot.<ext>` (matches `/prisma/*.snapshot.*`)
+
+If you invent a new artifact kind for a debugging session, extend `.gitignore` FIRST so the file is born ignored — don't leave untracked debug output sitting in the working tree.
+
 ## Architecture
 
 **Route wrapper convention.** Every `app/<Route>/page.tsx` is a thin (~7-line) wrapper that only imports and renders the real component from `components/<domain>/`. This keeps routing concerns separate from view logic. The two exceptions are `Cash/page.tsx` (legitimate `useSearchParams` routing) and `layout.tsx`/`page.tsx` root files. When adding a new route, follow this pattern — do NOT put logic in `page.tsx` even if it starts small.
