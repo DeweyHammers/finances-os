@@ -56,6 +56,7 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
     <SummarySection
       title="Yearly Costs"
       icon={<CalendarMonthIcon />}
+      iconAccent="#3DBC83"
     >
       <Box sx={{ width: "100%" }}>
         {Object.keys(groupedYearly).length > 0 ? (

@@ -742,6 +742,21 @@ export const BudgetPage = () => {
         // amount. Cumulative top-up is unreliable when existing assignments
         // from prior sessions are non-zero.
         needed = target;
+      } else if (it.sourceType === "BILL") {
+        // Mirror the sync-plan / underfunded-badge formula so Auto and Sync
+        // agree envelope-by-envelope. Subtract the bill's grace-window activity
+        // from the target — money that has already left checking for this
+        // occurrence shouldn't be re-funded on Auto. Otherwise Auto P3 refunds
+        // every bill that fired earlier in the month and was paid ("wrong
+        // spots" bug). Compare against raw availableCents (no Math.max clamp):
+        // a negative available represents a real hole the bill drilled into
+        // this envelope, and Auto is the tool to refill it.
+        const graceActivity = Math.max(
+          0,
+          it.activityInBillGraceWindowCents ?? 0,
+        );
+        const effectiveTarget = Math.max(0, target - graceActivity);
+        needed = effectiveTarget - it.availableCents;
       } else {
         needed = target - Math.max(0, it.availableCents);
       }
