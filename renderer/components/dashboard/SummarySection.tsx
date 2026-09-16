@@ -20,6 +20,11 @@ interface SummarySectionProps {
   children: React.ReactNode;
   sx?: any;
   icon?: React.ReactNode;
+  /** Hex color used for the icon-box bg + glow. Defaults to indigo so callers
+   * that don't opt in keep the old look. Each Overview section passes the
+   * accent color of its matching top-tile so the two icon boxes read as a
+   * pair (rose for Bills, indigo for Personal, green for Yearly Costs). */
+  iconAccent?: string;
 }
 
 export const SummarySection: React.FC<SummarySectionProps> = ({
@@ -30,6 +35,7 @@ export const SummarySection: React.FC<SummarySectionProps> = ({
   children,
   sx = {},
   icon,
+  iconAccent = "#818cf8",
 }) => {
   // Totals pill requires BOTH a label AND some value — a label alone would
   // render an empty pill, and a value alone has no context.
@@ -79,8 +85,8 @@ export const SummarySection: React.FC<SummarySectionProps> = ({
                   display: "flex",
                   p: 1,
                   borderRadius: 2,
-                  bgcolor: "primary.main",
-                  boxShadow: "0 0 15px rgba(129, 140, 248, 0.3)",
+                  bgcolor: iconAccent,
+                  boxShadow: `0 0 15px ${iconAccent}55`,
                   color: "white",
                 }}
               >

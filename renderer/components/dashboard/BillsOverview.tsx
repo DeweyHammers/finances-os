@@ -352,6 +352,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
     <SummarySection
       title="Bills"
       icon={<ReceiptLongIcon />}
+      iconAccent="#f43f5e"
     >
       <Grid container spacing={3}>
         {bills.length > 0 ? (

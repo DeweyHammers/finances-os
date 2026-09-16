@@ -317,6 +317,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
     <SummarySection
       title="Personal"
       icon={<PersonIcon />}
+      iconAccent="#818cf8"
     >
       <Grid container spacing={3}>
         {personalBills.length > 0 ? (
