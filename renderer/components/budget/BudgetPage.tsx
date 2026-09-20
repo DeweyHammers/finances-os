@@ -933,7 +933,12 @@ export const BudgetPage = () => {
       // button hides on the same "new pay week hasn't been assigned yet"
       // cases the visual badge silences. Over-fund still counts as work
       // because it represents genuine excess to move (or a shrunken plan).
-      const previousMet = funded >= expectedPrevAdjusted - SYNC_TOLERANCE_CENTS;
+      // Guard on expectedPrevAdjusted > 0 so a bill whose entire slice lives
+      // in the current pay week (previous target = 0) doesn't get silenced
+      // trivially — see BudgetItemRow comment for the full rationale.
+      const previousMet =
+        expectedPrevAdjusted > 0 &&
+        funded >= expectedPrevAdjusted - SYNC_TOLERANCE_CENTS;
       if (diff < 0 && previousMet) return;
       // delta = how much to ADD to assignedCents to zero out diff.
       // diff > 0 → over-funded → subtract from assigned (delta negative)

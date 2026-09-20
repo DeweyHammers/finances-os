@@ -1268,7 +1268,16 @@ const BudgetItemRow = ({
           expectedPrevious - Math.max(0, item.activityInBillGraceWindowCents ?? 0),
         )
       : expectedPrevious;
-  const previousMet = fundedCents >= expectedPreviousAdjusted - SYNC_TOLERANCE_CENTS;
+  // Require a NON-ZERO previous obligation for the payday-deferral story to
+  // apply. If the previous pay week expected $0 (e.g. a single-week bill whose
+  // entire allocation lands in the current pay week — Gemini due the 20th,
+  // Discord due the 17th, etc.), then `fundedCents >= 0` is trivially true and
+  // would silence a genuinely-unfunded envelope. Only real payday transitions
+  // (previous week had a target > 0 and hit it) should defer the current-week
+  // warning.
+  const previousMet =
+    expectedPreviousAdjusted > 0 &&
+    fundedCents >= expectedPreviousAdjusted - SYNC_TOLERANCE_CENTS;
   const isUnderfunded = isUnderfundedRaw && !previousMet;
   const outOfSyncCents = Math.abs(diffCents);
   const showOutOfSync =
