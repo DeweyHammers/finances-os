@@ -1207,11 +1207,11 @@ const BudgetItemRow = ({
   // Personal envelopes are excluded — repeatWeekly items (Gas, Spending)
   // fluctuate too much week to week to flag meaningfully, and dated
   // personals aren't tracked with the same pay-week rigor as bills.
-  // $1 tolerance — bill.amount is an estimate, actual bills often vary by
-  // pennies (utility variance, taxes, rounding in balancePayWeeks cent-splits
-  // where a $101 bill gets split into P1=$33.66, P2=$33.67, P3=$33.67 that
-  // sum to $101 exactly but a per-week snapshot might round to $101.01
-  // cumulatively). Anything under a dollar is noise.
+  // Zero tolerance — funding is integer cents throughout so there's no
+  // rounding noise, and any real drift (e.g. a $0.66 overpayment leaving the
+  // next occurrence's envelope short) is the exact case Sync Plan exists to
+  // catch. Overview plan is the source of truth; the badge fires until the
+  // envelope matches it exactly.
   // For BILL envelopes: subtract already-consumed grace-window activity from
   // BOTH `expected` and `fundedCents`. This surfaces "still-to-save" numbers
   // instead of aggregate month-totals. Example (Starlink Sept view — Sep 4
@@ -1226,7 +1226,7 @@ const BudgetItemRow = ({
   // Non-BILL envelopes (CUSTOM null-cycle) keep the aggregate formula —
   // they have no per-occurrence concept and their activity isn't tied to a
   // scheduled event.
-  const SYNC_TOLERANCE_CENTS = 100;
+  const SYNC_TOLERANCE_CENTS = 0;
   const expectedFullCents = item.expectedAssignedCents ?? 0;
   let expected: number;
   let fundedCents: number;

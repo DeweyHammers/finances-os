@@ -558,27 +558,45 @@ export const BudgetPage = () => {
       // this excludes spillover payments for the PREVIOUS month's occurrence
       // that happen to land in this calendar month (e.g. Aug 1 payment of a
       // bill due Jul 31 should not count as Aug's envelope activity).
+      //
+      // Per-occurrence cap: within each window we clamp activity at the bill's
+      // planned amount so an overpayment on one firing (Sep 5 charged $101.66
+      // against a $101 estimate) doesn't silently reduce the "still-to-save"
+      // target for another firing in the same view (Oct 5 forward-extension).
+      // The Sync-Plan target should reflect the Overview plan verbatim; real
+      // overspends are a checking-account matter, not envelope-level bookkeeping.
       let activityInBillGraceWindowCents: number | undefined = undefined;
       if (it.sourceType === "BILL" && it.sourceBillId) {
         const windows = graceWindowsPerBill[it.sourceBillId] ?? [];
-        activityInBillGraceWindowCents = allTxns
-          .filter((t: any) => t.categoryItemId === it.id)
-          .filter((t: any) => {
-            // Compare on the ISO date part (YYYY-MM-DD) — the calendar date
-            // the user picked in the txn form. Parsing to a Date and comparing
-            // against local-midnight bounds silently drops txns whose UTC time
-            // straddles local midnight (see graceWindowsPerBill comment).
-            const dateStr =
-              typeof t.date === "string"
-                ? t.date.slice(0, 10)
-                : new Date(t.date).toISOString().slice(0, 10);
-            return windows.some((w) => dateStr >= w.start && dateStr <= w.end);
-          })
-          .reduce(
-            (sum: number, t: any) =>
-              sum + (t.outflowCents || 0) - (t.inflowCents || 0),
-            0,
-          );
+        const bill = clampedBills.find((b: any) => b.id === it.sourceBillId);
+        const perOccurrenceCapCents = bill ? Math.round(Number(bill.amount) * 100) : Infinity;
+        const itemTxns = allTxns.filter((t: any) => t.categoryItemId === it.id);
+        const toDateStr = (t: any): string =>
+          // Compare on the ISO date part (YYYY-MM-DD) — the calendar date
+          // the user picked in the txn form. Parsing to a Date and comparing
+          // against local-midnight bounds silently drops txns whose UTC time
+          // straddles local midnight (see graceWindowsPerBill comment).
+          typeof t.date === "string"
+            ? t.date.slice(0, 10)
+            : new Date(t.date).toISOString().slice(0, 10);
+        activityInBillGraceWindowCents = windows.reduce((sum, w) => {
+          const rawWindowActivity = itemTxns
+            .filter((t: any) => {
+              const dateStr = toDateStr(t);
+              return dateStr >= w.start && dateStr <= w.end;
+            })
+            .reduce(
+              (s: number, t: any) => s + (t.outflowCents || 0) - (t.inflowCents || 0),
+              0,
+            );
+          // Only cap actual outflow overpayments (positive activity beyond the
+          // plan). Negative net (refunds > payments) passes through unchanged.
+          const capped =
+            rawWindowActivity > perOccurrenceCapCents
+              ? perOccurrenceCapCents
+              : rawWindowActivity;
+          return sum + capped;
+        }, 0);
       }
       // Compute expected cumulative through BOTH the current and previous
       // pay weeks. The previous-period value is what powers the payday-
@@ -626,7 +644,7 @@ export const BudgetPage = () => {
       items: g.items.map(enrich),
       subsections: g.subsections.map((s) => ({ ...s, items: s.items.map(enrich) })),
     }));
-  }, [groups, autoAssignInputs, currentPayWeekIdx, periods, graceWindowsPerBill, allTxns]);
+  }, [groups, autoAssignInputs, currentPayWeekIdx, periods, graceWindowsPerBill, allTxns, clampedBills]);
 
   // Flatten every item (direct + subsectioned) for lookups by id — used by
   // handleMoveMoney, handleManualAssign, and handleAutoAssign.
@@ -895,7 +913,13 @@ export const BudgetPage = () => {
   // under-funded items draw from it, so the check is (RTA + overTotal) >=
   // underTotal. When true, applying every delta leaves the RTA at
   // (RTA + overTotal - underTotal) ≥ 0.
-  const SYNC_TOLERANCE_CENTS = 100;
+  //
+  // Tolerance is 0 — envelope funding is integer cents throughout, so any
+  // non-zero diff is real drift the user asked us to surface (e.g. a $0.66
+  // overpayment on a past occurrence that left the envelope short of the
+  // remaining occurrence's planned amount). Overview plan is the source of
+  // truth; sync targets it exactly.
+  const SYNC_TOLERANCE_CENTS = 0;
   const syncPlan = useMemo(() => {
     const perItem: Array<{ itemId: string; deltaCents: number }> = [];
     let overTotalCents = 0;
