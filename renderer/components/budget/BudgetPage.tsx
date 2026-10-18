@@ -1044,7 +1044,10 @@ export const BudgetPage = () => {
         }}
       >
         <Box sx={{ display: "flex", justifyContent: "flex-start" }}>
-          {syncPlan.hasWork && (
+          {/* Hidden until every query has loaded — mid-load the sync math runs
+              on partial data (e.g. transactions without assignments) and the
+              button would flash in and out on app launch. */}
+          {!isLoading && syncPlan.hasWork && (
             // Tooltip wraps a <span> because MUI Tooltips don't fire on
             // disabled buttons — span stays in the DOM to catch pointer events
             // even when the underlying button is greyed out.
@@ -1100,7 +1103,19 @@ export const BudgetPage = () => {
             </Tooltip>
           )}
         </Box>
-        <Box sx={{ display: "flex", justifyContent: "center" }}>
+        {/* `visibility: hidden` (not unmount) while loading: keeps the grid
+            column's width so nothing shifts, but shows no amount. On launch the
+            transactions query resolves before BudgetMonth, so for a frame RTA =
+            all inflows − $0 assigned — that was the "$20k Ready to Assign"
+            flash seen in PROD (Oct 2026). Hidden elements aren't clickable. */}
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "center",
+            visibility: isLoading ? "hidden" : "visible",
+          }}
+          aria-hidden={isLoading || undefined}
+        >
           <ReadyToAssignPill
             cents={rtaHold ?? readyToAssign}
             onAssignClick={(el) => setAssignAnchor(el)}
