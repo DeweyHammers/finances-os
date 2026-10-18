@@ -37,6 +37,10 @@ export const usePaymentCycle = (): UsePaymentCycleResult => {
     resource: "AppSettings",
     id: "global",
     queryOptions: { staleTime: 60_000 },
+    // A fresh database has no settings row yet (404 until the first save).
+    // Several mounted components read this record, so their error
+    // notifications collided on the same key (React duplicate-key warning).
+    errorNotification: false,
   });
   const { query: incomesQuery } = useList({
     resource: "Income",

@@ -281,6 +281,22 @@ app.patch("/api/:resource/:id", async (req: Request, res: Response) => {
   const { client, contracts, entries, id: _id, ...updateData } = data;
 
   try {
+    // The singleton settings row (`AppSettings/global`) doesn't exist in a
+    // brand-new, empty database, so a plain update() 500'd on the first save
+    // (Surplus Target, payday, the Optimize baseline). Create it on first write
+    // instead; the schema defaults fill every other column. Reads are left
+    // alone: GET still 404s until something is saved, and the renderer keeps
+    // its existing "no settings yet" fallbacks.
+    if (model === prisma.appSettings && id === "global") {
+      const item = await prisma.appSettings.upsert({
+        where: { id },
+        update: updateData,
+        create: { ...updateData, id },
+      });
+      res.json(item);
+      return;
+    }
+
     const item = await model.update({ where: { id }, data: updateData });
     res.json(item);
   } catch (error: any) {

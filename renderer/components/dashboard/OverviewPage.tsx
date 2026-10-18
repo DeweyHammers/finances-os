@@ -456,16 +456,18 @@ export function OverviewPage() {
               No Income Added Yet
             </Typography>
             <Typography variant="body2" sx={{ color: "text.secondary", maxWidth: 380 }}>
-              Add a primary income source in Settings so the Overview can show your cash flow, bill schedule, and allowance.
+              Add a primary income source on the Income page so the Overview can show your cash flow, bill schedule, and allowance.
             </Typography>
           </Box>
+          {/* Income lives at /Income (the old /Settings route no longer exists
+              and this button used to land on a 404). */}
           <Button
             variant="contained"
             disableElevation
-            onClick={() => router.push("/Settings")}
+            onClick={() => router.push("/Income")}
             sx={{ fontWeight: 800, borderRadius: 2, px: 4 }}
           >
-            Go to Settings
+            Go to Income
           </Button>
         </Box>
         <YearlyOverview yearlyCosts={yearlyCosts} months={SHORT_MONTHS} />

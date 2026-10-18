@@ -29,6 +29,7 @@ import {
   TextField,
 } from "@mui/material";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
+import { EmptyState, EmptyStateProps } from "./EmptyState";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AddIcon from "@mui/icons-material/Add";
@@ -58,6 +59,13 @@ interface ResourceListProps {
   height?: string;
   searchField?: string;
   gridSx?: object;
+  /**
+   * First-run card shown inside the grid when the resource has NO rows at
+   * all (icon, title, why-it-matters text). Its button opens the create
+   * modal. A search/filter that matches nothing still shows plain "No
+   * matches" text instead, so the card never claims a populated list is empty.
+   */
+  emptyState?: Pick<EmptyStateProps, "icon" | "accent" | "title" | "description">;
 }
 
 export const ResourceList: FC<ResourceListProps> = ({
@@ -72,6 +80,7 @@ export const ResourceList: FC<ResourceListProps> = ({
   height = "calc(100vh - 120px)",
   searchField = "name",
   gridSx = {},
+  emptyState,
 }) => {
   // ── Delete flow state ──
   // deleteId non-null = ConfirmDeleteDialog is open for that row.
@@ -242,6 +251,27 @@ export const ResourceList: FC<ResourceListProps> = ({
     );
   };
 
+  // Any active search/filter value means "no matches", not "nothing yet".
+  const isFiltering = (currentFilters ?? []).some(
+    (f: any) => f.value !== undefined && f.value !== "" && f.value !== null,
+  );
+  const NoRowsOverlay = () =>
+    emptyState && !isFiltering ? (
+      <EmptyState
+        {...emptyState}
+        compact
+        framed={false}
+        actionLabel={`Create New ${title.replace(/s$/, "")}`}
+        onAction={() => showCreate()}
+      />
+    ) : (
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          {isFiltering ? "No matches" : "No rows"}
+        </Typography>
+      </Box>
+    );
+
   return (
     <Box
       sx={{
@@ -371,6 +401,7 @@ export const ResourceList: FC<ResourceListProps> = ({
             sortingMode="client"
             sortModel={sortModel}
             onSortModelChange={(model) => setSortModel(model)}
+            slots={{ noRowsOverlay: NoRowsOverlay, noResultsOverlay: NoRowsOverlay }}
             sx={{
               border: "none",
               ...gridSx,

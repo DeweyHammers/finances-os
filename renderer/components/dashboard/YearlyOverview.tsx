@@ -13,10 +13,12 @@
  * duplicating month arrays here).
  */
 
-import { Box, Typography, Paper } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import { SummarySection } from "./SummarySection";
 import { DashboardCard } from "./DashboardCard";
 import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
+import { useRouter } from "next/navigation";
+import { EmptyState } from "../shared/EmptyState";
 
 interface YearlyCost {
   id: string;
@@ -35,6 +37,7 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
   yearlyCosts,
   months,
 }) => {
+  const router = useRouter();
   // Group yearly costs by month number, then sort chronologically
   // Two-step so numeric ordering happens BEFORE the number→name conversion —
   // sorting month name strings alphabetically ("April" before "January")
@@ -114,24 +117,16 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
             ),
           )
         ) : (
-          <Paper
-            elevation={0}
-            sx={{
-              py: 6,
-              textAlign: "center",
-              bgcolor: "rgba(15, 23, 42, 0.2)",
-              borderRadius: 3,
-              border: "1px dashed rgba(255,255,255,0.05)",
-            }}
-          >
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ fontStyle: "italic", fontWeight: 600 }}
-            >
-              No yearly costs recorded
-            </Typography>
-          </Paper>
+          // First-run card (shared EmptyState) linking to the Yearly Costs page.
+          <EmptyState
+            icon={<CalendarMonthIcon />}
+            accent="#3DBC83"
+            title="No yearly costs yet"
+            description="Annual expenses like registrations, memberships and gifts show up here, laid out by the month they're due."
+            actionLabel="Add a Yearly Cost"
+            onAction={() => router.push("/YearlyCosts")}
+            compact
+          />
         )}
       </Box>
     </SummarySection>

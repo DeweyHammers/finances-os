@@ -150,6 +150,28 @@ describe("generic CRUD (/api/:resource)", () => {
   });
 });
 
+describe("AppSettings on a fresh, empty database", () => {
+  it("the first save creates the global row (with schema defaults) instead of 500ing", async () => {
+    // No row yet: reads still 404 so the renderer keeps its first-run fallbacks.
+    expect((await api().get("/api/AppSettings/global")).status).toBe(404);
+
+    const saved = await api().patch("/api/AppSettings/global").send({ wifeWeeklyTargetCents: 25000 });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ id: "global", wifeWeeklyTargetCents: 25000, paymentCycle: "BI_WEEKLY", payDay: 2 });
+
+    // Later saves update the same row.
+    await api().patch("/api/AppSettings/global").send({ optimizedInputsSig: "{}" });
+    const shown = await api().get("/api/AppSettings/global");
+    expect(shown.body).toMatchObject({ wifeWeeklyTargetCents: 25000, optimizedInputsSig: "{}" });
+    expect((await api().get("/api/AppSettings")).headers["x-total-count"]).toBe("1");
+  });
+
+  it("other resources still 500 when patching a missing id", async () => {
+    expect((await api().patch("/api/Bill/does-not-exist").send({ amount: 1 })).status).toBe(500);
+    expect((await api().patch("/api/AppSettings/not-global").send({ payDay: 1 })).status).toBe(500);
+  });
+});
+
 describe("Income single-primary rule", () => {
   it("creating or patching a primary income demotes the others", async () => {
     const a = (await api().post("/api/Income").send({ name: "Day job", amount: 700, isPrimary: true })).body;
