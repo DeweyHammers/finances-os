@@ -34,6 +34,23 @@ npx prisma generate  # Regenerate the client after a schema change — CLOSE the
 
 **NEVER run `npm run db:push` without explicit user instruction.** DEV is for experimentation; PROD changes are deliberate.
 
+## Demo tour (docs/ → GitHub Pages)
+
+`docs/index.html` is a public step-by-step picture tour (served by GitHub Pages from `main` → `/docs`; the README links to it). Its screenshots in `docs/img/tour/` are generated, never hand-made:
+
+```
+node scripts/demo/create-db.mjs            # (re)build an EMPTY prisma/demo.db from the schema (resets in place)
+npx tsx scripts/demo/serve.ts              # real API server on demo.db (no Electron); port 5858
+cd renderer && npx next dev -p 8888        # the UI
+node scripts/demo/empty-check.mjs          # smoke test: every route on an empty DB, fails on errors
+node scripts/demo/tour.mjs                 # fills the app with FAKE data step by step → docs/img/tour/*.png (1920×1080)
+```
+
+- `serve.ts` reuses the `FINANCES_OS_TEST_DB_URL` override, so dev.db and PROD are never opened. Stop `npm run dev` first (same ports).
+- `cdp.mjs` drives headless Chrome/Edge with a throwaway profile and a **frozen clock** (`setClock`): the story runs Oct 1–30 2026 with weekly Friday paydays, so the pictures don't depend on today's date. Next's dev overlay is hidden.
+- **All tour data is fictional** ("Alex"). The repo is public: never put real names, amounts, payees or employers in `tour.mjs` or the screenshots. Savings is a weekly *personal* item on purpose (a no-cycle Custom Plan item gets a flat amount per Auto-assign, but the ⚠ badge expects it monthly).
+- Re-run `tour.mjs` after UI changes, and update the numbers quoted in `docs/index.html` if they move.
+
 ## Debugging artifacts (never committed)
 
 When taking pre-change safety snapshots (e.g. before an experimental UI test), drop them in `prisma/` using these naming conventions so `.gitignore` already covers them and they never surface in `git status` / VSCode source control:

@@ -17,6 +17,7 @@ import { Box, Typography } from "@mui/material";
 import { PersonalCreate } from "./create";
 import { PersonalEdit } from "./edit";
 import { ResourceList } from "../shared/ResourceList";
+import PersonIcon from "@mui/icons-material/Person";
 import { getOrdinal } from "../../lib/date-utils";
 
 export const PersonalList = () => {
@@ -93,6 +94,12 @@ export const PersonalList = () => {
       columns={columns}
       createModal={PersonalCreate}
       editModal={PersonalEdit}
+      emptyState={{
+        icon: <PersonIcon />,
+        accent: "#818cf8",
+        title: "No personal expenses yet",
+        description: "Personal expenses are your everyday spending: groceries, gas, fun money. Setting them here reserves an allowance from every paycheck, so you can see what is truly left over.",
+      }}
       gridSx={{
         "& .MuiDataGrid-cell[data-field='repeatWeekly']": {
           padding: 0,

@@ -14,6 +14,7 @@ import { Typography } from "@mui/material";
 import { BillCreate } from "./create";
 import { BillEdit } from "./edit";
 import { ResourceList } from "../shared/ResourceList";
+import ReceiptLongIcon from "@mui/icons-material/ReceiptLong";
 import { getOrdinal } from "../../lib/date-utils";
 
 export const BillList = () => {
@@ -68,6 +69,12 @@ export const BillList = () => {
       columns={columns}
       createModal={BillCreate}
       editModal={BillEdit}
+      emptyState={{
+        icon: <ReceiptLongIcon />,
+        accent: "#f43f5e",
+        title: "No bills yet",
+        description: "Add the bills you pay every month, like rent, utilities, phone and insurance. Finances OS uses each due date to work out which paycheck should cover it, so nothing sneaks up on you.",
+      }}
       initialSorters={[{ field: "dueDate", order: "asc" }]}
     />
   );

@@ -1,5 +1,16 @@
 # Finances OS
 
+<p align="center">
+  <a href="https://deweyhammers.github.io/finances-os/">
+    <img src="docs/img/tour/11-overview-optimized.png" alt="Finances OS Overview: five pay weeks with income, expenses and surplus" width="900">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://deweyhammers.github.io/finances-os/"><b>📖 Take the picture tour →</b></a><br>
+  <sub>From an empty install to a fully planned month, step by step (all sample data is made up).</sub>
+</p>
+
 A personal cash-flow workstation for planning your paycheck against monthly bills. Pay periods are calculated from the real calendar based on your configured pay day, and the dashboard shows income vs. expenses for each period at a glance.
 
 The app opens on the **Plan** (zero-based budget) by default. Other sections live under **Budget** (Plan, Statistics, Payees), **Cash** (per-account ledgers), and **Expenses** (Overview, Bills, Personal, Yearly Costs).

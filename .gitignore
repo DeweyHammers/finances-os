@@ -41,3 +41,8 @@ _archived
 *.lockin.test.ts
 *.lockin.test.tsx
 **/__snapshots__/*.lockin.test.*.snap
+
+# Demo tour tooling (scripts/demo/): the empty-app smoke test's screenshots are
+# scratch output. The tour's own screenshots live in docs/img/tour/ and ARE
+# committed (all made-up data). prisma/demo.db is covered by `*.db` above.
+/scripts/demo/out/

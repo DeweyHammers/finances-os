@@ -15,6 +15,7 @@ import { Typography } from "@mui/material";
 import { YearlyCostCreate } from "./create";
 import { YearlyCostEdit } from "./edit";
 import { ResourceList } from "../shared/ResourceList";
+import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import { SHORT_MONTHS } from "../../lib/constants";
 
 export const YearlyCostList = () => {
@@ -82,6 +83,12 @@ export const YearlyCostList = () => {
       columns={columns}
       createModal={YearlyCostCreate}
       editModal={YearlyCostEdit}
+      emptyState={{
+        icon: <CalendarMonthIcon />,
+        accent: "#3DBC83",
+        title: "No yearly costs yet",
+        description: "Some costs come once a year: car registration, memberships, holiday gifts. Track them here so a big annual bill never catches you off guard.",
+      }}
       initialSorters={[{ field: "month", order: "asc" }]}
     />
   );

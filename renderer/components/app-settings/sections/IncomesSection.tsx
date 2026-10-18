@@ -9,6 +9,8 @@
  * paymentCycle + payDay drive bill grouping and the Plan/Overview pay periods.
  */
 
+import SavingsIcon from "@mui/icons-material/Savings";
+import { EmptyState } from "../../shared/EmptyState";
 import { useState } from "react";
 import {
   Box,
@@ -211,27 +213,17 @@ export const IncomesSection = () => {
       <Divider sx={{ mb: 3 }} />
 
       {incomes.length === 0 ? (
-        <Box
-          sx={{
-            py: 5,
-            textAlign: "center",
-            border: "1px dashed rgba(255,255,255,0.1)",
-            borderRadius: 3,
-          }}
-        >
-          <Typography sx={{ color: "text.secondary", mb: 2, fontSize: "0.9rem" }}>
-            No income sources yet.
-          </Typography>
-          <Button
-            variant="contained"
-            disableElevation
-            startIcon={<AddIcon />}
-            onClick={openAdd}
-            sx={{ fontWeight: 800, borderRadius: 2 }}
-          >
-            Add Your First Income
-          </Button>
-        </Box>
+        // First-run card (shared EmptyState). Income is step one: its payday
+        // builds the pay-week grid everything else is planned on.
+        <EmptyState
+          icon={<SavingsIcon />}
+          accent="#3DBC83"
+          title="Start with your income"
+          description="Tell Finances OS how much you get paid and on which day. Your paydays build the pay-week schedule that every bill, allowance and budget is planned around."
+          actionLabel="Add Your First Income"
+          onAction={openAdd}
+          compact
+        />
       ) : (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
           {incomes.map((income: any) => (

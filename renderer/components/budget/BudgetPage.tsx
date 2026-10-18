@@ -16,10 +16,11 @@
  * canonical key, and `monthIso` is what gets written to the DB.
  */
 
+import PieChartIcon from "@mui/icons-material/PieChart";
+import { EmptyState } from "../shared/EmptyState";
 import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Box,
-  Typography,
   CircularProgress,
   Button,
   Snackbar,
@@ -186,6 +187,9 @@ export const BudgetPage = () => {
   const { query: settingsQuery } = useOne({
     resource: "AppSettings",
     id: "global",
+    // Shared with usePaymentCycle; on a fresh DB (no settings row yet) both
+    // 404 and their error notifications collide — CLAUDE.md "Refine notifications".
+    errorNotification: false,
   });
 
   const { mutate: createBudgetMonth } = useCreate();
@@ -1140,28 +1144,15 @@ export const BudgetPage = () => {
           <CircularProgress />
         </Box>
       ) : groups.length === 0 ? (
-        <Paper
-          sx={{
-            py: 8,
-            textAlign: "center",
-            bgcolor: "rgba(15, 23, 42, 0.3)",
-            border: "1px dashed rgba(255,255,255,0.1)",
-            borderRadius: 3,
-          }}
-        >
-          <Typography sx={{ color: "text.secondary", mb: 2 }}>
-            No category groups yet.
-          </Typography>
-          <Button
-            variant="contained"
-            disableElevation
-            startIcon={<AddIcon />}
-            onClick={() => setAddGroupOpen(true)}
-            sx={{ fontWeight: 800, borderRadius: 2 }}
-          >
-            Create your first group
-          </Button>
-        </Paper>
+        // First-run card (shared EmptyState) — explains the zero-based Plan.
+        <EmptyState
+          icon={<PieChartIcon />}
+          accent="#818cf8"
+          title="Build your Plan"
+          description="The Plan is a zero-based budget: every dollar from your paycheck gets a job. Create a group such as Bills or Everyday, then add your bills and personal expenses to it so you can fund each one on payday."
+          actionLabel="Create your first group"
+          onAction={() => setAddGroupOpen(true)}
+        />
       ) : (
         <Paper
           elevation={0}
