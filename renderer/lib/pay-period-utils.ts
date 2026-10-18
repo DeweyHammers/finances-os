@@ -35,12 +35,18 @@
  *    next view naturally covers the firing and orphaning here would double-
  *    count. See `nextViewFirstPayday` on PayPeriod.
  *
- * 5. LOCKED WEEKS. Past pay weeks (endDay < todayCoord) have their existing
- *    BillSplit rows preserved verbatim (`lockedAllocations`). The algorithm
- *    is still ALLOWED to plan placement into locked weeks — "locked" means
- *    "preserve existing splits", not "refuse to plan there". This enables
- *    retroactive suggestions ("you should have saved from Aug P4 for the
- *    Sept P1 crush").
+ * 5. LOCKED WEEKS. A pay week locks as soon as it STARTS (its paycheck has
+ *    landed and been handed out — see `isPayWeekLocked`), so the current
+ *    week is locked too. Locked weeks keep their existing BillSplit rows
+ *    verbatim (`lockedAllocations`), and the algorithm NEVER places new cents
+ *    into them: a paycheck that already came and went can't fund anything
+ *    new. An occurrence (or uncommitted remainder) whose eligible weeks are
+ *    ALL locked — a bill moved/added into the current week, a price bump on
+ *    a bill due this week, a past firing with no row — is returned in
+ *    `skipped` instead: not planned this cycle, not underfunded. When the
+ *    occurrence has no rows at all, the caller writes a $0 marker row in its
+ *    home week so display code doesn't fall back to showing the full amount
+ *    there (see OverviewPage.handleOptimize, BillsOverview "Skipped" card).
  *
  * See CLAUDE.md → "Multi-occurrence bills", "Orphan-fallback skip",
  * "DueDate > daysInMonth clamping", "Retroactive planning" for more.
@@ -76,6 +82,24 @@ export interface PayPeriod {
    * NOT be orphan-attributed to this view (that would double-count the
    * payment across two views). */
   nextViewFirstPayday: number | null;
+}
+
+/**
+ * A pay week is "locked" once it has STARTED — its payday is on or before
+ * today. That paycheck has already been received and handed out, so the
+ * optimizer treats the week's BillSplit rows as committed history and never
+ * levels money into it. `todayCoord` is today's day-of-month in this view
+ * (0 for future months, where nothing is locked).
+ *
+ * This used to be `endDay <= todayCoord` (week fully ENDED), which left the
+ * in-progress week re-plannable: hitting Optimize mid-week rewrote the current
+ * week's bills and changed a surplus that had already been spent.
+ *
+ * Shared by `balancePayWeeks` and the Overview optimizer so the two can never
+ * disagree about which weeks are frozen.
+ */
+export function isPayWeekLocked(period: Pick<PayPeriod, "startDay">, todayCoord: number): boolean {
+  return todayCoord > 0 && period.startDay <= todayCoord;
 }
 
 /**
@@ -516,13 +540,14 @@ export interface BalanceInputs {
   /** Minimum surplus each period should retain after bills + fixed expenses. */
   targetSurplusCents: number;
   /** Day-of-month coordinate for "today" in this month's view (pass 0 or omit
-   * for future months where no locking applies). Any period whose endDay is
-   * strictly less than this value is "past" — its allocations are frozen and
-   * the algorithm will not touch them. */
+   * for future months where no locking applies). Any period that has STARTED
+   * by this day is locked (see `isPayWeekLocked`) — its allocations are frozen
+   * and leveling never spreads new cents into it. */
   todayCoord?: number;
-  /** Existing BillSplit rows for past/locked periods. These are pre-credited
-   * into perWeek as fixed costs and reduce each bill's remaining amount. The
-   * algorithm never outputs allocations for locked weeks. */
+  /** Existing BillSplit rows for locked periods. These are pre-credited into
+   * perWeek as fixed costs and reduce each bill's remaining amount. The
+   * algorithm never outputs allocations for locked weeks; occurrences that
+   * only fit there land in `skipped` (header note 5). */
   lockedAllocations?: BalanceAllocation[];
 }
 
@@ -551,6 +576,28 @@ export interface BalanceResult {
    * Must be empty for a healthy plan — pass to `assertNoUnderfundedBills` at any
    * callsite that wants to fail loud when funding is silently missed. */
   underfunded: string[];
+  /** Occurrences (or the uncommitted remainder of one) that can ONLY be funded
+   * from a locked week — e.g. a bill moved/added into the current week, or a
+   * bill due this week whose price went up after payday. That paycheck is
+   * already handed out, so the cents are NOT planned this cycle (the user
+   * covered them outside the plan, e.g. from savings). Exempt from
+   * `underfunded`. See header note 5. */
+  skipped: SkippedOccurrence[];
+}
+
+export interface SkippedOccurrence {
+  billId: string;
+  occurrenceCoord: number;
+  /** The locked week the occurrence would naturally have landed in. */
+  weekIndex: number;
+  /** Cents not planned this cycle. */
+  skippedCents: number;
+  /** True when the occurrence already has ≥1 BillSplit row in a locked week
+   * (only the remainder is skipped — existing rows already describe what the
+   * paycheck covered). False → no rows at all: the caller must write a $0
+   * marker row in `weekIndex`, otherwise display code falls back to natural
+   * attribution and shows the full amount in that week anyway. */
+  hasLockedRows: boolean;
 }
 
 /**
@@ -684,19 +731,20 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       feasible: bills.length === 0,
       unplaced: bills.map((b) => b.id),
       underfunded: [],
+      skipped: [],
     };
   }
 
-  // Weeks whose last day is on or before todayCoord are "past" — their
-  // allocations are frozen in the database and the algorithm must not touch
-  // them. This prevents a re-balance (triggered by any income/bill change)
-  // from retroactively reassigning money that has already been received and
-  // committed to a paycheck that landed in the past.
+  // Weeks that have already STARTED (payday on/before todayCoord) are locked —
+  // their allocations are frozen in the database and the algorithm must not
+  // touch them. This prevents a re-balance (triggered by any income/bill
+  // change) from retroactively reassigning money that has already been
+  // received and committed to a paycheck, including the current week's.
   const todayCoord = inputs.todayCoord ?? 0;
   const rawLocked = inputs.lockedAllocations ?? [];
   const lockedWeeks = new Set<number>();
   for (let i = 0; i < N; i++) {
-    if (todayCoord > 0 && periods[i].endDay <= todayCoord) lockedWeeks.add(i);
+    if (isPayWeekLocked(periods[i], todayCoord)) lockedWeeks.add(i);
   }
 
   // "budget" per period = the cents available for bills after subtracting
@@ -719,21 +767,26 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
   // How many cents each (bill, occurrence) has already committed in locked weeks.
   const occKey = (billId: string, coord: number) => `${billId}#${coord}`;
   const lockedCentsPerOcc = new Map<string, number>();
+  // How many locked ROWS each occurrence has — counted separately from cents
+  // because a $0 "skipped" marker row is still a row (it's what makes the
+  // skip idempotent: next run sees hasLockedRows=true and writes nothing).
+  const lockedRowsPerOcc = new Map<string, number>();
   for (const la of rawLocked) {
     const k = occKey(la.billId, la.occurrenceCoord);
     lockedCentsPerOcc.set(k, (lockedCentsPerOcc.get(k) ?? 0) + la.amountCents);
+    lockedRowsPerOcc.set(k, (lockedRowsPerOcc.get(k) ?? 0) + 1);
   }
 
   const unplaced: string[] = [];
   const underfunded: string[] = [];
+  const skipped: SkippedOccurrence[] = [];
 
   // Any week whose payday is on/before the bill's occurrence coord is
-  // eligible for placement. Locked weeks ARE eligible — the "locked" concept
-  // only means "preserve existing split rows" (via lockedAllocations), not
-  // "refuse to plan there". A past week with no split for a bill is still a
-  // valid place to *suggest* prefunding; the algorithm can propose that the
-  // user should have saved from that paycheck, and locked cents will prevent
-  // double-committing where a real allocation already exists.
+  // eligible for placement — but only the UNLOCKED subset (`splitEligible`)
+  // ever receives cents. An occurrence whose eligible weeks are ALL locked is
+  // skipped this cycle (see header note 5). Leveling into a locked week was
+  // the Oct 2026 bug: it added a few dollars of a bill to a past paycheck that
+  // already had a row for that bill, and the duplicate insert 500'd mid-write.
   const eligibleWeeks = (coord: number): number[] => {
     const out: number[] = [];
     for (let i = 0; i < N; i++) {
@@ -773,6 +826,8 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     coord: number;
     key: string; // billId#coord
     eligible: number[];
+    /** Unlocked subset of `eligible` — the only weeks Phase 2 may level into. */
+    splitEligible: number[];
     naturalIdx: number;
     amountCents: number; // remaining after locked cents
   }
@@ -814,18 +869,37 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
         }
         continue;
       }
+      const splitEligible = eligible.filter((i) => !lockedWeeks.has(i));
+      if (splitEligible.length === 0) {
+        // Every week that could fund this occurrence has already started —
+        // its paycheck is handed out. Typical causes: a bill moved/added into
+        // the current week (e.g. 31st → 18th on Oct 18), or a price bump on
+        // a bill due this week. Don't plan it this cycle; the next occurrence
+        // is planned normally. naturalWeekIdx falls through to the locked
+        // home week here because no unlocked candidate exists.
+        skipped.push({
+          billId: b.id,
+          occurrenceCoord: occ.coord,
+          weekIndex: naturalWeekIdx(occ.coord),
+          skippedCents: remainingCents,
+          hasLockedRows: (lockedRowsPerOcc.get(key) ?? 0) > 0,
+        });
+        pastWindowOccs.add(key);
+        continue;
+      }
       withMeta.push({
         bill: b,
         coord: occ.coord,
         key,
         eligible,
+        splitEligible,
         naturalIdx: naturalWeekIdx(occ.coord),
         amountCents: remainingCents,
       });
     }
   }
 
-  // Phase 1: place each occurrence in its natural period. This keeps Bill A
+  // Phase 1: place each occurrence in its natural period. This keeps a bill due the 1st
   // (Sep 1) in P4 instead of jumping it to P1 just because P1 has more budget
   // room, and keeps each occurrence of a multi-occurrence bill in its own
   // home period.
@@ -880,7 +954,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       .filter((x) =>
         x.w &&
         !x.w.bill.neverSplit &&
-        x.w.eligible.length >= 2 &&
+        x.w.splitEligible.length >= 2 &&
         x.w.amountCents >= MIN_SPLIT_CENTS,
       )
       .sort((a, b) => b.w.amountCents - a.w.amountCents);
@@ -894,7 +968,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     // placement of the bill we're about to redistribute". distributeBillLevel
     // uses OVER-BUDGET amounts (existing - budget) so it can level not just
     // raw bill totals but shortfalls, giving weeks with more room priority.
-    const existingForEligible = pick.w.eligible.map((i) => {
+    const existingForEligible = pick.w.splitEligible.map((i) => {
       let e = perWeek[i];
       for (const a of pick.allocs) {
         if (a.weekIndex === i) e -= a.cents;
@@ -902,7 +976,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       return e;
     });
 
-    const budgetForEligible = pick.w.eligible.map((i) => budget[i]);
+    const budgetForEligible = pick.w.splitEligible.map((i) => budget[i]);
     const overForEligible = existingForEligible.map((e, k) => e - budgetForEligible[k]);
     const alloc = distributeBillLevel(pick.w.amountCents, overForEligible);
 
@@ -910,8 +984,8 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     // the new ones. Guarded with rollback if the reshuffle didn't help.
     for (const a of pick.allocs) perWeek[a.weekIndex] -= a.cents;
     const newAllocs: Array<{ weekIndex: number; cents: number }> = [];
-    for (let k = 0; k < pick.w.eligible.length; k++) {
-      const w = pick.w.eligible[k];
+    for (let k = 0; k < pick.w.splitEligible.length; k++) {
+      const w = pick.w.splitEligible[k];
       const cents = alloc[k];
       if (cents > 0) {
         newAllocs.push({ weekIndex: w, cents });
@@ -981,6 +1055,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     feasible: maxShortfall() === 0,
     unplaced,
     underfunded,
+    skipped,
   };
 }
 
@@ -1153,4 +1228,125 @@ export function getBillOccurrenceInPeriod(
     return { coord: dueDate, inNextMonth: false, day: dueDate };
   }
   return null;
+}
+
+// ── Income per pay period ──
+// Which paychecks land in which pay week. Used to be copy-pasted into
+// OverviewPage (optimizer), BudgetPage (auto-assign), CashFlowOverview and
+// PersonalOverview — each with slightly different fallbacks, which is exactly
+// how two pages start disagreeing about the same week's income. The fallbacks
+// are now explicit inputs (`IncomeDefaults`) so each caller keeps its own
+// semantics while the payday math lives in one tested place.
+
+/**
+ * Minimal shape of an income source — an `Income` row from the API, or the
+ * synthetic legacy source built from AppSettings by `withLegacyIncomeFallback`.
+ * Fields are loose (string | number | null) because they arrive straight off
+ * the REST boundary.
+ */
+export interface IncomeSourceLike {
+  name?: string | null;
+  amount?: number | string | null;
+  /** Payday weekday, 0=Sun … 6=Sat. Missing → `IncomeDefaults.payDay`. */
+  payDay?: number | string | null;
+  /** "WEEKLY" | "BI_WEEKLY". Missing → `IncomeDefaults.paymentCycle`. */
+  paymentCycle?: string | null;
+  /** Bi-weekly only: 0 = 1st/3rd/5th payday of the month, 1 = 2nd/4th. */
+  payWeekOffset?: number | string | null;
+}
+
+/**
+ * What a source falls back to when it doesn't set its own payDay / cycle.
+ * Callers pass their historical fallbacks (primary income's cadence, legacy
+ * AppSettings cadence, …) so extracting this helper changed no behavior.
+ */
+export interface IncomeDefaults {
+  payDay: number;
+  paymentCycle?: string | null;
+}
+
+/**
+ * Day-of-month numbers on which an income pays out in the given month.
+ * Weekly → every matching weekday. Bi-weekly → every other matching weekday,
+ * starting from the first (offset 0) or second (offset 1) occurrence — the
+ * offset lets two bi-weekly incomes sit on opposite weeks.
+ */
+export function getIncomePaydays(
+  year: number,
+  month: number,
+  payDay: number,
+  isBiWeekly: boolean,
+  offset: number,
+): number[] {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const all: number[] = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    if (new Date(year, month, d).getDay() === payDay) all.push(d);
+  }
+  return isBiWeekly ? all.filter((_, i) => i % 2 === offset) : all;
+}
+
+/**
+ * The sources that pay out at least once inside `period` (a payday falling in
+ * [startDay, endDay]). Returned in input order so callers can build per-source
+ * breakdowns (CashFlowOverview's income tooltip) as well as totals.
+ */
+export function getIncomeSourcesForPeriod<T extends IncomeSourceLike>(
+  sources: T[],
+  period: Pick<PayPeriod, "startDay" | "endDay">,
+  year: number,
+  month: number,
+  defaults: IncomeDefaults,
+): T[] {
+  return sources.filter((income) => {
+    const payDay = Number(income.payDay ?? defaults.payDay);
+    const isBiWeekly = (income.paymentCycle ?? defaults.paymentCycle) === "BI_WEEKLY";
+    const offset = Number(income.payWeekOffset ?? 0);
+    return getIncomePaydays(year, month, payDay, isBiWeekly, offset).some(
+      (d) => d >= period.startDay && d <= period.endDay,
+    );
+  });
+}
+
+/**
+ * Income landing in each pay period, in integer cents, aligned with `periods`.
+ * Each source is rounded to cents individually before summing (matches the
+ * original inline loops bit-for-bit). A source counts once per period even if
+ * two of its paydays fall in the same period.
+ */
+export function computeIncomePerPeriodCents(
+  sources: IncomeSourceLike[],
+  periods: Pick<PayPeriod, "startDay" | "endDay">[],
+  year: number,
+  month: number,
+  defaults: IncomeDefaults,
+): number[] {
+  return periods.map((period) =>
+    getIncomeSourcesForPeriod(sources, period, year, month, defaults).reduce(
+      (total, income) => total + Math.round((Number(income.amount) || 0) * 100),
+      0,
+    ),
+  );
+}
+
+/**
+ * Legacy first-run fallback: with no `Income` rows yet, synthesize a single
+ * source from the old AppSettings cadence fields (w2Amount / paymentCycle /
+ * payDay) so pages show numbers instead of $0. Used by BudgetPage and
+ * CashFlowOverview; the optimizer and PersonalOverview deliberately skip it.
+ */
+export function withLegacyIncomeFallback<T extends IncomeSourceLike>(
+  incomes: T[],
+  settings: { w2Amount?: number | string | null; paymentCycle?: string | null; payDay?: number | string | null } | null | undefined,
+): (T | IncomeSourceLike)[] {
+  if (incomes.length > 0) return incomes;
+  return [
+    {
+      name: "Income",
+      amount: settings?.w2Amount ?? 0,
+      paymentCycle: settings?.paymentCycle,
+      payDay: settings?.payDay,
+      payWeekOffset: 0,
+    },
+  ];
 }

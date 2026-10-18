@@ -1,10 +1,10 @@
 import path from "path";
 import fs from "fs";
-import { exec, execSync } from "child_process";
+import { execSync } from "child_process";
 import { app, ipcMain, protocol, session } from "electron";
 import serve from "electron-serve";
 import { createWindow } from "./helpers/create-window";
-import { startServer } from "./api-server";
+import { startServer, API_PORT } from "./api-server";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -33,7 +33,7 @@ const cleanup = () => {
   await app.whenReady();
 
   // 3. Start API server after ready
-  startServer(5858);
+  startServer(API_PORT);
 
   if (isProd) {
     // Setup logging

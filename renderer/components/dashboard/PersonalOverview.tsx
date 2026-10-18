@@ -27,6 +27,7 @@ import {
   getBillOccurrenceInPeriod,
   computeSplitPersonalAllocations,
   monthKeyOf,
+  computeIncomePerPeriodCents,
   BillSplitRecord,
   PayPeriod,
 } from "../../lib/pay-period-utils";
@@ -69,7 +70,6 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   const today = new Date();
   const year = viewYear ?? today.getFullYear();
   const month = viewMonth ?? today.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
   const periods = getPayPeriodsForMonth(year, month, payWeekday, today, biWeekly);
   const monthKey = monthKeyOf(year, month);
 
@@ -83,22 +83,11 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   // These three arrays (income, bills, fixed personal) feed
   // computeSplitPersonalAllocations so it can compute what's left after fixed
   // obligations in each week and keep the surplus target satisfied.
-  const incomePerPeriodCents: number[] = periods.map((period) => {
-    let total = 0;
-    incomes.forEach((income: any) => {
-      const incomePayDay = Number(income.payDay ?? payWeekday);
-      const isBW = (income.paymentCycle ?? settings.paymentCycle) === "BI_WEEKLY";
-      const offset = Number(income.payWeekOffset ?? 0);
-      const paydays: number[] = [];
-      for (let d = 1; d <= daysInMonth; d++) {
-        if (new Date(year, month, d).getDay() === incomePayDay) paydays.push(d);
-      }
-      const effective = isBW ? paydays.filter((_, i) => i % 2 === offset) : paydays;
-      if (effective.some((d) => d >= period.startDay && d <= period.endDay)) {
-        total += Math.round((Number(income.amount) || 0) * 100);
-      }
-    });
-    return total;
+  // Income: shared helper; sources without their own cadence inherit the
+  // (primary-income-derived) settings cadence. No legacy w2 fallback here.
+  const incomePerPeriodCents = computeIncomePerPeriodCents(incomes, periods, year, month, {
+    payDay: payWeekday,
+    paymentCycle: settings.paymentCycle,
   });
 
   const billsPerPeriodCents = periods.map((period) =>
@@ -158,7 +147,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
 
   // Drop zero-cent split slices — a split can legitimately allocate $0 to a
   // week if all room is consumed by bills, and rendering a $0 card is noise.
-  const getPeriodSplitAllocations = (period: PayPeriod, i: number) =>
+  const getPeriodSplitAllocations = (_period: PayPeriod, i: number) =>
     splitPersonals
       .map((sp) => {
         const cents = splitAlloc.perSplitPerPeriod.get(sp.id)?.[i] ?? 0;

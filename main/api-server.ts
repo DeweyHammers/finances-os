@@ -1,12 +1,67 @@
 import express, { Request, Response, NextFunction } from "express";
 import { getModel, prisma } from "../shared/prisma";
 
+// ── Network exposure ──
+// This server fronts the whole finance database with no auth, so it must only
+// be reachable by the app's own renderer:
+//   1. It listens on the IPv4 loopback only (see startServer) — never on the
+//      LAN. The renderer calls http://127.0.0.1:5858 explicitly (providers.tsx)
+//      so `localhost` resolving to ::1 can't miss the listener.
+//   2. Browser requests must come from an allowed Origin (isAllowedOrigin).
+//      CORS headers alone aren't enough: a random website could still fire
+//      "simple" POSTs blind, so disallowed origins get a 403 before any route.
+//   3. The Host header must name the loopback (isAllowedHost) — blocks DNS
+//      rebinding, where a hostile domain re-resolves to 127.0.0.1 and reads
+//      data with same-origin GETs (which carry no Origin header).
+// Requests with NO Origin header (curl, scripts, same-origin GETs) are allowed:
+// they can only come from this machine since we're bound to loopback.
+export const API_HOST = "127.0.0.1";
+export const API_PORT = 5858;
+
+/**
+ * Origins allowed to call the API from a browser context.
+ *  - `app://…` — the PROD renderer, served by electron-serve on the privileged
+ *    `app` scheme (main.ts loads `app://./`, serialized origin `app://.`).
+ *  - `http://localhost:<port>` / `http://127.0.0.1:<port>` — the Nextron dev
+ *    renderer (`next dev`, port 8888 by default but overridable via argv).
+ *    Only honored outside production.
+ */
+export function isAllowedOrigin(origin: string, isProd: boolean): boolean {
+  if (origin.startsWith("app://")) return true;
+  if (!isProd && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) return true;
+  return false;
+}
+
+/** Host header must point at the loopback listener (DNS-rebinding guard). */
+export function isAllowedHost(host: string | undefined): boolean {
+  if (!host) return false;
+  return host === `${API_HOST}:${API_PORT}` || host === `localhost:${API_PORT}`;
+}
+
 const app = express();
 app.use(express.json());
 
-// CORS for development
+// Origin / Host gate + CORS. Runs before every route (and before preflight
+// handling), so a rejected caller never reaches Prisma.
 app.use((req: Request, res: Response, next: NextFunction) => {
-  res.header("Access-Control-Allow-Origin", "*");
+  const isProd = process.env.NODE_ENV === "production";
+  const origin = req.headers.origin;
+
+  if (!isAllowedHost(req.headers.host)) {
+    res.status(403).json({ error: "Forbidden host" });
+    return;
+  }
+  if (origin !== undefined && !isAllowedOrigin(origin, isProd)) {
+    res.status(403).json({ error: "Forbidden origin" });
+    return;
+  }
+
+  // Echo the (allowed) origin back instead of "*", and tell caches the
+  // response varies by Origin.
+  if (origin !== undefined) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Vary", "Origin");
+  }
   res.header(
     "Access-Control-Allow-Methods",
     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -271,8 +326,10 @@ app.delete("/api/:resource/:id", async (req: Request, res: Response) => {
   }
 });
 
-export function startServer(port = 5858) {
-  return app.listen(port, () => {
-    console.log(`API Server running on port ${port}`);
+export function startServer(port = API_PORT) {
+  // Loopback only — see "Network exposure" at the top of this file. Without
+  // the host argument Express listens on every interface (LAN-reachable).
+  return app.listen(port, API_HOST, () => {
+    console.log(`API Server running on http://${API_HOST}:${port}`);
   });
 }

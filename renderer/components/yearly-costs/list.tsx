@@ -3,7 +3,7 @@
 /**
  * YearlyCostList — DataGrid table of once-per-year costs (Settings > Yearly Costs).
  *
- * Yearly costs model annual expenses (car registration, property tax) with month
+ * Yearly costs model annual expenses (license renewals, property tax) with month
  * (1-12) + day (1-31) columns. The Date column formats the pair as "Mar 15" via
  * SHORT_MONTHS and provides a custom sort comparator so month-then-day ordering
  * works despite the column being backed by only the `month` field.
@@ -53,11 +53,11 @@ export const YearlyCostList = () => {
         field: "month",
         headerName: "Date",
         width: 150,
-        valueGetter: (value, row) => {
+        valueGetter: (_value, row) => {
           if (!row.month || !row.day) return "-";
           return `${SHORT_MONTHS[row.month - 1]} ${row.day}`;
         },
-        sortComparator: (v1, v2, param1, param2) => {
+        sortComparator: (_v1, _v2, param1, param2) => {
           const row1 = param1.api.getRow(param1.id);
           const row2 = param2.api.getRow(param2.id);
           const m1 = row1.month || 0;

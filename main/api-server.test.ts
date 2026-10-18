@@ -4,13 +4,13 @@ import { describe, it, expect } from "vitest";
 // api-server.ts opens Prisma + a real DB which we don't want to spin up just
 // for unit tests. Importing the file exercises the top-level express setup but
 // transformBody is pure once imported.
-import { transformBody } from "./api-server";
+import { transformBody, isAllowedOrigin, isAllowedHost } from "./api-server";
 
 describe("transformBody", () => {
   it("coerces amount/dueDate to numbers", () => {
-    const out = transformBody({ amount: "26.99", dueDate: "28" });
-    expect(out.amount).toBe(26.99);
-    expect(out.dueDate).toBe(28);
+    const out = transformBody({ amount: "24.95", dueDate: "15" });
+    expect(out.amount).toBe(24.95);
+    expect(out.dueDate).toBe(15);
   });
 
   it("coerces budget cents fields", () => {
@@ -73,5 +73,39 @@ describe("transformBody", () => {
     const out = transformBody({ payDay: "3", payWeekOffset: "1" });
     expect(out.payDay).toBe(3);
     expect(out.payWeekOffset).toBe(1);
+  });
+});
+
+// Network-exposure guards — the API has no auth, so only the app's own
+// renderer may reach it (see "Network exposure" in api-server.ts).
+describe("isAllowedOrigin", () => {
+  it("allows the PROD app:// renderer in both modes", () => {
+    expect(isAllowedOrigin("app://.", true)).toBe(true);
+    expect(isAllowedOrigin("app://.", false)).toBe(true);
+  });
+
+  it("allows the dev renderer only outside production", () => {
+    expect(isAllowedOrigin("http://localhost:8888", false)).toBe(true);
+    expect(isAllowedOrigin("http://127.0.0.1:8888", false)).toBe(true);
+    expect(isAllowedOrigin("http://localhost:8888", true)).toBe(false);
+  });
+
+  it("rejects arbitrary websites and look-alikes", () => {
+    expect(isAllowedOrigin("https://evil.example", false)).toBe(false);
+    expect(isAllowedOrigin("http://localhost.evil.example:8888", false)).toBe(false);
+    expect(isAllowedOrigin("null", false)).toBe(false);
+  });
+});
+
+describe("isAllowedHost", () => {
+  it("accepts the loopback listener addresses", () => {
+    expect(isAllowedHost("127.0.0.1:5858")).toBe(true);
+    expect(isAllowedHost("localhost:5858")).toBe(true);
+  });
+
+  it("rejects rebinding hosts, LAN addresses and missing hosts", () => {
+    expect(isAllowedHost("evil.example:5858")).toBe(false);
+    expect(isAllowedHost("192.168.1.20:5858")).toBe(false);
+    expect(isAllowedHost(undefined)).toBe(false);
   });
 });

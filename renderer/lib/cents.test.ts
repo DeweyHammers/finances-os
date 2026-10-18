@@ -4,7 +4,7 @@ import { toCents, fromCents, formatMoney } from "./cents";
 describe("toCents", () => {
   it("converts dollars number to cents", () => {
     expect(toCents(1)).toBe(100);
-    expect(toCents(26.99)).toBe(2699);
+    expect(toCents(24.95)).toBe(2495);
     expect(toCents(0)).toBe(0);
     expect(toCents(-50)).toBe(-5000);
   });
@@ -12,7 +12,7 @@ describe("toCents", () => {
   it("converts dollar strings to cents", () => {
     expect(toCents("1.50")).toBe(150);
     expect(toCents("1,234.56")).toBe(123456);
-    expect(toCents("-19.99")).toBe(-1999);
+    expect(toCents("-18.25")).toBe(-1825);
   });
 
   it("handles edge inputs", () => {
@@ -32,7 +32,7 @@ describe("toCents", () => {
 describe("fromCents", () => {
   it("converts cents to dollars", () => {
     expect(fromCents(100)).toBe(1);
-    expect(fromCents(2699)).toBe(26.99);
+    expect(fromCents(2495)).toBe(24.95);
     expect(fromCents(0)).toBe(0);
     expect(fromCents(-5000)).toBe(-50);
   });
@@ -45,13 +45,13 @@ describe("fromCents", () => {
 
 describe("formatMoney", () => {
   it("formats positive cents as dollars", () => {
-    expect(formatMoney(2699)).toBe("$26.99");
+    expect(formatMoney(2495)).toBe("$24.95");
     expect(formatMoney(0)).toBe("$0.00");
     expect(formatMoney(100)).toBe("$1.00");
   });
 
   it("formats negative cents", () => {
-    expect(formatMoney(-2699)).toBe("-$26.99");
+    expect(formatMoney(-2495)).toBe("-$24.95");
   });
 
   it("includes thousands separator", () => {
@@ -65,9 +65,9 @@ describe("formatMoney", () => {
   });
 
   it("optionally shows + sign for positive amounts", () => {
-    expect(formatMoney(2699, { withSign: true })).toBe("+$26.99");
+    expect(formatMoney(2495, { withSign: true })).toBe("+$24.95");
     expect(formatMoney(0, { withSign: true })).toBe("$0.00");
-    expect(formatMoney(-2699, { withSign: true })).toBe("-$26.99");
+    expect(formatMoney(-2495, { withSign: true })).toBe("-$24.95");
   });
 
   it("handles non-finite", () => {
@@ -77,7 +77,7 @@ describe("formatMoney", () => {
 
 describe("toCents <-> fromCents round-trip", () => {
   it("preserves common values", () => {
-    [0, 0.01, 0.1, 1, 26.99, 1234.56, -19.99].forEach((v) => {
+    [0, 0.01, 0.1, 1, 24.95, 1234.56, -18.25].forEach((v) => {
       expect(fromCents(toCents(v))).toBe(v);
     });
   });

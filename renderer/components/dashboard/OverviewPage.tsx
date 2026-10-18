@@ -27,6 +27,7 @@ import {
   useOne,
   useCreate,
   useDelete,
+  useUpdate,
 } from "@refinedev/core";
 import {
   Box,
@@ -55,18 +56,47 @@ import { SHORT_MONTHS } from "../../lib/constants";
 import { useRouter } from "next/navigation";
 import {
   getPayPeriodsForMonth,
-  balancePayWeeks,
-  getBillOccurrencesInView,
-  assertNoUnderfundedBills,
-  monthKeyOf,
   BillSplitRecord,
 } from "../../lib/pay-period-utils";
+// Optimize PHASE A (pure planning) + the horizon constant.
+import { planOptimize, OPTIMIZE_HORIZON_MONTHS } from "../../lib/optimize-plan";
 
-// How far forward the Optimize action plans. 36 months = 3 years, which
-// keeps every month the user can realistically scroll to funded with proper
-// BillSplit rows. Extending further inflates the first-run write cost
-// without much planning value for a personal-finances tool.
-const OPTIMIZE_HORIZON_MONTHS = 36;
+// Input signatures (bills / incomes / personals / surplus target) as of the
+// last SUCCESSFUL Optimize, stored as JSON in `AppSettings.optimizedInputsSig`.
+// The stale-data alert compares against this baseline instead of a per-mount
+// snapshot, so an edit made on another page (e.g. changing a bill on /Bill,
+// then opening Overview) still raises "please Optimize".
+//
+// It lives in the DATABASE, not localStorage: each window/origin (dev
+// renderer, PROD app, a browser tab) has its own localStorage, so a baseline
+// there went stale whenever Optimize ran from a different window and the
+// alert kept nagging about changes that were already optimized.
+interface InputSignatures {
+  bills: string;
+  incomes: string;
+  personals: string;
+  surplusTarget: number;
+}
+
+function parseOptimizedSig(raw: unknown): InputSignatures | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    return JSON.parse(raw) as InputSignatures;
+  } catch {
+    return null;
+  }
+}
+
+// Alert texts raised by input-change detection. Only these are auto-cleared
+// when the inputs match the baseline again — the legacy-split migration alert
+// is cleared only by Optimize.
+const INPUT_CHANGE_ALERTS = new Set([
+  "Bills were added or updated.",
+  "Income was added or updated.",
+  "Personal expenses were added or updated.",
+  "Weekly surplus target was changed.",
+]);
+
 
 export function OverviewPage() {
   const router = useRouter();
@@ -87,17 +117,22 @@ export function OverviewPage() {
   const [optimizeAlert, setOptimizeAlert] = useState<string | null>(() => {
     try { return localStorage.getItem("overviewOptimizeAlert"); } catch { return null; }
   });
-  const [successToast, setSuccessToast] = useState(false);
+  // Result toast. Message and open flag are split (see CLAUDE.md → "Toast
+  // pattern") so the text doesn't collapse during the exit animation.
+  // Severity lets the same Snackbar report failures — the old success-only
+  // toast fired from a `finally` and claimed success even after a 500.
+  const [toastOpen, setToastOpen] = useState(false);
+  const [toastMsg, setToastMsg] = useState("");
+  const [toastSeverity, setToastSeverity] = useState<"success" | "error">("success");
+  const showToast = (msg: string, severity: "success" | "error") => {
+    setToastMsg(msg);
+    setToastSeverity(severity);
+    setToastOpen(true);
+  };
 
-  // Refs used by the change-detection effect below. We stash the previous
-  // signatures of bills/incomes/personals/surplusTarget so we can compare
-  // against the current values on each data update and fire the alert only
-  // when something actually changed post-mount.
+  // One-shot guard so the legacy-split migration alert only evaluates on the
+  // first fully-loaded render.
   const initializedRef = useRef(false);
-  const prevBillsSigRef = useRef("");
-  const prevIncomesSigRef = useRef("");
-  const prevPersonalsSigRef = useRef("");
-  const prevSurplusTargetRef = useRef(0);
 
   // Mirror the alert state to localStorage so it persists across navigations
   // and app restarts (see comment on optimizeAlert declaration above).
@@ -136,6 +171,10 @@ export function OverviewPage() {
   });
   const { mutateAsync: createSplit } = useCreate();
   const { mutateAsync: deleteSplit } = useDelete();
+  const { mutateAsync: updateSettings } = useUpdate();
+  // Guards the one-time "no baseline yet → adopt current inputs" DB write so
+  // re-renders before the settings refetch lands don't fire it repeatedly.
+  const baselineAdoptedRef = useRef(false);
 
   // ── All hooks must run in the same order every render. Pull data out of the
   // query results (defaulting while loading) BEFORE any conditional return so
@@ -213,235 +252,139 @@ export function OverviewPage() {
   );
 
   // ── Change detection → stale-data alert ──
-  // Watches bills/incomes/personals/surplusTarget and fires the alert whenever
-  // any of them change AFTER the initial mount. On first mount it snapshots
-  // the current values without firing (so a fresh page load doesn't flash
-  // the alert). Legacy `occurrenceCoord=0` splits also trigger the alert
-  // on first mount as a one-time migration signal.
+  // Signatures of every Optimize input. Anything that changes the plan's
+  // inputs must be reflected here, or edits to it won't raise the alert.
+  const inputSigs: InputSignatures = useMemo(() => ({
+    bills: bills.map((b: any) => `${b.id}:${b.amount}:${b.dueDate}:${b.neverSplit ? 1 : 0}`).sort().join(","),
+    incomes: incomes.map((i: any) => `${i.id}:${i.amount}:${i.payDay}:${i.paymentCycle}:${i.payWeekOffset ?? 0}`).sort().join(","),
+    personals: personalBills.map((p: any) => `${p.id}:${p.amount}:${p.dueDate}:${p.repeatWeekly ? 1 : 0}:${p.weekOfMonth ?? ""}`).sort().join(","),
+    surplusTarget: targetSurplusCents,
+  }), [bills, incomes, personalBills, targetSurplusCents]);
+
+  // Persist the inputs as the new "last optimized" baseline. Shared by the
+  // first-run adoption below and a successful Optimize.
+  const saveOptimizedSig = (sig: InputSignatures) =>
+    updateSettings({
+      resource: "AppSettings",
+      id: "global",
+      values: { optimizedInputsSig: JSON.stringify(sig) },
+      successNotification: false,
+      errorNotification: false,
+    });
+
+  // Compares the current inputs against the baseline saved by the last
+  // successful Optimize (`AppSettings.optimizedInputsSig`) and fires the
+  // alert on any difference — whether the edit happened while Overview was
+  // mounted or on another page before navigating here. The old version
+  // snapshotted on mount, so "edit a bill on /Bill → open Overview" never
+  // alerted (the snapshot already contained the new amount).
+  //
+  // When the inputs MATCH the baseline, a leftover input-change alert is
+  // cleared — e.g. Optimize ran in another window, or an edit was reverted.
+  //
+  // First run with no baseline (fresh install / upgrade from the old
+  // detector): adopt the current inputs as the baseline without alerting.
+  // Legacy `occurrenceCoord=0` splits still trigger the one-time migration
+  // alert on first load.
   useEffect(() => {
     const loading =
       billsQuery.isLoading || personalQuery.isLoading ||
       settingsQuery.isLoading || incomesQuery.isLoading || splitsQuery.isLoading;
     if (loading) return;
 
-    const billsSig = bills.map((b: any) => `${b.id}:${b.amount}:${b.dueDate}`).sort().join(",");
-    const incomesSig = incomes.map((i: any) => `${i.id}:${i.amount}:${i.payDay}:${i.paymentCycle}`).sort().join(",");
-    const personalsSig = personalBills.map((p: any) => `${p.id}:${p.amount}:${p.dueDate}`).sort().join(",");
-    const surplusTarget = targetSurplusCents;
-
     if (!initializedRef.current) {
-      prevBillsSigRef.current = billsSig;
-      prevIncomesSigRef.current = incomesSig;
-      prevPersonalsSigRef.current = personalsSig;
-      prevSurplusTargetRef.current = surplusTarget;
       initializedRef.current = true;
       if (hasLegacySplits) {
         setOptimizeAlert(
           "Bill schedule needs re-optimization — the multi-occurrence fix requires re-running Optimize so each pay week gets the correct allocation.",
         );
+        return;
+      }
+    }
+
+    const baseline = parseOptimizedSig(settings?.optimizedInputsSig);
+    if (!baseline) {
+      if (!baselineAdoptedRef.current) {
+        baselineAdoptedRef.current = true;
+        saveOptimizedSig(inputSigs).catch((err) => console.error("Saving optimize baseline failed:", err));
       }
       return;
     }
 
-    if (billsSig !== prevBillsSigRef.current) {
-      prevBillsSigRef.current = billsSig;
+    if (inputSigs.bills !== baseline.bills) {
       setOptimizeAlert("Bills were added or updated.");
-    } else if (incomesSig !== prevIncomesSigRef.current) {
-      prevIncomesSigRef.current = incomesSig;
+    } else if (inputSigs.incomes !== baseline.incomes) {
       setOptimizeAlert("Income was added or updated.");
-    } else if (personalsSig !== prevPersonalsSigRef.current) {
-      prevPersonalsSigRef.current = personalsSig;
+    } else if (inputSigs.personals !== baseline.personals) {
       setOptimizeAlert("Personal expenses were added or updated.");
-    } else if (surplusTarget !== prevSurplusTargetRef.current) {
-      prevSurplusTargetRef.current = surplusTarget;
+    } else if (inputSigs.surplusTarget !== baseline.surplusTarget) {
       setOptimizeAlert("Weekly surplus target was changed.");
+    } else {
+      // Inputs match what was last optimized — drop any stale change alert.
+      setOptimizeAlert((prev) => (prev && INPUT_CHANGE_ALERTS.has(prev) ? null : prev));
     }
-  }, [bills, incomes, personalBills, targetSurplusCents, hasLegacySplits, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading, splitsQuery.isLoading]);
+  }, [inputSigs, settings?.optimizedInputsSig, hasLegacySplits, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading, splitsQuery.isLoading]);
 
   // ── Optimize action ──
-  // Iterates the next 36 months (3 years). For each month:
-  //   1. Builds the pay-period grid.
-  //   2. Computes per-period income + fixed personal expenses.
-  //   3. Preserves splits in already-elapsed ("locked") pay weeks as history.
-  //   4. Calls balancePayWeeks to allocate the remaining bill amounts.
-  //   5. Verifies no bill occurrence was under-funded (fail loud).
-  //   6. Diffs old vs new allocations and rewrites only what changed.
-  // Locked-week preservation is critical — see the big comment on
-  // lockedAllocations below.
+  // PHASE A (planOptimize, lib/optimize-plan.ts) plans the next
+  // OPTIMIZE_HORIZON_MONTHS months with zero DB writes; PHASE B below applies
+  // the deletes/creates. Locked-week preservation and every fail-loud guard
+  // live in planOptimize — see its doc comment.
   const handleOptimize = async () => {
     if (isOptimizing || !primaryIncome) return;
     setIsOptimizing(true);
     try {
-      const payWeekday = Number(primaryIncome.payDay);
-      const biWeekly = primaryIncome.paymentCycle === "BI_WEEKLY";
+      // PHASE A — plan every month WITHOUT touching the DB (pure function in
+      // lib/optimize-plan.ts). The balance algorithm + underfunded / locked-
+      // week assertions can throw; doing all of that before the first delete
+      // means a failure leaves the DB exactly as it was, instead of the old
+      // behaviour (delete a month's rows, then die halfway through
+      // re-creating them — which silently dropped two split bills from
+      // Oct 2026 and inflated that week's surplus).
+      const writePlans = planOptimize({
+        today,
+        bills,
+        personalBills,
+        incomes,
+        primaryIncome,
+        splitRows: splitRowsRaw,
+        targetSurplusCents,
+      });
 
-      // Sums cents of income landing in each pay period. Iterates every
-      // day of the target month, groups paydays by income source (each
-      // income may have its own payDay/cycle/offset for households with
-      // asymmetric paychecks), and buckets each payday into the period
-      // whose [startDay, endDay] contains it.
-      const computeIncomePerPeriod = (periods: ReturnType<typeof getPayPeriodsForMonth>, tYear: number, tMonth: number) => {
-        const dim = new Date(tYear, tMonth + 1, 0).getDate();
-        const collectPaydays = (payDay: number, isBiWeekly: boolean, offset: number) => {
-          const all: number[] = [];
-          for (let d = 1; d <= dim; d++) {
-            if (new Date(tYear, tMonth, d).getDay() === payDay) all.push(d);
-          }
-          return isBiWeekly ? all.filter((_, i) => i % 2 === offset) : all;
-        };
-        return periods.map((p) => {
-          let total = 0;
-          incomes.forEach((income: any) => {
-            const pd = Number(income.payDay ?? payWeekday);
-            const isBW = (income.paymentCycle ?? primaryIncome.paymentCycle) === "BI_WEEKLY";
-            const off = Number(income.payWeekOffset ?? 0);
-            if (collectPaydays(pd, isBW, off).some((d) => d >= p.startDay && d <= p.endDay)) {
-              total += Math.round((Number(income.amount) || 0) * 100);
-            }
-          });
-          return total;
-        });
-      };
-
-      // Sums cents of "fixed personal expenses" landing in each pay period.
-      // Personal items come in three flavors:
-      //   - repeatWeekly     → fires every pay period
-      //   - weekOfMonth set  → fires only in that specific pay period (P1..P4)
-      //   - dueDate set      → fires in the period covering its calendar day,
-      //                        with forward-extension into the next month
-      //                        (same rule getBillPeriodKey uses for bills).
-      const computePersonalPerPeriod = (periods: ReturnType<typeof getPayPeriodsForMonth>) =>
-        periods.map((p) => {
-          let total = 0;
-          personalBills.forEach((pb: any) => {
-            let fires = false;
-            if (pb.repeatWeekly) fires = true;
-            else if (pb.weekOfMonth != null) fires = `P${pb.weekOfMonth}` === p.key;
-            else {
-              const D = Number(pb.dueDate);
-              const nextCoord = D + p.daysInMonth;
-              fires = (D >= p.startDay && D <= p.endDay) || (nextCoord >= p.startDay && nextCoord <= p.endDay);
-            }
-            if (fires) total += Math.round((Number(pb.amount) || 0) * 100);
-          });
-          return total;
-        });
-
-      // Main loop: OPTIMIZE_HORIZON_MONTHS forward from today. Each iteration
-      // is independent — one month's optimization never reads from another.
-      for (let i = 0; i < OPTIMIZE_HORIZON_MONTHS; i++) {
-        const target = new Date(today.getFullYear(), today.getMonth() + i, 1);
-        const tYear = target.getFullYear();
-        const tMonth = target.getMonth();
-        const mk = monthKeyOf(tYear, tMonth);
-
-        const periods = getPayPeriodsForMonth(tYear, tMonth, payWeekday, today, biWeekly);
-        if (periods.length === 0) continue;
-
-        // Only the current month has a today coord; future months treat
-        // every period as unlocked (nothing has been "paid" yet).
-        const isThisCurrentMonth = tYear === today.getFullYear() && tMonth === today.getMonth();
-        const tTodayCoord = isThisCurrentMonth ? today.getDate() : 0;
-
-        // A period is "locked" once today has passed its endDay — the
-        // paycheck for that week has already been received and spent, so
-        // we must not rewrite its allocations. See the lockedAllocations
-        // block below for the full rationale.
-        const lockedWeekIndices = new Set<number>(
-          periods.filter((p) => tTodayCoord > 0 && p.endDay <= tTodayCoord).map((p) => p.index),
-        );
-
-        const existingForMonth = splitRowsRaw.filter((o: any) => String(o.monthKey) === mk);
-
-        // Resolve legacy occurrenceCoord=0 rows to the bill's primary
-        // (next-month-preferred) occurrence so the balance algorithm can
-        // account for them per-occurrence.
-        const resolveCoord = (billId: string, rawCoord: number): number => {
-          if (rawCoord !== 0) return rawCoord;
-          const bill = bills.find((b: any) => b.id === billId);
-          if (!bill) return 0;
-          const occs = getBillOccurrencesInView(Number(bill.dueDate ?? 0), periods);
-          if (occs.length === 0) return 0;
-          const primary = occs.find((o) => o.inNextMonth) ?? occs[0];
-          return primary.coord;
-        };
-
-        // Every split in a locked week is HISTORY — it represents money the
-        // paycheck for that week already committed. Preserve them as-is even
-        // if they don't match the new algorithm's "natural" attribution, so
-        // the algorithm accounts for what's already spent and only allocates
-        // the REMAINING portion of each bill into future weeks. Deleting
-        // these would cause the algorithm to re-place the full bill amount
-        // into unlocked weeks, doubling up on already-committed funds.
-        const lockedAllocations = existingForMonth
-          .filter((o: any) => lockedWeekIndices.has(Number(o.weekIndex)))
-          .map((o: any) => ({
-            billId: String(o.billId),
-            weekIndex: Number(o.weekIndex),
-            amountCents: Number(o.amountCents),
-            occurrenceCoord: resolveCoord(String(o.billId), Number(o.occurrenceCoord ?? 0)),
-          }));
-
-        const result = balancePayWeeks({
-          bills: bills.map((b: any) => ({ id: b.id, amount: Number(b.amount), dueDate: Number(b.dueDate), neverSplit: Boolean(b.neverSplit) })),
-          periods,
-          incomePerPeriodCents: computeIncomePerPeriod(periods, tYear, tMonth),
-          fixedExpensesPerPeriodCents: computePersonalPerPeriod(periods),
-          targetSurplusCents,
-          todayCoord: tTodayCoord,
-          lockedAllocations,
-        });
-
-        // Fail loud if the algorithm silently dropped funding for any bill
-        // occurrence — this is the guard that prevents "Bill E missing
-        // from Sep P1" bugs from ever reappearing without a scream.
-        assertNoUnderfundedBills(result, `Optimize Now — ${mk}`);
-
-        // Only unlocked rows are recomputed; locked-week rows are preserved
-        // as-is (they represent past-paycheck commitments).
-        const toDelete = existingForMonth.filter(
-          (o: any) => !lockedWeekIndices.has(Number(o.weekIndex)),
-        );
-
-        // Fast-path early exit: if the new allocation set is identical to
-        // what's already in the DB for this month, skip the delete+create
-        // round-trip entirely. Saves dozens of Prisma writes on months
-        // that didn't need any change.
-        const currentSig = toDelete
-          .map((o: any) => `${o.billId}:${o.weekIndex}:${o.occurrenceCoord ?? 0}:${o.amountCents}`)
-          .sort()
-          .join(",");
-        const newSig = result.allocations
-          .map((a) => `${a.billId}:${a.weekIndex}:${a.occurrenceCoord}:${a.amountCents}`)
-          .sort()
-          .join(",");
-        if (currentSig === newSig) continue;
-
-        // Delete-then-create is intentional: there's no `upsert` for a
-        // composite key that includes occurrenceCoord, and the algorithm
-        // may add/remove splits (not just change amounts). Locked-week
-        // rows are excluded from `toDelete` so they survive.
-        for (const o of toDelete) {
-          await deleteSplit({ resource: "BillSplit", id: o.id, successNotification: false });
+      // PHASE B — apply. Delete-then-create is intentional: there's no
+      // `upsert` for a composite key that includes occurrenceCoord, and the
+      // algorithm may add/remove splits (not just change amounts). Locked-week
+      // rows are excluded from `toDelete` so they survive.
+      for (const plan of writePlans) {
+        for (const o of plan.toDelete) {
+          await deleteSplit({ resource: "BillSplit", id: o.id, successNotification: false, errorNotification: false });
         }
-        for (const a of result.allocations) {
+        for (const a of plan.toCreate) {
           await createSplit({
             resource: "BillSplit",
             values: {
               billId: a.billId,
-              monthKey: mk,
+              monthKey: plan.mk,
               weekIndex: a.weekIndex,
               amountCents: a.amountCents,
               occurrenceCoord: a.occurrenceCoord,
             },
             successNotification: false,
+            errorNotification: false,
           });
         }
       }
+
+      // Success only — the alert and the baseline signature are cleared/saved
+      // ONLY when every write landed, so a failed run keeps nagging.
+      await saveOptimizedSig(inputSigs);
+      setOptimizeAlert(null);
+      showToast(`Pay weeks optimized across the next ${OPTIMIZE_HORIZON_MONTHS} months!`, "success");
+    } catch (err: any) {
+      console.error("Optimize failed:", err);
+      showToast(`Optimize failed: ${err?.message ?? String(err)}`, "error");
     } finally {
       setIsOptimizing(false);
-      setOptimizeAlert(null);
-      setSuccessToast(true);
     }
   };
 
@@ -839,14 +782,16 @@ export function OverviewPage() {
       </Box>
 
       <Snackbar
-        open={successToast}
-        autoHideDuration={3000}
-        onClose={() => setSuccessToast(false)}
+        open={toastOpen}
+        // Errors stay up longer so there's time to read the message.
+        autoHideDuration={toastSeverity === "error" ? 8000 : 3000}
+        onClose={() => setToastOpen(false)}
         anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
         slots={{ transition: Fade }}
+        slotProps={{ transition: { onExited: () => setToastMsg("") } }}
       >
-        <Alert severity="success" variant="filled" onClose={() => setSuccessToast(false)}>
-          Pay weeks optimized across the next 36 months!
+        <Alert severity={toastSeverity} variant="filled" onClose={() => setToastOpen(false)}>
+          {toastMsg}
         </Alert>
       </Snackbar>
 

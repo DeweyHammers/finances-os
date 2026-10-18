@@ -456,3 +456,162 @@ export const buildBalanceAdjustment = (params: {
     cleared: true,
   };
 };
+
+// ── Payday detection ──────────────────────────────────────────────────────
+
+/** Paychecks sometimes post a day or two before the official payday (bank
+ * holidays, early direct deposit — e.g. the Sep 8 2026 deposit for the Sep 9
+ * pay week). Income dated this many days before the pay week's start still
+ * counts as that week's paycheck. Safe for weekly cycles: the previous
+ * week's paycheck is 7 days back, well outside this lead. */
+export const PAYCHECK_EARLY_DAYS = 2;
+
+/**
+ * True when a paycheck has been recorded for the pay week starting on
+ * `periodStartISO` (YYYY-MM-DD). A paycheck is an uncategorized inflow
+ * whose memo is "Income" (case/whitespace-insensitive) — the memo is the
+ * signal because uncategorized inflows also include "Transfer from Savings"
+ * and manual balance adjustments, which are NOT payday events.
+ *
+ * Counts anything dated from `PAYCHECK_EARLY_DAYS` before the period start
+ * through `todayISO` inclusive.
+ */
+export function hasPaycheckForPeriod(params: {
+  transactions: {
+    date: string | Date;
+    memo?: string | null;
+    inflowCents?: number | null;
+    categoryItemId?: string | null;
+  }[];
+  periodStartISO: string;
+  todayISO: string;
+}): boolean {
+  const [y, m, d] = params.periodStartISO.split("-").map(Number);
+  // Date.UTC handles day underflow (Sep 1 - 2 → Aug 30).
+  const earliestISO = new Date(Date.UTC(y, m - 1, d - PAYCHECK_EARLY_DAYS))
+    .toISOString()
+    .slice(0, 10);
+  return params.transactions.some((t) => {
+    if (t.categoryItemId != null) return false;
+    if ((t.inflowCents ?? 0) <= 0) return false;
+    if ((t.memo ?? "").trim().toLowerCase() !== "income") return false;
+    // Compare the calendar-date part only — same convention as the bill
+    // grace windows (avoids local-vs-UTC midnight straddle bugs).
+    const dateStr =
+      typeof t.date === "string"
+        ? t.date.slice(0, 10)
+        : t.date.toISOString().slice(0, 10);
+    return dateStr >= earliestISO && dateStr <= params.todayISO;
+  });
+}
+
+// ── Plan sync evaluation (out-of-sync badge + Sync Plan button) ───────────
+
+export interface PlanSyncInput {
+  sourceType: "BILL" | "PERSONAL_NAME" | "CUSTOM" | string;
+  /** Plan's cumulative expected funding through the CURRENT pay week. */
+  expectedFullCents: number;
+  /** Plan's cumulative expected funding through the PREVIOUS pay week. */
+  expectedPreviousFullCents: number;
+  /** BILL only: grace-window activity (paid occurrences credited at plan). */
+  graceActivityCents?: number;
+  availableCents: number;
+  activityCents: number;
+  /** True when today is inside the current pay week but its paycheck
+   * ("Income" memo) hasn't been recorded yet. */
+  paydayPending: boolean;
+}
+
+export interface PlanSyncResult {
+  /** Whether this envelope participates in sync checks at all. */
+  inPlay: boolean;
+  /** "Still-to-save" funding the envelope holds (available for BILL,
+   * available + activity for CUSTOM). */
+  fundedCents: number;
+  /** Plan target the envelope is compared against for the reported diff.
+   * Previous-week target when the under-fund is only checked against it
+   * (payday pending), otherwise current-week target. */
+  targetCents: number;
+  /** True when `targetCents` is the previous pay week's target. */
+  targetIsPreviousWeek: boolean;
+  /** funded − target. Positive = over, negative = under. */
+  diffCents: number;
+  isOverfunded: boolean;
+  /** Badge-level under-fund. */
+  isUnderfunded: boolean;
+  /** Button-level work: over-funded, or short of what EARLIER pay weeks
+   * should have funded (real drift). A shortfall that only exists because
+   * this week's slice hasn't been assigned yet is left to Auto-assign and
+   * never shows the Sync Plan button. */
+  needsSync: boolean;
+  /** Cents to ADD to `assigned` to resolve the Sync Plan work (0 when
+   * needsSync is false). Over → pull back to the current target; drift →
+   * fill to the previous-week target (this week's slice is Auto-assign's
+   * job). */
+  syncDeltaCents: number;
+}
+
+/**
+ * Single source of truth for "is this Plan envelope out of sync", shared by
+ * the ⚠ badge (BudgetItemRow) and the Sync Plan button (BudgetPage) so they
+ * can never disagree.
+ *
+ * Payday gating: until this week's paycheck is recorded, under-funding is
+ * judged only against the PREVIOUS pay week's target — the new week's slices
+ * can't be funded before the money arrives. Once the paycheck lands the
+ * badge compares against the current week (prompting Auto-assign), but the
+ * Sync Plan button still ignores current-week-only shortfalls because
+ * Auto-assign is the tool for those.
+ *
+ * Over-funding is always judged against the current week (extra money in
+ * an envelope isn't a payday-timing question).
+ */
+export function evaluatePlanSync(input: PlanSyncInput): PlanSyncResult {
+  let expected: number;
+  let expectedPrevious: number;
+  let fundedCents: number;
+  if (input.sourceType === "BILL") {
+    // Subtract already-paid grace-window activity from both targets so the
+    // numbers read as "still to save" (see BudgetItemRow tooltip).
+    const grace = Math.max(0, input.graceActivityCents ?? 0);
+    expected = Math.max(0, input.expectedFullCents - grace);
+    expectedPrevious = Math.max(0, input.expectedPreviousFullCents - grace);
+    fundedCents = input.availableCents;
+  } else {
+    expected = input.expectedFullCents;
+    expectedPrevious = input.expectedPreviousFullCents;
+    fundedCents = input.availableCents + input.activityCents;
+  }
+  // Use the un-reduced current target as the in-play guard: a fully-paid
+  // bill's reduced expected is 0, but leftover cash in it should still flag.
+  const inPlay =
+    input.sourceType !== "PERSONAL_NAME" && input.expectedFullCents > 0;
+
+  const isOverfunded = inPlay && fundedCents > expected;
+  const isDrift = inPlay && fundedCents < expectedPrevious;
+  const isCurrentShort = inPlay && fundedCents < expected;
+  const isUnderfunded = input.paydayPending ? isDrift : isCurrentShort;
+
+  const targetIsPreviousWeek = !isOverfunded && input.paydayPending;
+  const targetCents = targetIsPreviousWeek ? expectedPrevious : expected;
+  const diffCents = fundedCents - targetCents;
+
+  const needsSync = isOverfunded || isDrift;
+  const syncDeltaCents = isOverfunded
+    ? expected - fundedCents
+    : isDrift
+      ? expectedPrevious - fundedCents
+      : 0;
+
+  return {
+    inPlay,
+    fundedCents,
+    targetCents,
+    targetIsPreviousWeek,
+    diffCents,
+    isOverfunded,
+    isUnderfunded,
+    needsSync,
+    syncDeltaCents,
+  };
+}

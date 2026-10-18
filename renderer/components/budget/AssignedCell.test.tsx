@@ -5,8 +5,8 @@ import { AssignedCell } from "./AssignedCell";
 
 describe("AssignedCell", () => {
   it("renders the formatted dollar value", () => {
-    render(<AssignedCell cents={2699} onCommit={vi.fn()} />);
-    const input = screen.getByDisplayValue("$26.99");
+    render(<AssignedCell cents={2495} onCommit={vi.fn()} />);
+    const input = screen.getByDisplayValue("$24.95");
     expect(input).toBeInTheDocument();
   });
 

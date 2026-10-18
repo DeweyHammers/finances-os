@@ -59,7 +59,7 @@ export const resolveItemDisplay = (
     const bill = bills.find((b) => b.id === item.sourceBillId);
     if (bill) {
       const amount = Number(bill.amount).toFixed(2);
-      // Rich label format: "Bill N ($15.99 - 5th)". Includes the live
+      // Rich label format: "Streaming ($15.99 - 5th)". Includes the live
       // amount + due date so the Plan surfaces bill changes without needing
       // the user to re-add the item.
       return {

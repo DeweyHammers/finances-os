@@ -30,3 +30,13 @@ next-env.d.ts
 # archived
 _archived
 
+
+# Lock-in tests run on REAL personal finance data (bill names, costs, balances)
+# derived from the DEV database → LOCAL ONLY, never pushed (the repo is public).
+# They still run locally and in the pre-push hook; fresh clones simply don't
+# have them. See CLAUDE.md → "Lock-in tests".
+/tests/fixtures/
+/tests/helpers/refine-fixture-mock.ts
+*.lockin.test.ts
+*.lockin.test.tsx
+**/__snapshots__/*.lockin.test.*.snap

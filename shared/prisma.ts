@@ -84,8 +84,13 @@ if (isProd && app) {
   }
 } else {
   // DEVELOPMENT MODE
-  // Ensure the dev DB path is absolute to avoid confusion during dev
-  dbUrl = `file:${path.join(process.cwd(), "prisma/dev.db")}`;
+  // Ensure the dev DB path is absolute to avoid confusion during dev.
+  // FINANCES_OS_TEST_DB_URL is a TEST-ONLY override (main/api-server.routes
+  // tests point it at a throwaway copy so they can never write to dev.db).
+  // Nothing in the app sets it, so dev/PROD behavior is unchanged.
+  dbUrl =
+    process.env.FINANCES_OS_TEST_DB_URL ??
+    `file:${path.join(process.cwd(), "prisma/dev.db")}`;
 }
 
 let prismaInstance: PrismaClient;

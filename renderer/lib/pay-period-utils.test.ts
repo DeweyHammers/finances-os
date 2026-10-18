@@ -1,12 +1,17 @@
 import { describe, it, expect } from "vitest";
 import {
   getPayPeriodsForMonth,
+  getIncomePaydays,
+  getIncomeSourcesForPeriod,
+  computeIncomePerPeriodCents,
+  withLegacyIncomeFallback,
   getBillPeriodKey,
   getBillOccurrencesInView,
   getBillAllocationsForBill,
   getBillAllocationCentsForPeriod,
   balancePayWeeks,
   assertNoUnderfundedBills,
+  isPayWeekLocked,
   distributeBillLevel,
   distributeSplitAcrossWeeks,
   monthKeyOf,
@@ -261,11 +266,11 @@ describe("balancePayWeeks — Phase 1 (whole-bill placement)", () => {
 
   const bills = [
     { id: "billP", amount: 149.20, dueDate: 30 },
-    { id: "billI", amount: 20.0, dueDate: 30 },
+    { id: "billI", amount: 25.0, dueDate: 30 },
     { id: "billA", amount: 118.40, dueDate: 1 },
-    { id: "billC", amount: 130.0, dueDate: 4 },
+    { id: "billC", amount: 125.0, dueDate: 4 },
     { id: "billD", amount: 61.40, dueDate: 4 },
-    { id: "billE", amount: 101.0, dueDate: 5 },
+    { id: "billE", amount: 96.0, dueDate: 5 },
   ];
 
   it("all six bills are assigned to some week", () => {
@@ -493,37 +498,37 @@ describe("getBillAllocationsForBill — multi-occurrence natural fallback", () =
   const mk = monthKeyOf(2026, 8);
 
   it("dueDate=5 with no splits returns 2 natural allocs ($X in P1 AND $X in P5)", () => {
-    const allocs = getBillAllocationsForBill("billE", 5, 101, periods, mk, []);
+    const allocs = getBillAllocationsForBill("billE", 5, 96, periods, mk, []);
     expect(allocs).toHaveLength(2);
     expect(allocs.map((a) => a.periodKey).sort()).toEqual(["P1", "P5"]);
     // Each occurrence carries the FULL bill amount — not half.
-    allocs.forEach((a) => expect(a.amountCents).toBe(10100));
+    allocs.forEach((a) => expect(a.amountCents).toBe(9600));
     // Occurrence coords tagged distinctly.
     expect(allocs.map((a) => a.occurrenceCoord).sort((x, y) => x - y)).toEqual([5, 35]);
   });
 
   it("legacy split rows (occurrenceCoord=undefined) map to primary (P5) occurrence", () => {
     const splits = [
-      { billId: "billE", monthKey: mk, weekIndex: 4, amountCents: 10100 },
+      { billId: "billE", monthKey: mk, weekIndex: 4, amountCents: 9600 },
     ];
-    const allocs = getBillAllocationsForBill("billE", 5, 101, periods, mk, splits);
+    const allocs = getBillAllocationsForBill("billE", 5, 96, periods, mk, splits);
     // Two allocs: legacy P5 row (mapped to next-month occurrence coord=35),
     // plus natural fallback for the Sep 5 occurrence (coord=5, weekIndex=0).
     expect(allocs).toHaveLength(2);
     const byCoord = new Map(allocs.map((a) => [a.occurrenceCoord, a]));
     expect(byCoord.get(5)?.periodKey).toBe("P1");
-    expect(byCoord.get(5)?.amountCents).toBe(10100);
+    expect(byCoord.get(5)?.amountCents).toBe(9600);
     expect(byCoord.get(35)?.periodKey).toBe("P5");
-    expect(byCoord.get(35)?.amountCents).toBe(10100);
+    expect(byCoord.get(35)?.amountCents).toBe(9600);
   });
 
   it("per-occurrence splits: coord=5 split across P1+P2, coord=35 in P5 alone", () => {
     const splits = [
-      { billId: "billE", monthKey: mk, weekIndex: 0, amountCents: 5000, occurrenceCoord: 5 },
-      { billId: "billE", monthKey: mk, weekIndex: 1, amountCents: 5100, occurrenceCoord: 5 },
-      { billId: "billE", monthKey: mk, weekIndex: 4, amountCents: 10100, occurrenceCoord: 35 },
+      { billId: "billE", monthKey: mk, weekIndex: 0, amountCents: 4800, occurrenceCoord: 5 },
+      { billId: "billE", monthKey: mk, weekIndex: 1, amountCents: 4800, occurrenceCoord: 5 },
+      { billId: "billE", monthKey: mk, weekIndex: 4, amountCents: 9600, occurrenceCoord: 35 },
     ];
-    const allocs = getBillAllocationsForBill("billE", 5, 101, periods, mk, splits);
+    const allocs = getBillAllocationsForBill("billE", 5, 96, periods, mk, splits);
     expect(allocs).toHaveLength(3);
     // Sep 5 occurrence is split (isSplit=true on both rows).
     const sepAllocs = allocs.filter((a) => a.occurrenceCoord === 5);
@@ -541,7 +546,7 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
 
   it("dueDate=5 places both occurrences (Sep 5 in P1, Oct 5 in P5)", () => {
     const result = balancePayWeeks({
-      bills: [{ id: "billE", amount: 101, dueDate: 5 }],
+      bills: [{ id: "billE", amount: 96, dueDate: 5 }],
       periods,
       incomePerPeriodCents: [62000, 62000, 62000, 62000, 62000],
       fixedExpensesPerPeriodCents: [0, 0, 0, 0, 0],
@@ -549,23 +554,23 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
     });
     expect(result.underfunded).toEqual([]);
     // Two allocations total — one per occurrence.
-    const phoneAllocs = result.allocations.filter((a) => a.billId === "billE");
-    expect(phoneAllocs).toHaveLength(2);
-    // Each occurrence gets full $101.
+    const billEAllocs = result.allocations.filter((a) => a.billId === "billE");
+    expect(billEAllocs).toHaveLength(2);
+    // Each occurrence gets full $96.
     const byCoord = new Map<number, number>();
-    for (const a of phoneAllocs) {
+    for (const a of billEAllocs) {
       byCoord.set(a.occurrenceCoord, (byCoord.get(a.occurrenceCoord) ?? 0) + a.amountCents);
     }
-    expect(byCoord.get(5)).toBe(10100);
-    expect(byCoord.get(35)).toBe(10100);
-    // View-total for Bill E is $202 (2 × $101), not $101.
-    expect(phoneAllocs.reduce((s, a) => s + a.amountCents, 0)).toBe(20200);
+    expect(byCoord.get(5)).toBe(9600);
+    expect(byCoord.get(35)).toBe(9600);
+    // View-total for Bill E is $192 (2 × $96), not $96.
+    expect(billEAllocs.reduce((s, a) => s + a.amountCents, 0)).toBe(19200);
   });
 
   it("reproduction — Bill E (dueDate=5) + Bill F (dueDate=6) both funded in Sep view", () => {
     const result = balancePayWeeks({
       bills: [
-        { id: "billE", amount: 101, dueDate: 5 },
+        { id: "billE", amount: 96, dueDate: 5 },
         { id: "billF", amount: 38.75, dueDate: 6 },
       ],
       periods,
@@ -581,7 +586,7 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
         perOcc.set(a.occurrenceCoord, (perOcc.get(a.occurrenceCoord) ?? 0) + a.amountCents);
       }
       expect(perOcc.size).toBe(2); // Sep + Oct occurrences
-      const full = billId === "billE" ? 10100 : 3595;
+      const full = billId === "billE" ? 9600 : 3875;
       for (const total of perOcc.values()) expect(total).toBe(full);
     }
   });
@@ -590,11 +595,11 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
     // Realistic mix — the exact bill set the user has in prod.
     const bills = [
       { id: "billP", amount: 149.20, dueDate: 30 },
-      { id: "billI", amount: 20.0, dueDate: 30 },
+      { id: "billI", amount: 25.0, dueDate: 30 },
       { id: "billA", amount: 118.40, dueDate: 1 },
-      { id: "billC", amount: 130.0, dueDate: 4 },
+      { id: "billC", amount: 125.0, dueDate: 4 },
       { id: "billD", amount: 61.40, dueDate: 4 },
-      { id: "billE", amount: 101.0, dueDate: 5 },
+      { id: "billE", amount: 96.0, dueDate: 5 },
       { id: "billF", amount: 38.75, dueDate: 6 },
     ];
     const result = balancePayWeeks({
@@ -621,7 +626,7 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
 
   it("locked allocation covers part of a bill — remaining amount goes to unlocked weeks only", () => {
     // Regression: when Aug P1/P2 are locked and legacy BillSplit rows for
-    // Bill P ($149.20) live in P2, those P2 rows must count as "already
+    // BillP ($149.20) live in P2, those P2 rows must count as "already
     // committed" so the algorithm only places the REMAINDER ($74.60) into P3
     // or P4 — not the full amount. Deleting the P2 history and re-placing
     // the full $149.20 in unlocked weeks was the bug that pushed P3+P4 surplus
@@ -632,31 +637,30 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
       incomePerPeriodCents: [58000, 58000, 58000, 58000, 58000],
       fixedExpensesPerPeriodCents: [7000, 7000, 7000, 7000, 7000],
       targetSurplusCents: 25000,
-      todayCoord: 19, // P1 (5-11) and P2 (12-18) locked; P3/P4 open (Sept-style setup)
+      todayCoord: 19, // P1 (5-11), P2 (12-18) and P3 (19-25, payday today) locked; P4/P5 open
       lockedAllocations: [
         // Legacy P2 partial payment of $74.60 for the in-month occurrence.
         // Sept has 30 days so dueDate=31 clamps to coord=30 (last-day-of-month).
-        { billId: "billP", weekIndex: 1, amountCents: 7819, occurrenceCoord: 30 },
+        { billId: "billP", weekIndex: 1, amountCents: 7460, occurrenceCoord: 30 },
       ],
     });
     expect(result.underfunded).toEqual([]);
     const billPOutputs = result.allocations.filter((a) => a.billId === "billP");
     const placedCents = billPOutputs.reduce((s, a) => s + a.amountCents, 0);
     // Algorithm should ONLY place the remaining $74.60 (not the full $149.20).
-    expect(placedCents).toBe(7819);
+    expect(placedCents).toBe(7460);
     // And none of the emitted allocations should touch locked weeks (index 0 or 1).
     for (const a of billPOutputs) {
       expect(a.weekIndex).toBeGreaterThan(1);
     }
   });
 
-  it("occurrences in locked past weeks receive retroactive-plan allocations, NOT flagged underfunded", () => {
+  it("occurrences whose weeks are all locked are SKIPPED (not planned, not underfunded)", () => {
     // Bill due day 20 (natural home = P3), todayCoord=999 locks every period.
-    // The algorithm can still emit a retroactive plan ("your P3 paycheck
-    // should have paid this $50 bill"). Callers that don't want to persist
-    // retroactive plans can filter allocations by lockedWeekIndices before
-    // writing — but the algorithm's job is to always produce a coherent plan,
-    // never to silently drop a bill.
+    // Those paychecks are spent, so the algorithm no longer emits a
+    // retroactive plan into them (Oct 2026 change — header note 5). The bill
+    // doesn't silently vanish either: it's reported in `skipped` with its home
+    // week, and the caller writes a $0 marker so displays say "Skipped".
     const result = balancePayWeeks({
       bills: [{ id: "past", amount: 50, dueDate: 20 }],
       periods,
@@ -666,10 +670,161 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
       todayCoord: 999,
     });
     expect(result.underfunded).toEqual([]);
-    // A retroactive-plan allocation was created for the past occurrence.
-    const pastAllocs = result.allocations.filter((a) => a.billId === "past");
-    expect(pastAllocs.length).toBeGreaterThan(0);
-    expect(pastAllocs.reduce((s, a) => s + a.amountCents, 0)).toBe(5000);
+    expect(result.allocations.filter((a) => a.billId === "past")).toEqual([]);
+    expect(result.skipped).toEqual([
+      { billId: "past", occurrenceCoord: 20, weekIndex: 2, skippedCents: 5000, hasLockedRows: false },
+    ]);
+  });
+
+  // ── Oct 2026 regression: Optimize 500 + current-week surplus rewrite ──
+  // Modeled on the user's 2026-10-18 setup (names and prices anonymized). Changing Bill I $25 → $90 and
+  // hitting Optimize crashed with a BillSplit unique-constraint 500: Phase 2
+  // leveled a few dollars of Bill P into locked P1, which already had a Bill P
+  // (same bill) row. The crash landed after the month's rows were deleted, dropping
+  // Bill P + Bill B from P2/P3 and inflating the current week's surplus.
+  describe("Oct 2026 regression — locked weeks are never leveled into", () => {
+    const octPeriods = getPayPeriodsForMonth(2026, 9, WED); // P1 7-13, P2 14-20, P3 21-27, P4 28-Nov 3
+    const OCT_BILLS = [
+      { id: "billA", amount: 118.40, dueDate: 1 },
+      { id: "billB", amount: 195.25, dueDate: 1 },
+      { id: "billC", amount: 125, dueDate: 4 },
+      { id: "billD", amount: 61.40, dueDate: 4 },
+      { id: "billE", amount: 96, dueDate: 5 },
+      { id: "billF", amount: 38.75, dueDate: 6 },
+      { id: "billG", amount: 15.49, dueDate: 13 },
+      { id: "billH", amount: 10.49, dueDate: 17 },
+      { id: "billJ", amount: 18.49, dueDate: 20 },
+      { id: "billK", amount: 24.99, dueDate: 23 },
+      { id: "billL", amount: 47, dueDate: 26 },
+      { id: "billM", amount: 79.60, dueDate: 28 },
+      { id: "billN", amount: 22.99, dueDate: 28 },
+      { id: "billO", amount: 20.49, dueDate: 29 },
+      { id: "billI", amount: 90, dueDate: 31 }, // was $20 — the edit that triggered the bug
+      { id: "billP", amount: 149.20, dueDate: 31 },
+    ];
+    // Committed P1 rows (Oct 7-13 paycheck already spent).
+    const P1_LOCKED = [
+      { billId: "billG", weekIndex: 0, amountCents: 1549, occurrenceCoord: 13 },
+      { billId: "billP", weekIndex: 0, amountCents: 4973, occurrenceCoord: 31 },
+      { billId: "billB", weekIndex: 0, amountCents: 8900, occurrenceCoord: 32 },
+    ];
+    // Committed P2 rows (Oct 14-20 paycheck — the current week on Oct 18).
+    const P2_LOCKED = [
+      { billId: "billP", weekIndex: 1, amountCents: 4973, occurrenceCoord: 31 },
+      { billId: "billB", weekIndex: 1, amountCents: 7400, occurrenceCoord: 32 },
+      { billId: "billH", weekIndex: 1, amountCents: 1049, occurrenceCoord: 17 },
+      { billId: "billJ", weekIndex: 1, amountCents: 1849, occurrenceCoord: 20 },
+    ];
+    const baseInputs = {
+      bills: OCT_BILLS,
+      periods: octPeriods,
+      incomePerPeriodCents: [70000, 70000, 70000, 70000], // fake income (real figures stay out of the repo)
+      fixedExpensesPerPeriodCents: [7000, 7000, 7000, 7000], // Gas + Spending
+      targetSurplusCents: 25000,
+    };
+
+    it("exact crash setup (only P1 locked): no allocation lands in locked P1", () => {
+      // todayCoord=13 → only P1 has started, matching the old endDay rule's
+      // lock set on Oct 18 — the inputs that produced the duplicate insert.
+      const result = balancePayWeeks({ ...baseInputs, todayCoord: 13, lockedAllocations: P1_LOCKED });
+      expect(result.underfunded).toEqual([]);
+      expect(result.allocations.filter((a) => a.weekIndex === 0)).toEqual([]);
+    });
+
+    it("current (started) week is locked: Oct 18 never re-plans P1 or P2", () => {
+      const result = balancePayWeeks({
+        ...baseInputs,
+        todayCoord: 18,
+        lockedAllocations: [...P1_LOCKED, ...P2_LOCKED],
+      });
+      expect(result.underfunded).toEqual([]);
+      for (const a of result.allocations) expect(a.weekIndex, `${a.billId}`).toBeGreaterThan(1);
+
+      // Remaining slices of the partially-committed bills land in P3/P4 only.
+      const placed = (id: string) =>
+        result.allocations.filter((a) => a.billId === id).reduce((s, a) => s + a.amountCents, 0);
+      expect(placed("billP")).toBe(14920 - 4973 - 4973);
+      expect(placed("billB")).toBe(19525 - 8900 - 7400);
+      // Bill I's new $100 is fully planned in the open weeks.
+      expect(placed("billI")).toBe(9000);
+    });
+
+    it("price bump on a bill due THIS week: remainder is skipped, not planned into the locked week", () => {
+      // Bill H ($10.49 committed in P2) goes up to $20 on Oct 18. P2 is its
+      // only eligible week and its paycheck is spent, so the $10.01 extra is
+      // skipped this cycle. The existing $10.49 row stays as-is (no marker).
+      const result = balancePayWeeks({
+        ...baseInputs,
+        bills: OCT_BILLS.map((b) => (b.id === "billH" ? { ...b, amount: 20 } : b)),
+        todayCoord: 18,
+        lockedAllocations: [...P1_LOCKED, ...P2_LOCKED],
+      });
+      expect(result.underfunded).toEqual([]);
+      expect(result.allocations.filter((a) => a.billId === "billH")).toEqual([]);
+      expect(result.skipped).toEqual([
+        { billId: "billH", occurrenceCoord: 17, weekIndex: 1, skippedCents: 951, hasLockedRows: true },
+      ]);
+    });
+
+    it("bill moved INTO the current week (Bill I 31st → 18th on Oct 18) is skipped this cycle", () => {
+      // Real Oct 18 case: P2's paycheck was already handed out, the user paid
+      // the $100 from savings. Nothing should land in P1/P2, Bill I must not
+      // be flagged underfunded, and the caller is told to write a $0 marker
+      // (no locked rows exist for the new 18th occurrence).
+      const result = balancePayWeeks({
+        ...baseInputs,
+        bills: OCT_BILLS.map((b) => (b.id === "billI" ? { ...b, dueDate: 18 } : b)),
+        todayCoord: 18,
+        lockedAllocations: [...P1_LOCKED, ...P2_LOCKED],
+      });
+      expect(result.underfunded).toEqual([]);
+      expect(result.allocations.filter((a) => a.billId === "billI")).toEqual([]);
+      for (const a of result.allocations) expect(a.weekIndex, a.billId).toBeGreaterThan(1);
+      expect(result.skipped).toEqual([
+        { billId: "billI", occurrenceCoord: 18, weekIndex: 1, skippedCents: 9000, hasLockedRows: false },
+      ]);
+    });
+
+    it("skip is idempotent: once the $0 marker exists, the next run reports hasLockedRows and plans nothing", () => {
+      const result = balancePayWeeks({
+        ...baseInputs,
+        bills: OCT_BILLS.map((b) => (b.id === "billI" ? { ...b, dueDate: 18 } : b)),
+        todayCoord: 18,
+        lockedAllocations: [
+          ...P1_LOCKED,
+          ...P2_LOCKED,
+          { billId: "billI", weekIndex: 1, amountCents: 0, occurrenceCoord: 18 }, // marker
+        ],
+      });
+      expect(result.underfunded).toEqual([]);
+      expect(result.allocations.filter((a) => a.billId === "billI")).toEqual([]);
+      expect(result.skipped).toEqual([
+        { billId: "billI", occurrenceCoord: 18, weekIndex: 1, skippedCents: 9000, hasLockedRows: true },
+      ]);
+    });
+
+    it("the 18th is planned normally in a future month (Nov) — only the current cycle is skipped", () => {
+      const novPeriods = getPayPeriodsForMonth(2026, 10, WED);
+      const result = balancePayWeeks({
+        ...baseInputs,
+        periods: novPeriods,
+        incomePerPeriodCents: novPeriods.map(() => 70000),
+        fixedExpensesPerPeriodCents: novPeriods.map(() => 7000),
+        bills: OCT_BILLS.map((b) => (b.id === "billI" ? { ...b, dueDate: 18 } : b)),
+        todayCoord: 0,
+      });
+      expect(result.skipped).toEqual([]);
+      const billI = result.allocations.filter((a) => a.billId === "billI");
+      expect(billI.reduce((s, a) => s + a.amountCents, 0)).toBe(9000);
+    });
+
+    it("isPayWeekLocked: locks on the payday itself, not after the week ends", () => {
+      const p2 = octPeriods[1]; // Oct 14-20
+      expect(isPayWeekLocked(p2, 13)).toBe(false);
+      expect(isPayWeekLocked(p2, 14)).toBe(true);
+      expect(isPayWeekLocked(p2, 18)).toBe(true);
+      expect(isPayWeekLocked(p2, 0)).toBe(false); // future month view
+    });
   });
 
   it("assertNoUnderfundedBills throws when underfunded is non-empty", () => {
@@ -678,7 +833,8 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
       perWeekBillCents: [],
       feasible: false,
       unplaced: [],
-      underfunded: ["phone@5"],
+      underfunded: ["billE@5"],
+      skipped: [],
     };
     expect(() => assertNoUnderfundedBills(bad, "test")).toThrow(/underfunded/);
   });
@@ -690,6 +846,7 @@ describe("balancePayWeeks — multi-occurrence coverage invariant", () => {
       feasible: true,
       unplaced: [],
       underfunded: [],
+      skipped: [],
     };
     expect(() => assertNoUnderfundedBills(good)).not.toThrow();
   });
@@ -712,7 +869,7 @@ describe("Full-year cross-view coverage (Aug 2026 – Jul 2027)", () => {
     { id: "billH",    name: "Bill H",        dueDate: 17 },
     { id: "billJ",     name: "Bill J",         dueDate: 20 },
     { id: "billK",    name: "Bill K",        dueDate: 23 },
-    { id: "car",        name: "Bill M",  dueDate: 28 },
+    { id: "billM",        name: "Bill M",  dueDate: 28 },
     { id: "billN",    name: "Bill N",        dueDate: 28 },
     { id: "billL",       name: "Bill L",     dueDate: 28 },
     { id: "billO",    name: "Bill O",        dueDate: 29 },
@@ -814,5 +971,118 @@ describe("Full-year cross-view coverage (Aug 2026 – Jul 2027)", () => {
         });
       expect(inWindow, `${billId}: ${inWindow.length} firings, expected 12`).toHaveLength(12);
     }
+  });
+});
+
+// ── Income per pay period (extracted Oct 2026 from 4 inline copies) ──
+// Oct 1 2026 is a Thursday → Fridays (payDay=5) fall on 2, 9, 16, 23, 30.
+describe("getIncomePaydays", () => {
+  it("weekly returns every matching weekday", () => {
+    expect(getIncomePaydays(2026, 9, 5, false, 0)).toEqual([2, 9, 16, 23, 30]);
+  });
+
+  it("bi-weekly offset 0 / 1 picks alternating paydays", () => {
+    expect(getIncomePaydays(2026, 9, 5, true, 0)).toEqual([2, 16, 30]);
+    expect(getIncomePaydays(2026, 9, 5, true, 1)).toEqual([9, 23]);
+  });
+});
+
+describe("computeIncomePerPeriodCents", () => {
+  const periods = [
+    { startDay: 1, endDay: 8 },
+    { startDay: 9, endDay: 15 },
+    { startDay: 16, endDay: 22 },
+    { startDay: 23, endDay: 31 },
+  ];
+
+  it("buckets each source into the periods containing its paydays", () => {
+    const sources = [
+      { amount: "650.25", payDay: 5, paymentCycle: "WEEKLY" },
+      // payDay + cycle come from defaults; offset 1 → Oct 9, 23
+      { amount: 200, payWeekOffset: 1 },
+    ];
+    const cents = computeIncomePerPeriodCents(sources, periods, 2026, 9, {
+      payDay: 5,
+      paymentCycle: "BI_WEEKLY",
+    });
+    expect(cents).toEqual([65025, 65025 + 20000, 65025, 65025 + 20000]);
+  });
+
+  it("counts a source once per period even with two paydays inside it", () => {
+    const cents = computeIncomePerPeriodCents(
+      [{ amount: 100, payDay: 5, paymentCycle: "WEEKLY" }],
+      [{ startDay: 1, endDay: 31 }],
+      2026,
+      9,
+      { payDay: 5 },
+    );
+    expect(cents).toEqual([10000]);
+  });
+
+  it("treats junk amounts as $0", () => {
+    const cents = computeIncomePerPeriodCents([{ amount: null }, { amount: "abc" }], periods, 2026, 9, { payDay: 5 });
+    expect(cents).toEqual([0, 0, 0, 0]);
+  });
+
+  it("getIncomeSourcesForPeriod returns the firing sources in input order", () => {
+    const a = { name: "A", amount: 1, payDay: 5, paymentCycle: "BI_WEEKLY", payWeekOffset: 0 };
+    const b = { name: "B", amount: 1, payDay: 5, paymentCycle: "BI_WEEKLY", payWeekOffset: 1 };
+    expect(getIncomeSourcesForPeriod([a, b], periods[0], 2026, 9, { payDay: 5 })).toEqual([a]);
+    expect(getIncomeSourcesForPeriod([a, b], periods[1], 2026, 9, { payDay: 5 })).toEqual([b]);
+  });
+
+  // Parity guard: the exact loop that used to be inlined in OverviewPage /
+  // BudgetPage / PersonalOverview, run against the helper over 3 years of
+  // real pay-period grids for weekly and bi-weekly users.
+  it("matches the original inline loop across 36 months", () => {
+    const legacy = (sources: any[], ps: { startDay: number; endDay: number }[], y: number, m: number, defPayDay: number, defCycle: string) => {
+      const dim = new Date(y, m + 1, 0).getDate();
+      const collect = (pd: number, bw: boolean, off: number) => {
+        const all: number[] = [];
+        for (let d = 1; d <= dim; d++) if (new Date(y, m, d).getDay() === pd) all.push(d);
+        return bw ? all.filter((_, i) => i % 2 === off) : all;
+      };
+      return ps.map((p) => {
+        let total = 0;
+        sources.forEach((income) => {
+          const pd = Number(income.payDay ?? defPayDay);
+          const bw = (income.paymentCycle ?? defCycle) === "BI_WEEKLY";
+          const off = Number(income.payWeekOffset ?? 0);
+          if (collect(pd, bw, off).some((d) => d >= p.startDay && d <= p.endDay)) {
+            total += Math.round((Number(income.amount) || 0) * 100);
+          }
+        });
+        return total;
+      });
+    };
+    const sources = [
+      { amount: 650.25, payDay: 2, paymentCycle: "WEEKLY", isPrimary: true },
+      { amount: "812.5", payDay: 5, paymentCycle: "BI_WEEKLY", payWeekOffset: 1 },
+      { amount: 50, payDay: null, paymentCycle: null, payWeekOffset: null },
+    ];
+    for (const [payDay, cycle] of [[2, "WEEKLY"], [5, "BI_WEEKLY"]] as const) {
+      for (let i = 0; i < 36; i++) {
+        const y = 2026 + Math.floor((9 + i) / 12);
+        const m = (9 + i) % 12;
+        const ps = getPayPeriodsForMonth(y, m, payDay, new Date(2026, 9, 18), cycle === "BI_WEEKLY");
+        expect(computeIncomePerPeriodCents(sources, ps, y, m, { payDay, paymentCycle: cycle })).toEqual(
+          legacy(sources, ps, y, m, payDay, cycle),
+        );
+      }
+    }
+  });
+});
+
+describe("withLegacyIncomeFallback", () => {
+  it("passes real incomes through untouched", () => {
+    const incomes = [{ amount: 1 }];
+    expect(withLegacyIncomeFallback(incomes, { w2Amount: 999 })).toBe(incomes);
+  });
+
+  it("synthesizes one source from AppSettings when there are no incomes", () => {
+    expect(withLegacyIncomeFallback([], { w2Amount: 1200, paymentCycle: "WEEKLY", payDay: 2 })).toEqual([
+      { name: "Income", amount: 1200, paymentCycle: "WEEKLY", payDay: 2, payWeekOffset: 0 },
+    ]);
+    expect(withLegacyIncomeFallback([], {})[0].amount).toBe(0);
   });
 });

@@ -19,6 +19,8 @@ import {
   getBillAllocationCentsForPeriod,
   computeSplitPersonalAllocations,
   monthKeyOf,
+  getIncomeSourcesForPeriod,
+  withLegacyIncomeFallback,
   BillSplitRecord,
   PayPeriod,
 } from "../../lib/pay-period-utils";
@@ -56,7 +58,6 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
   const today = new Date();
   const year = viewYear ?? today.getFullYear();
   const month = viewMonth ?? today.getMonth();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
 
   const periods = getPayPeriodsForMonth(year, month, payWeekday, today, biWeekly);
   const monthKey = monthKeyOf(year, month);
@@ -64,30 +65,16 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
 
   // Fallback: if no explicit Income records exist, synthesize a single source
   // from AppSettings so first-run users still see numbers instead of $0.
-  const allSources = incomes.length > 0
-    ? incomes
-    : [{ name: "Income", amount: settings.w2Amount, paymentCycle: settings.paymentCycle, payDay: settings.payDay, payWeekOffset: 0 }];
+  const allSources = withLegacyIncomeFallback(incomes, settings);
 
-  // Which income sources fire inside this pay period. Bi-weekly sources use
-  // payWeekOffset (0 or 1) to pick alternating paydays — offset lets two
-  // bi-weekly incomes sit on opposite weeks even when they share a payDay.
-  const getIncomeBreakdown = (period: PayPeriod): { name: string; amount: number }[] => {
-    const result: { name: string; amount: number }[] = [];
-    allSources.forEach((income: any) => {
-      const incomePayDay = Number(income.payDay ?? payWeekday);
-      const isBiWeeklyIncome = (income.paymentCycle ?? settings.paymentCycle) === "BI_WEEKLY";
-      const allPaydays: number[] = [];
-      for (let d = 1; d <= daysInMonth; d++) {
-        if (new Date(year, month, d).getDay() === incomePayDay) allPaydays.push(d);
-      }
-      const offset = Number(income.payWeekOffset ?? 0);
-      const effectivePaydays = isBiWeeklyIncome ? allPaydays.filter((_, i) => i % 2 === offset) : allPaydays;
-      if (effectivePaydays.some((d) => d >= period.startDay && d <= period.endDay)) {
-        result.push({ name: income.name ?? "Income", amount: Number(income.amount) || 0 });
-      }
-    });
-    return result;
-  };
+  // Which income sources fire inside this pay period (shared helper — handles
+  // bi-weekly payWeekOffset so two bi-weekly incomes can sit on opposite
+  // weeks). Kept in DOLLARS here because it feeds the per-source tooltip.
+  const getIncomeBreakdown = (period: PayPeriod): { name: string; amount: number }[] =>
+    getIncomeSourcesForPeriod(allSources, period, year, month, {
+      payDay: payWeekday,
+      paymentCycle: settings.paymentCycle,
+    }).map((income) => ({ name: income.name ?? "Income", amount: Number(income.amount) || 0 }));
 
   // Bills per period, summing split allocations when present.
   const billsPerPeriodDollars = periods.map((period) =>

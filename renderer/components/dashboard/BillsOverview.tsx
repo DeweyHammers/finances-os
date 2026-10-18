@@ -9,7 +9,7 @@
  * forward-extended next-month firing), so allocations are keyed by
  * `(billId, occurrenceCoord)` — never by billId alone. Split bills show
  * "Saved X / Total Y" progress accumulated ONLY across splits for the same
- * occurrence, so a Sep 4 Bill C split doesn't inflate the Oct 4 card.
+ * occurrence, so a bill's Sep 4 split doesn't inflate its Oct 4 card.
  *
  * Read-only presenter: mutations happen in the Overview optimizer which
  * writes BillSplit rows this component then reads. Props: `bills` (raw list),
@@ -90,7 +90,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
   const monthKey = monthKeyOf(year, month);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   // Used only for labeling next-month (forward-extended) occurrences —
-  // e.g. an Oct 4 Bill C firing displayed on a September view card.
+  // e.g. a bill's Oct 4 firing displayed on a September view card.
   const nextMonthAbbr = new Date(year, month + 1, 1).toLocaleString("default", {
     month: "short",
   });
@@ -275,7 +275,22 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
               // earlier weeks. The bill's TOTAL is shown in the CallSplit
               // badge tooltip, so we don't need a Total line on the card face.
               const isFirstSlice = cumulativeCents === amountCents;
-              const subtitle = isSplit ? (
+              // A $0 single-row occurrence is the optimizer's "skipped"
+              // marker: the bill landed in a pay week whose paycheck was
+              // already handed out (e.g. moved into the current week), so it
+              // isn't planned this cycle. Dim the card and say why, rather
+              // than show a bare "$0.00" that reads like a data bug.
+              const isSkipped = !isSplit && amountCents === 0;
+              const subtitle = isSkipped ? (
+                <Box>
+                  <Box component="span" sx={{ display: "block" }}>
+                    Due {dateChunk}
+                  </Box>
+                  <Box component="span" sx={{ display: "block", opacity: 0.85 }}>
+                    Skipped · added after payday
+                  </Box>
+                </Box>
+              ) : isSplit ? (
                 <Box>
                   <Box component="span" sx={{ display: "block" }}>
                     Split · {dateChunk}
@@ -295,7 +310,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
               return (
                 <Box
                   key={`${bill.id}-${period.key}`}
-                  sx={{ position: "relative" }}
+                  sx={{ position: "relative", opacity: isSkipped ? 0.55 : 1 }}
                 >
                   <DashboardCard
                     name={bill.name}

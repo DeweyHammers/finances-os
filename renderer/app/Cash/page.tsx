@@ -9,9 +9,8 @@
  * (Plan) if it's missing. The AccountLedger component owns all UI/CRUD.
  */
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Suspense } from "react";
 import { AccountLedger } from "../../components/accounts/AccountLedger";
 
 // ── Inner content component ──

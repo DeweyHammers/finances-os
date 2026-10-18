@@ -58,6 +58,8 @@ import {
 import {
   computeActivity,
   computeAvailable,
+  evaluatePlanSync,
+  hasPaycheckForPeriod,
   computeReadyToAssign,
   computeExpectedAssignedThroughPeriod,
   monthStart,
@@ -65,14 +67,20 @@ import {
 } from "../../lib/budget-utils";
 import { resolveItemDisplay } from "../../lib/budget-display";
 import { usePaymentCycle } from "../../lib/usePaymentCycle";
+// Shared "$D,DDD.CC" formatter — toasts/tooltips below used to inline
+// toLocaleString({ style: "currency" }), which renders identically in en-US.
+import { formatMoney } from "../../lib/cents";
 import {
   getPayPeriodsForMonth,
   clampDayToMonth,
   computeSplitPersonalAllocations,
   getBillAllocationCentsForPeriod,
+  getBillAllocationsForBill,
   getBillOccurrencesInView,
   getBillPeriodKey,
   monthKeyOf,
+  computeIncomePerPeriodCents,
+  withLegacyIncomeFallback,
   BillSplitRecord,
   PayPeriod,
 } from "../../lib/pay-period-utils";
@@ -365,46 +373,22 @@ export const BudgetPage = () => {
       occurrenceCoord: Number(r.occurrenceCoord ?? 0),
     }));
 
-    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
-    const collectPaydays = (
-      pd: number,
-      isBiWeekly: boolean,
-      offset: number,
-    ): number[] => {
-      const all: number[] = [];
-      for (let d = 1; d <= daysInMonth; d++) {
-        if (new Date(viewYear, viewMonth, d).getDay() === pd) all.push(d);
-      }
-      return isBiWeekly ? all.filter((_, i) => i % 2 === offset) : all;
-    };
+    // Income landing in each pay week (shared helper in pay-period-utils).
+    // With no Income rows yet, fall back to the legacy AppSettings cadence so
+    // first-run users still get numbers. Sources without their own cadence
+    // inherit payDay from usePaymentCycle and the cycle from the primary
+    // income, then AppSettings.
     const primaryIncome = incomes.find((i: any) => i.isPrimary);
-    const incomePerPeriodCents = periods.map((p) => {
-      let total = 0;
-      const sources =
-        incomes.length > 0
-          ? incomes
-          : [
-              {
-                amount: settings.w2Amount ?? 0,
-                paymentCycle: settings.paymentCycle,
-                payDay: settings.payDay,
-                payWeekOffset: 0,
-              },
-            ];
-      sources.forEach((income: any) => {
-        const incomePayDay = Number(income.payDay ?? payDay);
-        const isBW =
-          (income.paymentCycle ??
-            primaryIncome?.paymentCycle ??
-            settings.paymentCycle) === "BI_WEEKLY";
-        const offset = Number(income.payWeekOffset ?? 0);
-        const paydays = collectPaydays(incomePayDay, isBW, offset);
-        if (paydays.some((d) => d >= p.startDay && d <= p.endDay)) {
-          total += Math.round((Number(income.amount) || 0) * 100);
-        }
-      });
-      return total;
-    });
+    const incomePerPeriodCents = computeIncomePerPeriodCents(
+      withLegacyIncomeFallback(incomes, settings),
+      periods,
+      viewYear,
+      viewMonth,
+      {
+        payDay,
+        paymentCycle: primaryIncome?.paymentCycle ?? settings.paymentCycle,
+      },
+    );
     const fixedPersonalPerPeriodCents = periods.map((p) =>
       personalRefs
         .filter((pb) => {
@@ -494,6 +478,25 @@ export const BudgetPage = () => {
     return idx;
   }, [periods, viewYear, viewMonth]);
 
+  // ── Payday pending ──
+  // True when today is inside the current pay week but that week's paycheck
+  // (an uncategorized inflow with memo "Income") hasn't been recorded yet.
+  // While pending, the Plan only flags envelopes that are short of what
+  // EARLIER pay weeks should have funded — this week's slices can't be
+  // funded before the money arrives, so warning about them on payday
+  // morning is just noise. See `evaluatePlanSync`.
+  const paydayPending = useMemo(() => {
+    if (currentPayWeekIdx < 0) return false;
+    const today = new Date();
+    const isSameMonth =
+      today.getFullYear() === viewYear && today.getMonth() === viewMonth;
+    if (!isSameMonth) return false;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const periodStartISO = `${viewYear}-${pad(viewMonth + 1)}-${pad(periods[currentPayWeekIdx].startDay)}`;
+    const todayISO = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    return !hasPaycheckForPeriod({ transactions: allTxns, periodStartISO, todayISO });
+  }, [currentPayWeekIdx, periods, viewYear, viewMonth, allTxns]);
+
   // ── Bill payment grace windows ──
   // For each bill, enumerate its occurrences in this view and compute a real-
   // calendar window [dueDate, dueDate + BILL_PAYMENT_GRACE_DAYS] per occurrence.
@@ -503,7 +506,7 @@ export const BudgetPage = () => {
   // still be attributed to Aug's envelope, not September's.
   //
   // Windows are per-occurrence (a bill firing twice in a view gets two
-  // separate windows), so multi-occurrence bills like Sept view's Bill A
+  // separate windows), so multi-occurrence bills (e.g. one due the 1st in the Sept view)
   // (Sep 1 + Oct 1) attribute payments to the right occurrence.
   const BILL_PAYMENT_GRACE_DAYS = 5;
   // Windows are stored as YYYY-MM-DD string ranges (inclusive) so grace-window
@@ -514,7 +517,12 @@ export const BudgetPage = () => {
   // was Sep 3 late night in PDT — comparison against local-midnight Sep 4
   // start excluded it and the underfunded badge would fire even though the
   // envelope was fully funded and paid).
-  const graceWindowsPerBill: Record<string, Array<{ start: string; end: string }>> = useMemo(() => {
+  // Each window also carries its occurrence `coord` so the enrich pass can
+  // look up that occurrence's planned (split) amount.
+  const graceWindowsPerBill: Record<
+    string,
+    Array<{ start: string; end: string; coord: number }>
+  > = useMemo(() => {
     const daysInViewMonth = new Date(Date.UTC(viewYear, viewMonth + 1, 0)).getUTCDate();
     const toDateStr = (y: number, m: number, d: number): string => {
       // Date constructor handles month/day overflow (e.g. Aug 31 + 5 → Sep 5),
@@ -525,7 +533,7 @@ export const BudgetPage = () => {
       const dd = String(dt.getUTCDate()).padStart(2, "0");
       return `${yy}-${mm}-${dd}`;
     };
-    const result: Record<string, Array<{ start: string; end: string }>> = {};
+    const result: Record<string, Array<{ start: string; end: string; coord: number }>> = {};
     for (const bill of clampedBills) {
       const occurrences = getBillOccurrencesInView(Number(bill.dueDate), periods);
       result[bill.id] = occurrences.map((o) => {
@@ -538,6 +546,7 @@ export const BudgetPage = () => {
         return {
           start: toDateStr(realYear, realMonth, realDay),
           end: toDateStr(realYear, realMonth, realDay + BILL_PAYMENT_GRACE_DAYS),
+          coord: o.coord,
         };
       });
     }
@@ -559,17 +568,44 @@ export const BudgetPage = () => {
       // that happen to land in this calendar month (e.g. Aug 1 payment of a
       // bill due Jul 31 should not count as Aug's envelope activity).
       //
-      // Per-occurrence cap: within each window we clamp activity at the bill's
-      // planned amount so an overpayment on one firing (Sep 5 charged $96.66
-      // against a $101 estimate) doesn't silently reduce the "still-to-save"
-      // target for another firing in the same view (Oct 5 forward-extension).
-      // The Sync-Plan target should reflect the Overview plan verbatim; real
-      // overspends are a checking-account matter, not envelope-level bookkeeping.
+      // Paid occurrence = settled: once a window has ANY net outflow, that
+      // occurrence is credited with its full PLANNED amount (the sum of its
+      // BillSplit rows, or bill.amount when unsplit) regardless of what was
+      // actually charged. This handles both directions of estimate drift:
+      //   - Overpay (charged $96.66 vs a $96 plan) → credited $96, so
+      //     the overpayment doesn't silently eat into another firing's
+      //     "still-to-save" target (e.g. the Oct 5 forward-extension).
+      //   - Underpay (a bill planned $80.50, charged $79.60) → credited
+      //     $80.50, so the $0.90 difference doesn't show as a phantom
+      //     "under-funded" warning. The plan split lives in a locked past
+      //     week, so updating the bill amount + re-optimizing can't fix it.
+      //     Leftover change in the envelope then flags as OVER-funded, which
+      //     is the correct nudge to move it elsewhere.
+      // The Sync-Plan target reflects the Overview plan verbatim; real
+      // over/under charges are a checking-account matter, not envelope-level
+      // bookkeeping.
       let activityInBillGraceWindowCents: number | undefined = undefined;
       if (it.sourceType === "BILL" && it.sourceBillId) {
         const windows = graceWindowsPerBill[it.sourceBillId] ?? [];
         const bill = clampedBills.find((b: any) => b.id === it.sourceBillId);
-        const perOccurrenceCapCents = bill ? Math.round(Number(bill.amount) * 100) : Infinity;
+        // Planned cents per occurrence coord, straight from the same
+        // allocation helper the expected-through-period math uses.
+        const plannedCentsByCoord = new Map<number, number>();
+        if (bill) {
+          for (const a of getBillAllocationsForBill(
+            bill.id,
+            Number(bill.dueDate),
+            Number(bill.amount),
+            periods,
+            autoAssignInputs.monthKey,
+            autoAssignInputs.splits,
+          )) {
+            plannedCentsByCoord.set(
+              a.occurrenceCoord,
+              (plannedCentsByCoord.get(a.occurrenceCoord) ?? 0) + a.amountCents,
+            );
+          }
+        }
         const itemTxns = allTxns.filter((t: any) => t.categoryItemId === it.id);
         const toDateStr = (t: any): string =>
           // Compare on the ISO date part (YYYY-MM-DD) — the calendar date
@@ -589,13 +625,14 @@ export const BudgetPage = () => {
               (s: number, t: any) => s + (t.outflowCents || 0) - (t.inflowCents || 0),
               0,
             );
-          // Only cap actual outflow overpayments (positive activity beyond the
-          // plan). Negative net (refunds > payments) passes through unchanged.
-          const capped =
-            rawWindowActivity > perOccurrenceCapCents
-              ? perOccurrenceCapCents
+          // Only snap real payments (positive net outflow) to the plan.
+          // Zero (unpaid) and negative net (refunds > payments) pass through.
+          const plannedCents = plannedCentsByCoord.get(w.coord);
+          const credited =
+            rawWindowActivity > 0 && plannedCents != null
+              ? plannedCents
               : rawWindowActivity;
-          return sum + capped;
+          return sum + credited;
         }, 0);
       }
       // Compute expected cumulative through BOTH the current and previous
@@ -637,6 +674,7 @@ export const BudgetPage = () => {
             throughPeriodIdx: currentPayWeekIdx - 1,
           }),
         activityInBillGraceWindowCents,
+        paydayPending,
       };
     };
     return groups.map((g) => ({
@@ -644,7 +682,7 @@ export const BudgetPage = () => {
       items: g.items.map(enrich),
       subsections: g.subsections.map((s) => ({ ...s, items: s.items.map(enrich) })),
     }));
-  }, [groups, autoAssignInputs, currentPayWeekIdx, periods, graceWindowsPerBill, allTxns, clampedBills]);
+  }, [groups, autoAssignInputs, currentPayWeekIdx, periods, graceWindowsPerBill, allTxns, clampedBills, paydayPending]);
 
   // Flatten every item (direct + subsectioned) for lookups by id — used by
   // handleMoveMoney, handleManualAssign, and handleAutoAssign.
@@ -783,7 +821,7 @@ export const BudgetPage = () => {
       count++;
       totalCents += needed;
     });
-    setToastMsg(`Assigned ${(totalCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} across ${count} items for ${targetPeriod.label}`);
+    setToastMsg(`Assigned ${formatMoney(totalCents)} across ${count} items for ${targetPeriod.label}`);
     setToastOpen(true);
   };
 
@@ -897,15 +935,14 @@ export const BudgetPage = () => {
     if (!item) return;
     upsertAssignment(item.id, item.assignedCents + params.amountCents);
     setAssignAnchor(null);
-    setToastMsg(`Assigned ${(params.amountCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} to ${item.name}`);
+    setToastMsg(`Assigned ${formatMoney(params.amountCents)} to ${item.name}`);
     setToastOpen(true);
   };
 
   // ── Sync Plan computation ──
   // Walks every item and figures out how much each envelope needs to shift
-  // (assigned +/-) to bring it in line with the plan schedule — same formula
-  // BudgetItemRow uses for the out-of-sync badge, lifted here so we can act
-  // on it in aggregate. Positive delta = add to assignment (under-funded),
+  // (assigned +/-) to bring it in line with the plan schedule — via the same
+  // `evaluatePlanSync` helper BudgetItemRow uses for the out-of-sync badge. Positive delta = add to assignment (under-funded),
   // negative delta = subtract from assignment (over-funded, extra pulled
   // back to Ready to Assign).
   //
@@ -914,63 +951,34 @@ export const BudgetPage = () => {
   // underTotal. When true, applying every delta leaves the RTA at
   // (RTA + overTotal - underTotal) ≥ 0.
   //
-  // Tolerance is 0 — envelope funding is integer cents throughout, so any
-  // non-zero diff is real drift the user asked us to surface (e.g. a $0.66
-  // overpayment on a past occurrence that left the envelope short of the
-  // remaining occurrence's planned amount). Overview plan is the source of
-  // truth; sync targets it exactly.
-  const SYNC_TOLERANCE_CENTS = 0;
+  // Zero tolerance — envelope funding is integer cents throughout, so any
+  // non-zero diff is real drift. Overview plan is the source of truth.
   const syncPlan = useMemo(() => {
     const perItem: Array<{ itemId: string; deltaCents: number }> = [];
     let overTotalCents = 0;
     let underTotalCents = 0;
     allFlatItems.forEach((it) => {
-      if (it.sourceType === "PERSONAL_NAME") return;
-      const expectedFull = it.expectedAssignedCents ?? 0;
-      if (expectedFull <= 0) return;
-      let expected: number;
-      let funded: number;
-      let expectedPrevAdjusted: number;
-      if (it.sourceType === "BILL") {
-        // Same "still-to-save" formula as BudgetItemRow — subtract already-
-        // consumed grace-window activity so paid occurrences don't inflate
-        // both sides of the comparison.
-        const graceActivity = Math.max(
-          0,
-          it.activityInBillGraceWindowCents ?? 0,
-        );
-        expected = Math.max(0, expectedFull - graceActivity);
-        expectedPrevAdjusted = Math.max(
-          0,
-          (it.expectedAssignedThroughPreviousCents ?? 0) - graceActivity,
-        );
-        funded = it.availableCents;
-      } else {
-        // CUSTOM null-cycle (monthly flat): aggregate compare.
-        expected = expectedFull;
-        expectedPrevAdjusted = it.expectedAssignedThroughPreviousCents ?? 0;
-        funded = it.availableCents + it.activityCents;
-      }
-      const diff = funded - expected;
-      if (Math.abs(diff) <= SYNC_TOLERANCE_CENTS) return;
-      // Payday suppression — mirrors BudgetItemRow's badge logic so the
-      // button hides on the same "new pay week hasn't been assigned yet"
-      // cases the visual badge silences. Over-fund still counts as work
-      // because it represents genuine excess to move (or a shrunken plan).
-      // Guard on expectedPrevAdjusted > 0 so a bill whose entire slice lives
-      // in the current pay week (previous target = 0) doesn't get silenced
-      // trivially — see BudgetItemRow comment for the full rationale.
-      const previousMet =
-        expectedPrevAdjusted > 0 &&
-        funded >= expectedPrevAdjusted - SYNC_TOLERANCE_CENTS;
-      if (diff < 0 && previousMet) return;
-      // delta = how much to ADD to assignedCents to zero out diff.
-      // diff > 0 → over-funded → subtract from assigned (delta negative)
-      // diff < 0 → under-funded → add to assigned (delta positive)
-      const deltaCents = -diff;
-      perItem.push({ itemId: it.id, deltaCents });
-      if (diff > 0) overTotalCents += diff;
-      else underTotalCents += -diff;
+      // Shared with BudgetItemRow's badge — see evaluatePlanSync. The button
+      // only picks up over-funding and real drift (short of EARLIER pay
+      // weeks' targets). Shortfalls that exist only because this week's
+      // slice hasn't been assigned yet are Auto-assign's job, so they never
+      // surface the Sync Plan button.
+      const r = evaluatePlanSync({
+        sourceType: it.sourceType,
+        expectedFullCents: it.expectedAssignedCents ?? 0,
+        expectedPreviousFullCents: it.expectedAssignedThroughPreviousCents ?? 0,
+        graceActivityCents: it.activityInBillGraceWindowCents,
+        availableCents: it.availableCents,
+        activityCents: it.activityCents,
+        paydayPending: it.paydayPending ?? false,
+      });
+      if (!r.needsSync || r.syncDeltaCents === 0) return;
+      // delta = how much to ADD to assignedCents.
+      // negative → over-funded → pull back to RTA
+      // positive → drift → fill from RTA
+      perItem.push({ itemId: it.id, deltaCents: r.syncDeltaCents });
+      if (r.syncDeltaCents < 0) overTotalCents += -r.syncDeltaCents;
+      else underTotalCents += r.syncDeltaCents;
     });
     const canSync = readyToAssign + overTotalCents >= underTotalCents;
     // Shortfall shown in the disabled-button tooltip — never negative.
@@ -1001,7 +1009,7 @@ export const BudgetPage = () => {
     });
     const netMovedCents = syncPlan.underTotalCents + syncPlan.overTotalCents;
     setToastMsg(
-      `Synced ${syncPlan.perItem.length} envelope${syncPlan.perItem.length === 1 ? "" : "s"} with plan (${(netMovedCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} shifted)`,
+      `Synced ${syncPlan.perItem.length} envelope${syncPlan.perItem.length === 1 ? "" : "s"} with plan (${formatMoney(netMovedCents)} shifted)`,
     );
     setToastOpen(true);
   };
@@ -1051,8 +1059,8 @@ export const BudgetPage = () => {
                   </TooltipTitle>
                   <TooltipBody>
                     {syncPlan.canSync
-                      ? `Pull ${(syncPlan.overTotalCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} back to Ready to Assign and top up ${(syncPlan.underTotalCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} across ${syncPlan.perItem.length} envelope${syncPlan.perItem.length === 1 ? "" : "s"}.`
-                      : `Ready to Assign is short ${(syncPlan.shortfallCents / 100).toLocaleString(undefined, { style: "currency", currency: "USD" })} to fully sync the plan.`}
+                      ? `Pull ${formatMoney(syncPlan.overTotalCents)} back to Ready to Assign and top up ${formatMoney(syncPlan.underTotalCents)} across ${syncPlan.perItem.length} envelope${syncPlan.perItem.length === 1 ? "" : "s"}.`
+                      : `Ready to Assign is short ${formatMoney(syncPlan.shortfallCents)} to fully sync the plan.`}
                   </TooltipBody>
                 </>
               }

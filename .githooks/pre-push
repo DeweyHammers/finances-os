@@ -1,0 +1,24 @@
+#!/bin/sh
+# pre-push — run the full test suite before anything reaches GitHub.
+#
+# Activated by `npm install` (package.json "prepare" sets
+# `git config core.hooksPath .githooks`). Git for Windows runs this with its
+# bundled sh, so it works from VS Code, the terminal, or the Claude app.
+#
+# CI=true makes Vitest FAIL on missing snapshots instead of silently writing
+# new ones — the lock-in tests must match what's already recorded.
+#
+# Emergency escape hatch (skips the tests): git push --no-verify
+
+echo "pre-push: running tests (npm run test)..."
+
+if CI=true npm run test --silent; then
+  echo "pre-push: all tests passed — pushing."
+  exit 0
+fi
+
+echo ""
+echo "pre-push: tests FAILED — push cancelled."
+echo "  Fix the failures above (or, if a snapshot change is intended,"
+echo "  re-record with 'npx vitest run -u' and commit the updated snapshot)."
+exit 1

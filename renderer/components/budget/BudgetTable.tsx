@@ -58,6 +58,7 @@ import { AvailableCell } from "./AvailableCell";
 import { formatMoney } from "../../lib/cents";
 import { resolveItemDisplay } from "../../lib/budget-display";
 import { PayPeriod } from "../../lib/pay-period-utils";
+import { evaluatePlanSync } from "../../lib/budget-utils";
 import {
   TOOLTIP_AMBER,
   TooltipBody,
@@ -98,6 +99,10 @@ export interface BudgetItem {
    * occurrence that happens to land in this calendar month is excluded.
    * Undefined for non-BILL envelopes (they fall back to `activityCents`). */
   activityInBillGraceWindowCents?: number;
+  /** True when today's pay week has started but its paycheck ("Income"
+   * memo) hasn't been recorded yet. Under-funding is then only judged
+   * against the previous pay week's target. See `evaluatePlanSync`. */
+  paydayPending?: boolean;
 }
 
 export interface BudgetSubsection {
@@ -1214,10 +1219,10 @@ const BudgetItemRow = ({
   // envelope matches it exactly.
   // For BILL envelopes: subtract already-consumed grace-window activity from
   // BOTH `expected` and `fundedCents`. This surfaces "still-to-save" numbers
-  // instead of aggregate month-totals. Example (Bill C Sept view — Sep 4
+  // instead of aggregate month-totals. Example (a $125 bill in the Sept view — Sep 4
   // firing paid, Oct 4 firing pending): aggregate says "expects $171.46,
   // currently $173.95, extra $2.49" — mathematically right but confusing.
-  // Subtracting the paid $130 from both sides: "expects $46.46, currently
+  // Subtracting the paid $125 from both sides: "expects $46.46, currently
   // $48.95, extra $2.49" — same $2.49 diff, but the numbers are the ones the
   // user is actually thinking about (remaining need for Oct 4 vs available
   // balance right now). The identity holds because
@@ -1226,79 +1231,39 @@ const BudgetItemRow = ({
   // Non-BILL envelopes (CUSTOM null-cycle) keep the aggregate formula —
   // they have no per-occurrence concept and their activity isn't tied to a
   // scheduled event.
-  const SYNC_TOLERANCE_CENTS = 0;
-  const expectedFullCents = item.expectedAssignedCents ?? 0;
-  let expected: number;
-  let fundedCents: number;
-  if (item.sourceType === "BILL") {
-    // Clamp graceActivity to ≥ 0 so an inflow (refund) doesn't ADD to expected;
-    // clamp `expected` to ≥ 0 so overpayment on a past occurrence doesn't
-    // drive it negative (it just means that occ was fully covered).
-    const graceActivity = Math.max(
-      0,
-      item.activityInBillGraceWindowCents ?? 0,
-    );
-    expected = Math.max(0, expectedFullCents - graceActivity);
-    fundedCents = item.availableCents;
-  } else {
-    const activityForFunding = item.activityCents;
-    expected = expectedFullCents;
-    fundedCents = item.availableCents + activityForFunding;
-  }
-  // Bidirectional sync check — fire the badge whenever the envelope doesn't
-  // match the plan schedule, whether short OR over. Over-funding matters
-  // because the extra can be moved to a category that actually needs it
-  // (e.g. Spending) instead of sitting idle in a bill envelope.
   //
-  // Payday suppression for under-fund: when the PREVIOUS pay week's target
-  // was already met, an under-fund vs current is treated as "haven't done
-  // today's payday assignment yet" and silenced. If Overview changed (real
-  // drift) the previous target won't be met either → warning fires. Over-
-  // fund always fires because the shortfall-timing story doesn't apply.
-  const diffCents = fundedCents - expected;
-  const isOverfunded = diffCents > SYNC_TOLERANCE_CENTS;
-  const isUnderfundedRaw = diffCents < -SYNC_TOLERANCE_CENTS;
-  const expectedPrevious = item.expectedAssignedThroughPreviousCents ?? 0;
-  // Apply the same BILL grace-window subtraction to the previous target so
-  // the "previous met" comparison uses like-for-like numbers with fundedCents.
-  const expectedPreviousAdjusted =
-    item.sourceType === "BILL"
-      ? Math.max(
-          0,
-          expectedPrevious - Math.max(0, item.activityInBillGraceWindowCents ?? 0),
-        )
-      : expectedPrevious;
-  // Require a NON-ZERO previous obligation for the payday-deferral story to
-  // apply. If the previous pay week expected $0 (e.g. a single-week bill whose
-  // entire allocation lands in the current pay week — Bill J due the 20th,
-  // Bill H due the 17th, etc.), then `fundedCents >= 0` is trivially true and
-  // would silence a genuinely-unfunded envelope. Only real payday transitions
-  // (previous week had a target > 0 and hit it) should defer the current-week
-  // warning.
-  const previousMet =
-    expectedPreviousAdjusted > 0 &&
-    fundedCents >= expectedPreviousAdjusted - SYNC_TOLERANCE_CENTS;
-  const isUnderfunded = isUnderfundedRaw && !previousMet;
-  const outOfSyncCents = Math.abs(diffCents);
-  const showOutOfSync =
-    item.sourceType !== "PERSONAL_NAME" &&
-    // Use expectedFullCents (not the reduced `expected`) as the in-play guard:
-    // a fully-paid bill's expected == 0 after subtracting activity, but the
-    // envelope is still worth checking for over/under (e.g. leftover cash
-    // sitting in a paid Bill C envelope should still flag).
-    expectedFullCents > 0 &&
-    (isOverfunded || isUnderfunded);
+  // The math itself lives in `evaluatePlanSync` (lib/budget-utils.ts), shared
+  // with the Sync Plan button so the two can never disagree. Payday gating:
+  // until this week's paycheck ("Income" memo) is recorded, under-funding is
+  // only judged against the PREVIOUS pay week's target.
+  const sync = evaluatePlanSync({
+    sourceType: item.sourceType,
+    expectedFullCents: item.expectedAssignedCents ?? 0,
+    expectedPreviousFullCents: item.expectedAssignedThroughPreviousCents ?? 0,
+    graceActivityCents: item.activityInBillGraceWindowCents,
+    availableCents: item.availableCents,
+    activityCents: item.activityCents,
+    paydayPending: item.paydayPending ?? false,
+  });
+  const expected = sync.targetCents;
+  const fundedCents = sync.fundedCents;
+  const isOverfunded = sync.isOverfunded;
+  const outOfSyncCents = Math.abs(sync.diffCents);
+  const showOutOfSync = sync.isOverfunded || sync.isUnderfunded;
   // Find the last-started pay week for the tooltip label — matches the
   // period BudgetPage used when computing `expected` (last period whose
   // startDay is ≤ today.getDate()). Falls back to a neutral phrase when
   // no pay week has started yet or periods is empty.
+  // When the comparison is against the previous pay week (payday pending),
+  // label that week instead so the tooltip numbers line up.
   const currentPayWeekLabel = (() => {
     const today = new Date();
-    let match: PayPeriod | undefined;
-    periods.forEach((p) => {
-      if (p.startDay <= today.getDate()) match = p;
+    let matchIdx = -1;
+    periods.forEach((p, i) => {
+      if (p.startDay <= today.getDate()) matchIdx = i;
     });
-    return match?.label ?? "this pay week";
+    const idx = sync.targetIsPreviousWeek ? matchIdx - 1 : matchIdx;
+    return periods[idx]?.label ?? "this pay week";
   })();
 
   return (

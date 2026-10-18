@@ -31,6 +31,10 @@ export const SurplusTargetPill = () => {
   const { query } = useOne({
     resource: "AppSettings",
     id: "global",
+    // Rendered inside OverviewPage, which reads the same AppSettings record —
+    // see CLAUDE.md → "Refine notifications".
+    successNotification: false,
+    errorNotification: false,
   });
   const { mutate: updateSettings } = useUpdate();
 

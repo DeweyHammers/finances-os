@@ -47,9 +47,9 @@ export const makeBudgetMonth = (overrides: Partial<any> = {}) => ({
 
 export const makeBill = (overrides: Partial<any> = {}) => ({
   id: nextId(),
-  name: "Bill N",
-  amount: 26.99,
-  dueDate: 28,
+  name: "Sample Bill",
+  amount: 24.95,
+  dueDate: 15,
   withdrawalCycle: "Q4",
   isAutoPay: true,
   ...overrides,

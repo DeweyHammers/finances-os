@@ -13,6 +13,8 @@ import {
   computeExpectedAssignedThroughPeriod,
   moveMoney,
   buildBalanceAdjustment,
+  evaluatePlanSync,
+  hasPaycheckForPeriod,
 } from "./budget-utils";
 import { getPayPeriodsForMonth } from "./pay-period-utils";
 
@@ -244,8 +246,8 @@ describe("computeAccountBalance", () => {
 
 describe("resolveAutoAssignAmount", () => {
   const bills = [
-    { id: "b1", amount: 26.99, withdrawalCycle: "Q4" },
-    { id: "b2", amount: 118.40, withdrawalCycle: "Q1" },
+    { id: "b1", amount: 24.99, withdrawalCycle: "Q4" },
+    { id: "b2", amount: 118.4, withdrawalCycle: "Q1" },
   ];
   const personals = [
     { name: "Gas", amount: 50, withdrawalCycle: "Q1" },
@@ -262,7 +264,7 @@ describe("resolveAutoAssignAmount", () => {
     };
     expect(
       resolveAutoAssignAmount({ item, cycle: "Q4", bills, personals }),
-    ).toBe(2699);
+    ).toBe(2499);
   });
 
   it("BILL: non-matching cycle returns 0", () => {
@@ -370,14 +372,14 @@ describe("resolveAutoAssignAmountForPeriod", () => {
     // Bill H due on the 17th naturally lands in P2; auto-balance wrote a
     // single-row split placing it at Pay Week 1 (weekIndex 0). Auto-assign
     // for P1 should now see it.
-    const bill = { id: "billH", amount: 9.99, dueDate: 17 };
+    const bill = { id: "billH", amount: 10.49, dueDate: 17 };
     const item = {
-      id: "i-discord",
+      id: "i-billH",
       sourceType: "BILL" as const,
       sourceBillId: "billH",
     };
     const splits = [
-      { billId: "billH", monthKey: "2026-08", weekIndex: 0, amountCents: 999 },
+      { billId: "billH", monthKey: "2026-08", weekIndex: 0, amountCents: 1049 },
     ];
 
     expect(
@@ -390,7 +392,7 @@ describe("resolveAutoAssignAmountForPeriod", () => {
         splits,
         monthKey: "2026-08",
       }),
-    ).toBe(999);
+    ).toBe(1049);
 
     // And P2 (the natural period) no longer claims it.
     expect(
@@ -412,7 +414,7 @@ describe("resolveAutoAssignAmountForPeriod", () => {
     // targets the full split total.
     const bill = { id: "billB", amount: 200, dueDate: 15 };
     const item = {
-      id: "i-climb",
+      id: "i-billB",
       sourceType: "BILL" as const,
       sourceBillId: "billB",
     };
@@ -441,9 +443,9 @@ describe("resolveAutoAssignAmountForPeriod", () => {
   });
 
   it("BILL: falls back to natural due-date attribution when no split matches", () => {
-    const bill = { id: "billE", amount: 101, dueDate: 5 };
+    const bill = { id: "billE", amount: 96, dueDate: 5 };
     const item = {
-      id: "i-phone",
+      id: "i-billE",
       sourceType: "BILL" as const,
       sourceBillId: "billE",
     };
@@ -457,7 +459,7 @@ describe("resolveAutoAssignAmountForPeriod", () => {
         splits: [],
         monthKey: "2026-08",
       }),
-    ).toBe(10100);
+    ).toBe(9600);
   });
 
   it("PERSONAL_NAME split: uses pre-computed split allocation for this period", () => {
@@ -596,9 +598,9 @@ describe("resolveAutoAssignAmountForPeriod — multi-occurrence bills (Plan ↔ 
   // via natural attribution, once via the primary's legacy bucket).
   const periods = getPayPeriodsForMonth(2026, 8, 3);
   const monthKey = "2026-09";
-  const bill = { id: "billC", amount: 101, dueDate: 5 };
+  const bill = { id: "billC", amount: 96, dueDate: 5 };
   const item = {
-    id: "i-starlink",
+    id: "i-billC",
     sourceType: "BILL" as const,
     sourceBillId: "billC",
   };
@@ -607,20 +609,20 @@ describe("resolveAutoAssignAmountForPeriod — multi-occurrence bills (Plan ↔ 
     // Both occurrences fully funded in their natural home week. The Sep 5
     // slice sits in P1 with coord=5; the Oct 5 slice sits in P5 with coord=35.
     const splits = [
-      { billId: "billC", monthKey, weekIndex: 0, amountCents: 10100, occurrenceCoord: 5 },
-      { billId: "billC", monthKey, weekIndex: 4, amountCents: 10100, occurrenceCoord: 35 },
+      { billId: "billC", monthKey, weekIndex: 0, amountCents: 9600, occurrenceCoord: 5 },
+      { billId: "billC", monthKey, weekIndex: 4, amountCents: 9600, occurrenceCoord: 35 },
     ];
 
-    // Sep 5 needs to be funded by end of P1 → $101.
+    // Sep 5 needs to be funded by end of P1 → $96.
     expect(
       resolveAutoAssignAmountForPeriod({
         item, periodKey: "P1", periods,
         bills: [bill], personals: [], splits, monthKey,
       }),
-    ).toBe(10100);
+    ).toBe(9600);
 
     // Between P2 and P4, Sep 5 is fully funded but Oct 5 hasn't landed yet.
-    // Cumulative envelope stays at $101 (NOT $202 — the bug would inflate
+    // Cumulative envelope stays at $96 (NOT $192 — the bug would inflate
     // this by double-counting the secondary via legacy fallback).
     for (const key of ["P2", "P3", "P4"]) {
       expect(
@@ -628,50 +630,50 @@ describe("resolveAutoAssignAmountForPeriod — multi-occurrence bills (Plan ↔ 
           item, periodKey: key, periods,
           bills: [bill], personals: [], splits, monthKey,
         }),
-      ).toBe(10100);
+      ).toBe(9600);
     }
 
-    // By end of P5 both occurrences must be funded → $202.
-    // With the pre-fix bug this returned $303 (Sep 5's $101 natural +
+    // By end of P5 both occurrences must be funded → $192.
+    // With the pre-fix bug this returned $288 (Sep 5's $96 natural +
     // primary's stripped-coord split misattribution).
     expect(
       resolveAutoAssignAmountForPeriod({
         item, periodKey: "P5", periods,
         bills: [bill], personals: [], splits, monthKey,
       }),
-    ).toBe(20200);
+    ).toBe(19200);
   });
 
   it("REGRESSION: intra-occurrence splits stay isolated from other occurrences", () => {
     // Sep 5 occurrence split across P1+P2 ($50 + $51); Oct 5 lump in P5.
     const splits = [
-      { billId: "billC", monthKey, weekIndex: 0, amountCents: 5000,  occurrenceCoord: 5 },
-      { billId: "billC", monthKey, weekIndex: 1, amountCents: 5100,  occurrenceCoord: 5 },
-      { billId: "billC", monthKey, weekIndex: 4, amountCents: 10100, occurrenceCoord: 35 },
+      { billId: "billC", monthKey, weekIndex: 0, amountCents: 4800,  occurrenceCoord: 5 },
+      { billId: "billC", monthKey, weekIndex: 1, amountCents: 4800,  occurrenceCoord: 5 },
+      { billId: "billC", monthKey, weekIndex: 4, amountCents: 9600, occurrenceCoord: 35 },
     ];
 
-    // P1: first Sep 5 slice → $50.
+    // P1: first Sep 5 slice → $48.
     expect(
       resolveAutoAssignAmountForPeriod({
         item, periodKey: "P1", periods,
         bills: [bill], personals: [], splits, monthKey,
       }),
-    ).toBe(5000);
-    // P2: Sep 5 slices 1+2 = $101. Bug would return $151 (adding Oct 5 too
+    ).toBe(4800);
+    // P2: Sep 5 slices 1+2 = $96. Bug would return $144 (adding Oct 5 too
     // via legacy fallback stripping the coord tag).
     expect(
       resolveAutoAssignAmountForPeriod({
         item, periodKey: "P2", periods,
         bills: [bill], personals: [], splits, monthKey,
       }),
-    ).toBe(10100);
-    // P5: Sep fully funded + Oct 5 slice = $202. Bug would return $303.
+    ).toBe(9600);
+    // P5: Sep fully funded + Oct 5 slice = $192. Bug would return $288.
     expect(
       resolveAutoAssignAmountForPeriod({
         item, periodKey: "P5", periods,
         bills: [bill], personals: [], splits, monthKey,
       }),
-    ).toBe(20200);
+    ).toBe(19200);
   });
 });
 
@@ -700,7 +702,7 @@ describe("computeExpectedAssignedThroughPeriod", () => {
     // hold $200 total; by end of P1 only $80.
     const bill = { id: "billB", amount: 200, dueDate: 15 };
     const item = {
-      id: "i-climb",
+      id: "i-billB",
       sourceType: "BILL" as const,
       sourceBillId: "billB",
     };
@@ -731,9 +733,9 @@ describe("computeExpectedAssignedThroughPeriod", () => {
   it("BILL without splits: latches full amount once natural period passes", () => {
     // Bill E due=5 → natural attribution is P1. Before P1 the envelope
     // has no expectation; from P1 onward it should hold the full amount.
-    const bill = { id: "billE", amount: 101, dueDate: 5 };
+    const bill = { id: "billE", amount: 96, dueDate: 5 };
     const item = {
-      id: "i-phone",
+      id: "i-billE",
       sourceType: "BILL" as const,
       sourceBillId: "billE",
     };
@@ -744,13 +746,13 @@ describe("computeExpectedAssignedThroughPeriod", () => {
         item, throughPeriodIdx: 0, periods,
         bills: [bill], personals: [], monthKey,
       }),
-    ).toBe(10100);
+    ).toBe(9600);
     expect(
       computeExpectedAssignedThroughPeriod({
         item, throughPeriodIdx: 2, periods,
         bills: [bill], personals: [], monthKey,
       }),
-    ).toBe(10100);
+    ).toBe(9600);
   });
 
   it("PERSONAL repeatWeekly: sums flat allowance across elapsed pay weeks", () => {
@@ -874,5 +876,157 @@ describe("buildBalanceAdjustment", () => {
         newBalanceCents: 100,
       }),
     ).toBeNull();
+  });
+});
+
+describe("hasPaycheckForPeriod", () => {
+  const income = (date: string, extra: Record<string, unknown> = {}) => ({
+    date: `${date}T12:00:00.000Z`,
+    memo: "Income",
+    inflowCents: 70000,
+    categoryItemId: null,
+    ...extra,
+  });
+
+  it("detects an Income-memo inflow on payday", () => {
+    expect(
+      hasPaycheckForPeriod({
+        transactions: [income("2026-09-30")],
+        periodStartISO: "2026-09-30",
+        todayISO: "2026-09-30",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false before the paycheck is entered (only last week's)", () => {
+    expect(
+      hasPaycheckForPeriod({
+        transactions: [income("2026-09-23")],
+        periodStartISO: "2026-09-30",
+        todayISO: "2026-09-30",
+      }),
+    ).toBe(false);
+  });
+
+  it("counts an early deposit up to PAYCHECK_EARLY_DAYS before the week starts", () => {
+    // Real case: Sep 8 deposit for the Sep 9 pay week.
+    expect(
+      hasPaycheckForPeriod({
+        transactions: [income("2026-09-08")],
+        periodStartISO: "2026-09-09",
+        todayISO: "2026-09-09",
+      }),
+    ).toBe(true);
+  });
+
+  it("ignores transfers, adjustments, and categorized inflows", () => {
+    expect(
+      hasPaycheckForPeriod({
+        transactions: [
+          income("2026-09-30", { memo: "Transfer from Savings" }),
+          income("2026-09-30", { memo: "Manual Balance Adjustment" }),
+          income("2026-09-30", { memo: null }),
+          income("2026-09-30", { categoryItemId: "item-1" }),
+          income("2026-09-30", { inflowCents: 0, outflowCents: 500 }),
+        ],
+        periodStartISO: "2026-09-30",
+        todayISO: "2026-09-30",
+      }),
+    ).toBe(false);
+  });
+
+  it("matches the memo case- and whitespace-insensitively", () => {
+    expect(
+      hasPaycheckForPeriod({
+        transactions: [income("2026-09-30", { memo: "  income " })],
+        periodStartISO: "2026-09-30",
+        todayISO: "2026-09-30",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("evaluatePlanSync", () => {
+  // A single-week bill whose whole $50 slice lives in the current pay week
+  // (previous target $0) — the payday-morning noise case.
+  const singleWeekBill = {
+    sourceType: "BILL",
+    expectedFullCents: 5000,
+    expectedPreviousFullCents: 0,
+    graceActivityCents: 0,
+    availableCents: 0,
+    activityCents: 0,
+  };
+
+  it("payday pending: current-week-only shortfall shows no badge and no Sync work", () => {
+    const r = evaluatePlanSync({ ...singleWeekBill, paydayPending: true });
+    expect(r.isUnderfunded).toBe(false);
+    expect(r.needsSync).toBe(false);
+  });
+
+  it("paycheck recorded: current-week shortfall shows the badge but NOT Sync (Auto-assign's job)", () => {
+    const r = evaluatePlanSync({ ...singleWeekBill, paydayPending: false });
+    expect(r.isUnderfunded).toBe(true);
+    expect(r.diffCents).toBe(-5000);
+    expect(r.needsSync).toBe(false);
+    expect(r.syncDeltaCents).toBe(0);
+  });
+
+  it("drift from earlier weeks flags badge + Sync even while payday is pending", () => {
+    // Split bill: $30 due through last week, $60 through this week; only $20 funded.
+    const r = evaluatePlanSync({
+      sourceType: "BILL",
+      expectedFullCents: 6000,
+      expectedPreviousFullCents: 3000,
+      graceActivityCents: 0,
+      availableCents: 2000,
+      activityCents: 0,
+      paydayPending: true,
+    });
+    expect(r.isUnderfunded).toBe(true);
+    expect(r.targetIsPreviousWeek).toBe(true);
+    expect(r.targetCents).toBe(3000);
+    expect(r.needsSync).toBe(true);
+    // Sync fills to last week's target only; this week's slice is Auto's job.
+    expect(r.syncDeltaCents).toBe(1000);
+  });
+
+  it("over-funding always flags and pulls back to the current target", () => {
+    const r = evaluatePlanSync({
+      ...singleWeekBill,
+      availableCents: 5090,
+      paydayPending: true,
+    });
+    expect(r.isOverfunded).toBe(true);
+    expect(r.needsSync).toBe(true);
+    expect(r.syncDeltaCents).toBe(-90);
+    expect(r.targetIsPreviousWeek).toBe(false);
+  });
+
+  it("paid bill credited at plan with empty envelope is in sync (Bill M $80.50 plan / $79.60 charge)", () => {
+    const r = evaluatePlanSync({
+      sourceType: "BILL",
+      expectedFullCents: 8050,
+      expectedPreviousFullCents: 8050,
+      graceActivityCents: 8050, // settled occurrence credited at plan
+      availableCents: 0,
+      activityCents: -7960,
+      paydayPending: false,
+    });
+    expect(r.isOverfunded).toBe(false);
+    expect(r.isUnderfunded).toBe(false);
+    expect(r.needsSync).toBe(false);
+  });
+
+  it("personal envelopes are never in play", () => {
+    const r = evaluatePlanSync({
+      ...singleWeekBill,
+      sourceType: "PERSONAL_NAME",
+      availableCents: 99999,
+      paydayPending: false,
+    });
+    expect(r.inPlay).toBe(false);
+    expect(r.isOverfunded).toBe(false);
+    expect(r.needsSync).toBe(false);
   });
 });

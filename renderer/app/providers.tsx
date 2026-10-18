@@ -5,7 +5,7 @@
  *
  * Wraps every route rendered by layout.tsx. Sets up:
  *  - Refine.dev CRUD framework with a REST data provider pointed at the local
- *    IPC bridge (main process exposes a fake REST server on localhost:5858).
+ *    IPC bridge (main process exposes a fake REST server on 127.0.0.1:5858).
  *  - Refine resources map — the sider menu and route resolution both key off
  *    this list. Adding a new route means adding a resource here.
  *  - MUI dark theme + global CSS overrides (sider styling, scrollbar polish,
@@ -49,7 +49,10 @@ import { COLORS } from "../lib/constants";
 // IPC bridge address — the Electron main process spins up an in-memory REST
 // server on this port that translates HTTP calls into Prisma queries against
 // the SQLite database. Renderer never talks to Prisma directly.
-const API_URL = "http://localhost:5858/api";
+// Must be the IPv4 loopback literal, NOT "localhost": the server binds to
+// 127.0.0.1 only (main/api-server.ts → "Network exposure"), and "localhost"
+// may resolve to ::1 first.
+const API_URL = "http://127.0.0.1:5858/api";
 
 // ── MUI theme ──
 // Dark palette matched to the Tailwind slate-900/slate-800 tokens used

@@ -132,12 +132,20 @@ export const CustomSider = () => {
     resource: "Account",
     pagination: { mode: "off" },
     sorters: [{ field: "sortOrder", order: "asc" }],
+    // The sider is mounted on every route, so these queries always share their
+    // resource with the page's own queries — silence notifications here to
+    // avoid duplicate notification keys (see CLAUDE.md → "Refine
+    // notifications"). Page-level queries still surface errors.
+    successNotification: false,
+    errorNotification: false,
   });
   // Pull ALL transactions once and bucket per-account in memory below. Cheaper
   // than N per-account queries for typical account counts (<20).
   const { query: txnsQuery } = useList({
     resource: "AccountTransaction",
     pagination: { mode: "off" },
+    successNotification: false,
+    errorNotification: false,
   });
 
   const accounts = (accountsQuery.data?.data as any[]) || [];
