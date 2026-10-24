@@ -25,6 +25,7 @@ npx prisma generate  # Regenerate the client after a schema change — CLOSE the
 - **`dev` passes `--remote-debugging-port=9222`** on purpose. Nextron otherwise appends `--remote-debugging-port=5858` — the API server's port. Chromium DevTools then grabs `127.0.0.1:5858`, and since the API binds loopback only (`main/api-server.ts` → "Network exposure"), the API either fails to start or the renderer's fetches hit DevTools. VS Code's `nextron:renderer` attach config uses 9222 to match.
 - **`prisma generate` fails with `EPERM … query_engine-windows.dll.node`** while the dev Electron is running (it holds the engine DLL). Stop the app, generate, relaunch — the main process needs a restart to see new columns anyway.
 - **PROD schema changes ship via `db:push`** — there are no migrations; PROD gets new columns only by copying dev.db, and the rebuilt `.exe` carries the matching Prisma client. Always do both.
+- **The installer ships an EMPTY database, never dev.db.** `npm run build` first runs `prebuild` → `scripts/build-template-db.mjs`, which rebuilds `prisma/template.db` from the schema with zero rows and refuses to continue otherwise; `electron-builder.yml` packages that file and `shared/prisma.ts` copies it to `%APPDATA%` on a fresh install only. Until Oct 24 2026 the build bundled `prisma/dev.db` (real bills and transactions) — an installer built before that must not be shared. Existing installs are unaffected (their `database.db` already exists).
 
 ## PROD Deployment Flow
 

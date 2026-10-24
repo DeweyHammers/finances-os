@@ -7,6 +7,7 @@
   "main": "app/main.js",
   "scripts": {
     "dev": "nextron --electron-options=--remote-debugging-port=9222",
+    "prebuild": "node scripts/build-template-db.mjs",
     "build": "nextron build",
     "setup-desktop-icon": "powershell.exe -ExecutionPolicy Bypass -File ./setup-desktop-icon.ps1",
     "postinstall": "electron-builder install-app-deps",

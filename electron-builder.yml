@@ -9,7 +9,7 @@ files:
     filter:
       - package.json
       - app
-      - prisma/dev.db
+      - prisma/template.db
 asarUnpack:
   - prisma/**
 extraResources:
