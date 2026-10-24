@@ -168,7 +168,7 @@ export const AddAccountModal = ({
                 type="number"
                 fullWidth
                 variant="outlined"
-                slotProps={{ inputLabel: { shrink: true } }}
+                slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
                 helperText="Creates an initial adjustment transaction. Leave blank for $0."
               />
             </Grid>

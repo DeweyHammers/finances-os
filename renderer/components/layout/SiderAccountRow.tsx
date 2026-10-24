@@ -92,6 +92,9 @@ export const SiderAccountRow = ({
           color: "primary.light",
           width: 24,
           height: 24,
+          // Touch screens have no hover to reveal it: always visible there,
+          // and a little larger to be tappable.
+          "@media (hover: none)": { opacity: 1, width: 28, height: 28 },
         }}
       >
         <EditIcon sx={{ fontSize: 14 }} />

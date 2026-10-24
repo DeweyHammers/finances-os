@@ -3,20 +3,35 @@
 /**
  * CustomSider — app-wide left navigation (replaces Refine.dev's default Sider).
  *
- * Fixed 260px column pinned to the viewport; hosts the logo, grouped nav leaves
- * (Budget: Plan/Statistics/Cash/Payees, Expenses: Overview/Bills/Personal/
- * Yearly Costs/Income), and the expandable Cash section which lists every open
- * Account with its live balance. Also owns the AddAccount / EditAccount modals
- * so account CRUD flows can be triggered from any page via the sider.
+ * Hosts the logo, grouped nav leaves (Budget: Plan/Statistics/Cash/Payees,
+ * Expenses: Overview/Bills/Personal/Yearly Costs/Income), and the expandable
+ * Cash section which lists every open Account with its live balance. Also owns
+ * the AddAccount / EditAccount modals so account CRUD flows can be triggered
+ * from any page via the sider.
+ *
+ * Responsive behaviour (Oct 2026):
+ *  - At `SIDER_BREAKPOINT` (md, 900px) and wider the sider is a permanent
+ *    260px column pinned to the viewport, exactly as before.
+ *  - Below that it leaves the flow and becomes a temporary MUI Drawer that
+ *    slides in over the page. `MobileTopBar` (the ThemedLayout Header slot)
+ *    shows the hamburger that opens it; both talk through Refine's
+ *    ThemedLayout context (`mobileSiderOpen`). The drawer closes itself on
+ *    any route change so tapping a leaf never leaves it open.
+ *  The nav content itself (`SiderContent`) is shared by both modes, so the
+ *  two can never drift apart.
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Box,
   Typography,
   Button,
   Collapse,
+  Drawer,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
+import { useThemedLayoutContext } from "@refinedev/mui";
 import SpaceDashboardIcon from "@mui/icons-material/SpaceDashboard";
 import PieChartIcon from "@mui/icons-material/PieChart";
 import InsightsIcon from "@mui/icons-material/Insights";
@@ -29,13 +44,21 @@ import SavingsIcon from "@mui/icons-material/Savings";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import AddIcon from "@mui/icons-material/Add";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useList } from "@refinedev/core";
 import { computeAccountBalance } from "../../lib/budget-utils";
 import { formatMoney } from "../../lib/cents";
 import { SiderAccountRow } from "./SiderAccountRow";
 import { AddAccountModal } from "../accounts/AddAccountModal";
 import { EditAccountModal } from "../accounts/EditAccountModal";
+
+/** Width of the permanent sider column AND of the narrow-window drawer. */
+export const SIDER_WIDTH = 260;
+
+/** MUI breakpoint key below which the sider becomes a drawer. `md` = 900px.
+ *  Shared with MobileTopBar so the hamburger appears exactly when the column
+ *  disappears — never both, never neither. */
+export const SIDER_BREAKPOINT = "md" as const;
 
 // ── NavLeaf ──
 // Single clickable nav row. Handles the "am I the active route?" highlight and
@@ -117,13 +140,19 @@ const GroupHeader = ({ label }: { label: string }) => (
   </Typography>
 );
 
-export const CustomSider = () => {
-  // ── Local UI state ──
+// ── SiderContent ──
+// Everything INSIDE the sider (logo, groups, Cash accounts, Add Account). It
+// is rendered once by CustomSider, either inside the permanent column or
+// inside the drawer, so the nav is defined in exactly one place.
+interface SiderContentProps {
+  onAddAccount: () => void;
+  onEditAccount: (id: string) => void;
+}
+
+const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
   // Cash section defaults to open so the user always sees their live balances
   // without an extra click on app launch.
   const [cashOpen, setCashOpen] = useState(true);
-  const [addAccountOpen, setAddAccountOpen] = useState(false);
-  const [editAccountId, setEditAccountId] = useState<string | null>(null);
 
   // ── Data ──
   // Sorted by sortOrder so the user can drag-reorder accounts elsewhere and see
@@ -173,19 +202,7 @@ export const CustomSider = () => {
   );
 
   return (
-    <Box
-      sx={{
-        width: 260,
-        height: "100vh",
-        flexShrink: 0,
-        bgcolor: "background.paper",
-        borderRight: "1px solid rgba(255,255,255,0.05)",
-        display: "flex",
-        flexDirection: "column",
-        overflowY: "auto",
-        overflowX: "hidden",
-      }}
-    >
+    <>
       <Box
         sx={{
           display: "flex",
@@ -283,7 +300,7 @@ export const CustomSider = () => {
                 id={a.id}
                 name={a.name}
                 balanceCents={balances.get(a.id) || 0}
-                onEdit={(id) => setEditAccountId(id)}
+                onEdit={onEditAccount}
               />
             ))}
           <Box sx={{ px: 1.5, pt: 0.5, pb: 0.5 }}>
@@ -291,7 +308,7 @@ export const CustomSider = () => {
               fullWidth
               size="small"
               startIcon={<AddIcon sx={{ fontSize: 16 }} />}
-              onClick={() => setAddAccountOpen(true)}
+              onClick={onAddAccount}
               sx={{
                 bgcolor: "rgba(129, 140, 248, 0.18)",
                 color: "primary.light",
@@ -336,10 +353,94 @@ export const CustomSider = () => {
           box gives a little breathing room above the viewport edge. */}
       <Box sx={{ flex: 1 }} />
       <Box sx={{ height: 16 }} />
+    </>
+  );
+};
 
-      {/* Account CRUD modals live at the sider so they can be opened from any
-          page (add via the Cash section button, edit via SiderAccountRow's
-          pencil icon). */}
+// Shared look of the sider surface in both modes — the permanent column and
+// the drawer paper are styled identically so switching between them on a
+// window resize doesn't visibly restyle anything.
+const siderSurfaceSx = {
+  width: SIDER_WIDTH,
+  bgcolor: "background.paper",
+  // MUI's dark-mode Paper adds a translucent white overlay image; the column
+  // never had it, so strip it from the drawer too.
+  backgroundImage: "none",
+  borderRight: "1px solid rgba(255,255,255,0.05)",
+  display: "flex",
+  flexDirection: "column",
+  overflowY: "auto",
+  overflowX: "hidden",
+} as const;
+
+export const CustomSider = () => {
+  const theme = useTheme();
+  // No `noSsr`: the first client render must match the pre-rendered HTML
+  // (Next's static export is built at desktop width), so a narrow window
+  // shows the column for one frame after load and then switches to the
+  // drawer. Reading the query synchronously instead caused a React hydration
+  // mismatch. In jsdom (tests) `matchMedia` is absent and this is `false`,
+  // i.e. the permanent column — the layout every existing test was written
+  // for.
+  const isNarrow = useMediaQuery(theme.breakpoints.down(SIDER_BREAKPOINT));
+  const { mobileSiderOpen, setMobileSiderOpen } = useThemedLayoutContext();
+
+  // Account CRUD modals live at the sider so they can be opened from any page
+  // (add via the Cash section button, edit via SiderAccountRow's pencil icon).
+  // They sit OUTSIDE the drawer so closing the drawer never unmounts a form
+  // mid-edit.
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
+  const [editAccountId, setEditAccountId] = useState<string | null>(null);
+
+  // Close the drawer whenever the route changes. Cheaper and more robust than
+  // threading an onNavigate callback through NavLeaf + SiderAccountRow: any
+  // navigation (leaf, account row, KBar) collapses it.
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const routeKey = `${pathname}?${searchParams?.toString() ?? ""}`;
+  useEffect(() => {
+    setMobileSiderOpen(false);
+    // setMobileSiderOpen is a stable context setter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeKey]);
+
+  const content = (
+    <SiderContent
+      onAddAccount={() => setAddAccountOpen(true)}
+      onEditAccount={(id) => setEditAccountId(id)}
+    />
+  );
+
+  return (
+    <>
+      {isNarrow ? (
+        <Drawer
+          variant="temporary"
+          open={mobileSiderOpen}
+          onClose={() => setMobileSiderOpen(false)}
+          // keepMounted keeps the account queries warm so re-opening the
+          // drawer shows balances instantly instead of a blank Cash list.
+          ModalProps={{ keepMounted: true }}
+          slotProps={{ paper: { sx: siderSurfaceSx } }}
+        >
+          {content}
+        </Drawer>
+      ) : (
+        <Box
+          sx={{
+            ...siderSurfaceSx,
+            flexShrink: 0,
+            height: "100vh",
+            // Dynamic viewport height ignores a mobile browser's collapsing
+            // address bar; plain 100vh stays as the fallback for anything
+            // that doesn't know dvh.
+            "@supports (height: 100dvh)": { height: "100dvh" },
+          }}
+        >
+          {content}
+        </Box>
+      )}
+
       <AddAccountModal
         open={addAccountOpen}
         onClose={() => setAddAccountOpen(false)}
@@ -349,6 +450,6 @@ export const CustomSider = () => {
         accountId={editAccountId}
         onClose={() => setEditAccountId(null)}
       />
-    </Box>
+    </>
   );
 };

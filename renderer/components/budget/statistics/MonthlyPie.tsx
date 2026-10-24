@@ -196,6 +196,13 @@ export const MonthlyPie = ({
                 strokeWidth={2}
                 onMouseEnter={() => setHoverItemId(item.itemId)}
                 onMouseLeave={() => setHoverItemId(null)}
+                // Tap toggles the highlight on touch screens (no hover there).
+                // On a mouse the hover handlers above already own it.
+                onClick={() =>
+                  setHoverItemId((prev) =>
+                    prev === item.itemId ? null : item.itemId,
+                  )
+                }
                 style={{ cursor: "pointer", transition: "opacity 120ms" }}
               />
             );
@@ -296,6 +303,10 @@ export const MonthlyPie = ({
                 key={it.itemId}
                 onMouseEnter={() => setHoverItemId(it.itemId)}
                 onMouseLeave={() => setHoverItemId(null)}
+                // Tap toggles the highlight on touch screens (see the slices).
+                onClick={() =>
+                  setHoverItemId((prev) => (prev === it.itemId ? null : it.itemId))
+                }
                 sx={{
                   display: "grid",
                   gridTemplateColumns: "auto 1fr auto auto",

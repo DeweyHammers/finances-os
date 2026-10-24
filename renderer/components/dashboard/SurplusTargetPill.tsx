@@ -194,6 +194,8 @@ export const SurplusTargetPill = () => {
               htmlInput: {
                 min: 0,
                 step: 10,
+                // Numeric keypad on phones.
+                inputMode: "decimal",
                 onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
                   if (e.key === "Enter") {
                     e.preventDefault();

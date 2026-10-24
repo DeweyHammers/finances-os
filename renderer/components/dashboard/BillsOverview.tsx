@@ -166,15 +166,18 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
     );
 
     return (
-      // Responsive grid: xs=full row, sm=half when >1 active period, md=split
-      // evenly across active periods. Using activePeriods (not periods) so
-      // empty pay weeks don't steal column width from populated ones.
+      // Responsive grid: xs=full row, sm=half when >1 active period, md=three
+      // per row, lg=split evenly across active periods (five columns need a
+      // wide window — below lg they wrapped into unreadable 80px cards).
+      // Using activePeriods (not periods) so empty pay weeks don't steal
+      // column width from populated ones.
       <Grid
         key={period.key}
         size={{
           xs: 12,
           sm: activePeriods.length > 1 ? 6 : 12,
-          md: activePeriods.length > 0 ? 12 / activePeriods.length : 12,
+          md: activePeriods.length > 2 ? 4 : activePeriods.length > 1 ? 6 : 12,
+          lg: activePeriods.length > 0 ? 12 / activePeriods.length : 12,
         }}
       >
         <Box

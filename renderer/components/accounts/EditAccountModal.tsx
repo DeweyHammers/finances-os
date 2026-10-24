@@ -227,7 +227,7 @@ export const EditAccountModal = ({
                   type="number"
                   fullWidth
                   variant="outlined"
-                  slotProps={{ inputLabel: { shrink: true } }}
+                  slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
                   helperText="An adjustment transaction will be created automatically if you change this amount."
                 />
               </Grid>

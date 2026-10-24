@@ -50,6 +50,11 @@ export const tooltipStyleProps = (borderColor: string) => {
   // than a hard boundary, matches the original "Out of sync" tooltip.
   const borderRule = `1px solid ${withAlpha(borderColor, 0.35)}`;
   return {
+    // Touch devices have no hover. MUI's default is a 700ms long-press to
+    // open, which nobody discovers; a plain tap opens these instead and they
+    // stay up long enough to read the numbers. Mouse behaviour is unchanged.
+    enterTouchDelay: 0,
+    leaveTouchDelay: 3000,
     slots: { transition: Fade },
     slotProps: {
       // 150ms Fade is snappy enough to feel responsive without the visible

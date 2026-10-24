@@ -249,12 +249,37 @@ try {
     console.log(`Step 9 · payday ${payday}`);
     for (const t of SPENDING[payday] ?? []) await txn(...t);
     await page.setClock(`${payday}T09:00:00`);
-    await post("AccountTransaction", {
-      accountId: checking.id, date: payday, payeeId: await payeeId("Employer Payroll"),
-      memo: "Income", inflowCents: INCOME.amount * 100,
-    });
-    await page.goto("/Plan");
     const first = payday === "2026-10-02";
+    if (first) {
+      // The first paycheck goes in through the real Cash form so the tour can
+      // show HOW a paycheck is recorded: an inflow with the memo "Income" and
+      // no category (the memo is what tells the app a paycheck has arrived —
+      // see "Payday gating" in CLAUDE.md). The Date field already defaults to
+      // "today", which the frozen clock has set to this payday.
+      await page.goto(`/Cash?id=${checking.id}`);
+      await page.clickText("Add Transaction");
+      await page.fill("Payee", "Employer Payroll");
+      // Enter commits the typed name (a new payee gets POSTed). Wait for that
+      // before typing anything else: the form merges the new payee id into a
+      // snapshot of its state taken when Enter was pressed, so a memo typed in
+      // the meantime would be wiped (and the Save button is disabled until
+      // the payee exists).
+      await page.press("Enter");
+      await page.settle();
+      await page.fill("Memo", "Income");
+      await page.fill("Inflow", INCOME.amount);
+      await shot(page, "paycheck-form");
+      await page.click(".MuiDialogActions-root button:last-child");
+      // Remember the payee the form just created, so the later paydays
+      // (posted through the API) reuse it instead of making a duplicate.
+      payee["Employer Payroll"] = (await api("GET", "Payee")).find((p) => p.name === "Employer Payroll").id;
+    } else {
+      await post("AccountTransaction", {
+        accountId: checking.id, date: payday, payeeId: await payeeId("Employer Payroll"),
+        memo: "Income", inflowCents: INCOME.amount * 100,
+      });
+    }
+    await page.goto("/Plan");
     if (first) await shot(page, "plan-payday");
     await page.clickText("Assign");
     await page.clickText("Auto", ".MuiPopover-paper div");

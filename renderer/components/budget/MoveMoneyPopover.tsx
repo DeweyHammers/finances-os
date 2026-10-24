@@ -139,7 +139,9 @@ export const MoveMoneyPopover = ({
         paper: {
           sx: {
             p: 2.5,
-            width: 340,
+            // 340px unless the viewport is narrower than that plus a 16px
+            // gutter each side (phones) — then shrink to fit.
+            width: "min(340px, calc(100vw - 32px))",
             bgcolor: "background.paper",
             backgroundImage: "none",
             borderRadius: 2,
@@ -168,7 +170,7 @@ export const MoveMoneyPopover = ({
           fullWidth
           variant="outlined"
           size="small"
-          slotProps={{ inputLabel: { shrink: true } }}
+          slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
         />
         <Autocomplete
           options={autocompleteOptions}

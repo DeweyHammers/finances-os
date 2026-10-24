@@ -488,7 +488,16 @@ export function OverviewPage() {
   };
 
   return (
-    <Box sx={{ p: 4, display: "flex", flexDirection: "column", gap: 6 }}>
+    // Page gutters + section gaps tighten below `md` (the sider breakpoint) so
+    // a narrow window spends its width on content, not padding.
+    <Box
+      sx={{
+        p: { xs: 2, md: 4 },
+        display: "flex",
+        flexDirection: "column",
+        gap: { xs: 4, md: 6 },
+      }}
+    >
 
       {/* ── Page title ── */}
       <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
@@ -499,11 +508,21 @@ export function OverviewPage() {
             borderRadius: 2,
             bgcolor: "primary.main",
             boxShadow: "0 0 20px rgba(129, 140, 248, 0.4)",
+            flexShrink: 0,
           }}
         >
           <AccountBalanceWalletIcon sx={{ color: "white", fontSize: "1.8rem" }} />
         </Box>
-        <Typography variant="h4" sx={{ fontWeight: 900, letterSpacing: "-1px", color: "white" }}>
+        <Typography
+          variant="h4"
+          sx={{
+            fontWeight: 900,
+            letterSpacing: "-1px",
+            color: "white",
+            // Smaller title on phones so it stays on one or two lines.
+            fontSize: { xs: "1.6rem", sm: "2.125rem" },
+          }}
+        >
           Cash Flow &amp; Allowance
         </Typography>
       </Box>
@@ -516,7 +535,10 @@ export function OverviewPage() {
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "1fr", sm: "repeat(3, 1fr)" },
+          // As many 200px+ tiles per row as fit: three on a wide window, two
+          // or one as it narrows. auto-fit instead of a fixed breakpoint so
+          // the tiles never squash below the width their amounts need.
+          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
           gap: 2,
         }}
       >
@@ -615,6 +637,9 @@ export function OverviewPage() {
           sx={{
             display: "flex",
             alignItems: "center",
+            // The Optimize Now button wraps under the text on narrow windows
+            // instead of crushing the message into a sliver.
+            flexWrap: "wrap",
             gap: 2,
             px: 2.5,
             py: 1.75,
@@ -624,7 +649,7 @@ export function OverviewPage() {
           }}
         >
           <WarningAmberIcon sx={{ color: "#fbbf24", fontSize: 22, flexShrink: 0 }} />
-          <Box sx={{ flex: 1 }}>
+          <Box sx={{ flex: 1, minWidth: 220 }}>
             <Typography sx={{ color: "white", fontWeight: 700, fontSize: "0.9rem", lineHeight: 1.3 }}>
               {optimizeAlert}
             </Typography>
@@ -656,14 +681,23 @@ export function OverviewPage() {
           display: "flex",
           flexDirection: "column",
           gap: 4,
-          p: 3,
+          p: { xs: 2, md: 3 },
           borderRadius: 4,
           border: "1px solid rgba(129, 140, 248, 0.12)",
           bgcolor: "rgba(30, 41, 59, 0.6)",
         }}
       >
-        {/* Surplus target + month picker */}
-        <Box sx={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 1.5 }}>
+        {/* Surplus target + month picker. Wraps onto a second line when the
+            three controls don't fit side by side (narrow windows). */}
+        <Box
+          sx={{
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            gap: 1.5,
+          }}
+        >
           <Button
             variant="outlined"
             size="small"

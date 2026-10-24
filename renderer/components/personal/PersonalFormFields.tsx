@@ -129,7 +129,7 @@ export const PersonalFormFields = ({ formProps }: PersonalFormFieldsProps) => {
           type="number"
           fullWidth
           variant="outlined"
-          slotProps={{ inputLabel: { shrink: true } }}
+          slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
           error={!!errors.amount}
           helperText={
             (errors.amount?.message as any) ??
@@ -198,7 +198,7 @@ export const PersonalFormFields = ({ formProps }: PersonalFormFieldsProps) => {
               type="number"
               fullWidth
               variant="outlined"
-              slotProps={{ inputLabel: { shrink: true } }}
+              slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "numeric" } }}
               error={!!errors.dueDate}
               helperText={errors.dueDate?.message as any}
               sx={{ mt: 1.5 }}

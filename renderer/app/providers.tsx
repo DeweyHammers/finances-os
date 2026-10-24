@@ -23,6 +23,7 @@ import {
   SnackbarProvider,
 } from "@refinedev/mui";
 import { CustomSider } from "../components/layout/CustomSider";
+import { MobileTopBar } from "../components/layout/MobileTopBar";
 import routerProvider from "@refinedev/nextjs-router";
 import { AppRouterCacheProvider } from "@mui/material-nextjs/v13-appRouter";
 import {
@@ -99,9 +100,11 @@ const theme = createTheme({
   },
 });
 
-// ThemedLayout requires a Header slot but we don't want one (Electron chrome
-// provides the window frame). Returning null here yields a headerless layout.
-const CustomHeader = () => null;
+// ThemedLayout's Header slot. On wide windows it renders nothing (Electron
+// chrome provides the window frame); below the sider breakpoint it becomes a
+// slim bar with the hamburger that opens the sider drawer — see
+// components/layout/MobileTopBar.tsx.
+const CustomHeader = MobileTopBar;
 
 // ── App shell (inside all providers) ──
 // Split from Providers so we can call Refine/MUI hooks here — those hooks
@@ -263,7 +266,14 @@ function App({ children }: { children: ReactNode }) {
           // children area scrolls — the sider stays pinned. Prevents the
           // Electron window from developing a double-scrollbar effect.
           containerBoxProps={{
-            sx: { height: "100vh", overflow: "hidden" },
+            sx: {
+              height: "100vh",
+              // Dynamic viewport height: a phone browser's collapsing address
+              // bar changes the visible height, and 100vh would leave the
+              // bottom of the app hidden behind it. Electron supports dvh too.
+              "@supports (height: 100dvh)": { height: "100dvh" },
+              overflow: "hidden",
+            },
           }}
           childrenBoxProps={{
             sx: { overflowY: "auto", overflowX: "hidden" },

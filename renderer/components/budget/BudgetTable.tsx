@@ -624,12 +624,16 @@ export const BudgetTable = ({
   };
 
   return (
+    // Phone widths (xs): the three columns need ~440px to stay readable, so
+    // the table scrolls sideways there — header and rows share this box and
+    // move together. sm and up is the original fixed-width layout.
     <Box
       sx={{
         display: "flex",
         flexDirection: "column",
         height: "100%",
         minHeight: 0,
+        overflowX: { xs: "auto", sm: "visible" },
       }}
     >
       <Box
@@ -642,6 +646,7 @@ export const BudgetTable = ({
           py: 1,
           borderBottom: "1px solid rgba(255,255,255,0.05)",
           flexShrink: 0,
+          minWidth: { xs: 440, sm: 0 },
         }}
       >
         <Typography
@@ -666,7 +671,13 @@ export const BudgetTable = ({
       </Box>
 
       <Box
-        sx={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          overflowX: "hidden",
+          minWidth: { xs: 440, sm: 0 },
+        }}
       >
         <DndContext
           sensors={sensors}
@@ -1031,6 +1042,8 @@ const SubsectionBlock = ({
               cursor: "grab",
               opacity: 0,
               transition: "opacity 120ms",
+              // Touch screens have no hover to reveal it: always visible there.
+              "@media (hover: none)": { opacity: 1 },
               color: "text.secondary",
               display: "flex",
             }}
@@ -1078,6 +1091,8 @@ const SubsectionBlock = ({
             gap: 0.25,
             opacity: 0,
             transition: "opacity 120ms",
+            // Touch screens have no hover to reveal it: always visible there.
+            "@media (hover: none)": { opacity: 1 },
           }}
         >
           <IconButton
@@ -1290,6 +1305,8 @@ const BudgetItemRow = ({
             cursor: "grab",
             opacity: 0,
             transition: "opacity 120ms",
+            // Touch screens have no hover to reveal it: always visible there.
+            "@media (hover: none)": { opacity: 1 },
             color: "text.secondary",
             display: "flex",
           }}
@@ -1347,6 +1364,8 @@ const BudgetItemRow = ({
           gap: 0.25,
           opacity: 0,
           transition: "opacity 120ms",
+          // Touch screens have no hover to reveal it: always visible there.
+          "@media (hover: none)": { opacity: 1 },
         }}
       >
         {onEdit && (

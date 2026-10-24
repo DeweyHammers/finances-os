@@ -35,13 +35,17 @@ if (isProd && app) {
     prismaLog(
       `Database not found at ${dbPath}, attempting to copy template...`,
     );
+    // template.db is an EMPTY database built from the schema by
+    // scripts/build-template-db.mjs (the `prebuild` step) and packaged by
+    // electron-builder.yml. It used to be prisma/dev.db — the developer's
+    // real data — which must never ship in a public installer.
     const templateDbPath = path.join(
       actualResourcesPath,
-      "app.asar.unpacked/prisma/dev.db",
+      "app.asar.unpacked/prisma/template.db",
     );
     const templateDbPathInAsar = path.join(
       actualResourcesPath,
-      "prisma/dev.db",
+      "prisma/template.db",
     );
 
     try {

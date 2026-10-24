@@ -428,10 +428,19 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
 
   return (
     <Box sx={{ width: "100%" }}>
-      <Box sx={{ display: "flex", gap: 3, alignItems: "stretch" }}>
+      {/* Pay week cards share one wrapping row: each card is at least 170px
+          wide, so on a narrow window they flow onto two or three rows instead
+          of squeezing five cards (plus the surplus card) into one line. */}
+      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "stretch" }}>
         {/* Pay week cards */}
         {periodData.map((data) => (
-          <Box key={data.period.key} sx={{ flex: 1 }}>
+          // lg and up: plain `flex: 1` as before, so five cards + the
+          // surplus card always share one row on a wide window. Below lg the
+          // 170px basis makes them wrap instead of squashing.
+          <Box
+            key={data.period.key}
+            sx={{ flex: { xs: "1 1 170px", lg: "1 1 0%" }, minWidth: 0 }}
+          >
             <AllowanceCard
               period={data.period}
               amount={data.allowance}
@@ -449,8 +458,10 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
           sx={{
             p: 3,
             borderRadius: 4,
-            flexShrink: 0,
-            width: 200,
+            // Fixed 200px beside the cards on a wide window; once the row
+            // wraps it takes a full line of its own (the lg breakpoint is
+            // where five cards + this card first fit side by side).
+            flex: { xs: "1 1 100%", lg: "0 0 200px" },
             display: "flex",
             flexDirection: "column",
             justifyContent: "space-between",

@@ -49,7 +49,7 @@ export const YearlyCostFormFields = ({
           type="number"
           fullWidth
           variant="outlined"
-          slotProps={{ inputLabel: { shrink: true } }}
+          slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
           error={!!errors.amount}
           helperText={errors.amount?.message as any}
         />
@@ -93,7 +93,7 @@ export const YearlyCostFormFields = ({
           type="number"
           fullWidth
           variant="outlined"
-          slotProps={{ inputLabel: { shrink: true } }}
+          slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "numeric" } }}
           error={!!errors.day}
           helperText={errors.day?.message as any}
         />
