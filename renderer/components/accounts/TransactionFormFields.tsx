@@ -11,7 +11,7 @@
  * empty categories without leaving the modal.
  */
 
-import { useMemo } from "react";
+import { useMemo, type Dispatch, type SetStateAction } from "react";
 import {
   TextField,
   Grid,
@@ -78,7 +78,10 @@ export const composeTransactionDateIso = (
 interface TransactionFormFieldsProps {
   accountId: string;
   state: TransactionFormState;
-  onChange: (next: TransactionFormState) => void;
+  // Same signature as the `setState` returned by useState, so the parent modal
+  // can pass its setter straight through. Must accept a FUNCTIONAL updater —
+  // see `set` below for why a plain "next state" callback is not enough.
+  onChange: Dispatch<SetStateAction<TransactionFormState>>;
   onCreatingChange?: (creating: boolean) => void;
 }
 
@@ -88,8 +91,15 @@ export const TransactionFormFields = ({
   onChange,
   onCreatingChange,
 }: TransactionFormFieldsProps) => {
+  // Merge a patch into the LATEST state via a functional updater, never into
+  // the `state` prop captured by this render. PayeeAutocomplete emits its
+  // onChange(payeeId) asynchronously (from the createPayee success callback),
+  // so when the user types a new payee, tabs on and keeps typing into Memo or
+  // Inflow before the POST returns, that late `set({ payeeId })` must not
+  // write back a snapshot from before the memo was typed. Spreading the stale
+  // `state` here did exactly that and silently wiped the memo (Oct 2026).
   const set = (patch: Partial<TransactionFormState>) =>
-    onChange({ ...state, ...patch });
+    onChange((prev) => ({ ...prev, ...patch }));
 
   const { query: groupsQuery } = useList({
     resource: "BudgetCategoryGroup",
