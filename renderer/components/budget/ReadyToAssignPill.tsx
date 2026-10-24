@@ -78,7 +78,11 @@ export const ReadyToAssignPill = ({
         pl: 2.5,
         pr: 1.25,
         py: 1,
-        minWidth: 280,
+        // The 280px floor keeps the pill from shrinking as the amount changes
+        // on a wide window; on a phone it would overflow, so let content size
+        // it there.
+        minWidth: { xs: 0, sm: 280 },
+        maxWidth: "100%",
       }}
     >
       <Box sx={{ display: "flex", flexDirection: "column", flex: 1 }}>

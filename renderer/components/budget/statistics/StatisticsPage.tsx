@@ -149,14 +149,18 @@ export const StatisticsPage = () => {
   const shiftYear = (delta: number) => setYear((y) => y + delta);
 
   return (
+    // minHeight (not height) 100%: on a tall window the chart stretches to
+    // fill the page as before; on a short one the page grows past the
+    // viewport and the layout's main area scrolls instead of the chart being
+    // squeezed out of existence (it was invisible at 700px tall).
+    // MonthlyStackedBars enforces its own minimum height.
     <Box
       sx={{
-        height: "100%",
-        p: 4,
+        minHeight: "100%",
+        p: { xs: 2, md: 4 },
         display: "flex",
         flexDirection: "column",
         gap: 3,
-        minHeight: 0,
       }}
     >
       <Box sx={{ flexShrink: 0 }}>

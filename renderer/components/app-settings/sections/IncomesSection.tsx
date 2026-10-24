@@ -362,7 +362,7 @@ export const IncomesSection = () => {
                 setForm((f) => ({ ...f, amount: e.target.value }))
               }
               fullWidth
-              slotProps={{ inputLabel: { shrink: true } }}
+              slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
             />
 
             <Box>

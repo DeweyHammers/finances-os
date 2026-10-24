@@ -192,7 +192,8 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
         size={{
           xs: 12,
           sm: activePeriods.length > 1 ? 6 : 12,
-          md: activePeriods.length > 0 ? 12 / activePeriods.length : 12,
+          md: activePeriods.length > 2 ? 4 : activePeriods.length > 1 ? 6 : 12,
+          lg: activePeriods.length > 0 ? 12 / activePeriods.length : 12,
         }}
       >
         <Box

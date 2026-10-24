@@ -135,15 +135,22 @@ export const MonthlyStackedBars = ({
         ref={barsRef}
         sx={{
           flex: 1,
-          minHeight: 0,
+          // Never shorter than MIN_CHART_HEIGHT: when the page has no spare
+          // vertical room this box holds its floor and the page scrolls.
+          minHeight: MIN_CHART_HEIGHT,
+          position: "relative",
           overflow: "hidden",
         }}
       >
+        {/* Absolutely positioned so the SVG contributes no content height to
+            the box it is measured from. If it were in-flow, a box that grew
+            on a tall window would keep its SVG's height as content and never
+            shrink again when the window got shorter (a ratchet). */}
         <svg
           width="100%"
-          height={chartH}
+          height="100%"
           viewBox={`0 0 ${width} ${chartH}`}
-          style={{ display: "block" }}
+          style={{ display: "block", position: "absolute", inset: 0 }}
         >
           {yTicks.map((t, i) => {
             const y = yScale(t);
@@ -284,6 +291,9 @@ export const MonthlyStackedBars = ({
           {data.map((m, i) => {
             const cx = PADDING.left + bandW * i + bandW / 2;
             const hasData = m.totalCents > 0;
+            // Below ~28px per month the three-letter labels overlap (phone
+            // widths), so show every other one.
+            if (bandW < 28 && i % 2 === 1) return null;
             return (
               <text
                 key={m.monthIndex}

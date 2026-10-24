@@ -58,6 +58,11 @@ const cleanup = () => {
   const mainWindow = createWindow({
     width: 1000,
     height: 600,
+    // Floor for manual resizing. The renderer reflows down to phone widths,
+    // but below ~720px the desktop window is just a worse phone, and a
+    // too-short window hides the Statistics chart behind a scroll.
+    minWidth: 720,
+    minHeight: 480,
     show: false,
     backgroundColor: "#0f172a",
     icon: path.join(__dirname, "../resources/icon.png"),

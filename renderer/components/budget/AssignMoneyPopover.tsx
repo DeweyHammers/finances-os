@@ -106,7 +106,9 @@ export const AssignMoneyPopover = ({
       slotProps={{
         paper: {
           sx: {
-            width: 360,
+            // 360px unless the viewport is narrower than that plus a 16px
+            // gutter each side (phones) — then shrink to fit.
+            width: "min(360px, calc(100vw - 32px))",
             bgcolor: "background.paper",
             backgroundImage: "none",
             borderRadius: 2,
@@ -156,7 +158,7 @@ export const AssignMoneyPopover = ({
             fullWidth
             variant="outlined"
             size="small"
-            slotProps={{ inputLabel: { shrink: true } }}
+            slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
           />
           <Autocomplete
             options={options}

@@ -590,7 +590,7 @@ export const TransactionFormFields = ({
             type="number"
             fullWidth
             variant="outlined"
-            slotProps={{ inputLabel: { shrink: true } }}
+            slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
           />
         </Grid>
       ) : (
@@ -604,7 +604,7 @@ export const TransactionFormFields = ({
             type="number"
             fullWidth
             variant="outlined"
-            slotProps={{ inputLabel: { shrink: true } }}
+            slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
           />
         </Grid>
       )}

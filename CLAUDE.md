@@ -99,6 +99,14 @@ renderer/
 
 ## Key Patterns
 
+### Responsive layout (Oct 2026)
+The renderer is plain Next.js with no Electron-only APIs, so the same UI is meant to work in a narrow desktop window and, later, in a phone browser (a future PC ↔ phone sync is planned; the API would then need auth and a configurable address instead of the hard-coded loopback).
+- **Sider**: `CustomSider` is a permanent 260px column at `SIDER_BREAKPOINT` (`md`, 900px) and wider, and a temporary `Drawer` below it. `MobileTopBar` (the ThemedLayout `Header` slot) renders the hamburger only below that breakpoint; both share Refine's `useThemedLayoutContext().mobileSiderOpen`. The drawer closes on any route change. Neither uses `noSsr` — it caused a hydration mismatch against the static export.
+- **Breakpoints, not device sniffing, for layout**: Overview pay-week cards wrap below `lg` (`flex: 1 1 170px`, surplus card takes its own row), Bills/Personal grids go 3-per-row at `md` and only split evenly across pay weeks at `lg`. The Plan toolbar stacks the Ready-to-Assign pill above the buttons below `md`. The Plan table scrolls sideways at `xs` (`minWidth: 440`). Statistics uses `minHeight: 100%` so a short window scrolls instead of squeezing the chart out (`MonthlyStackedBars` keeps `MIN_CHART_HEIGHT`, with the SVG absolutely positioned so it can't ratchet the measured box).
+- **`hover: none`, not width, for touch**: hover-revealed controls (Plan drag handles and row actions, sider account pencil) get `"@media (hover: none)": { opacity: 1 }` so a resized PC window keeps its hover behaviour. `tooltipStyleProps` sets `enterTouchDelay: 0` so a tap opens the shared tooltips. Charts toggle highlight on click as the touch fallback.
+- Popovers cap at `min(<px>, calc(100vw - 32px))`; dialogs were already `fullWidth` + `maxWidth`. Number fields carry `inputMode` (`decimal` for amounts, `numeric` for day fields). Viewport heights use `100dvh` with a `100vh` fallback. The Electron window has a 720×480 minimum (`main/main.ts`).
+- Demo servers for checking layouts without touching dev.db: `.claude/launch.json` has `demo-api` (port 5858, demo.db) and `demo-ui` (port 8888).
+
 ### Auto-assign amounts
 - `repeatWeekly` Personal items (Gas, Spending, etc.) → **always add a flat per-period amount** (never cumulative top-up). This is intentional — each pay week gets a fresh allowance regardless of prior assigned state.
 - `splitAcrossWeeks` Personal items → cumulative top-up. Target = sum of per-period slices (from `computeSplitPersonalAllocations`) through the clicked pay week; caller subtracts current `available` so already-funded prior weeks aren't double-counted.

@@ -1032,22 +1032,31 @@ export const BudgetPage = () => {
     <Box
       sx={{
         height: "100%",
-        p: 4,
+        p: { xs: 2, md: 4 },
         display: "flex",
         flexDirection: "column",
         gap: 3,
         minHeight: 0,
       }}
     >
+      {/* Toolbar. Wide: Sync Plan | Ready to Assign | Add Group on one row.
+          Below md the three don't fit, so the pill takes a full row of its
+          own on top and the two buttons share the row beneath it. */}
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: "1fr auto 1fr",
+          gridTemplateColumns: { xs: "1fr 1fr", md: "1fr auto 1fr" },
           alignItems: "center",
           gap: 2,
         }}
       >
-        <Box sx={{ display: "flex", justifyContent: "flex-start" }}>
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "flex-start",
+            gridRow: { xs: 2, md: "auto" },
+          }}
+        >
           {/* Hidden until every query has loaded — mid-load the sync math runs
               on partial data (e.g. transactions without assignments) and the
               button would flash in and out on app launch. */}
@@ -1117,6 +1126,9 @@ export const BudgetPage = () => {
             display: "flex",
             justifyContent: "center",
             visibility: isLoading ? "hidden" : "visible",
+            // Full-width top row on narrow windows (see toolbar comment).
+            gridColumn: { xs: "1 / -1", md: "auto" },
+            gridRow: { xs: 1, md: "auto" },
           }}
           aria-hidden={isLoading || undefined}
         >
@@ -1126,7 +1138,12 @@ export const BudgetPage = () => {
           />
         </Box>
         <Box
-          sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}
+          sx={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 1,
+            gridRow: { xs: 2, md: "auto" },
+          }}
         >
           <Button
             variant="outlined"

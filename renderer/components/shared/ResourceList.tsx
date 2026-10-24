@@ -77,7 +77,9 @@ export const ResourceList: FC<ResourceListProps> = ({
   initialFilters,
   initialSorters: userInitialSorters,
   renderExtraFilters,
-  height = "calc(100vh - 120px)",
+  // dvh (not vh): a phone browser's collapsing address bar changes the
+  // visible height and vh would leave the pagination footer hidden under it.
+  height = "calc(100dvh - 120px)",
   searchField = "name",
   gridSx = {},
   emptyState,
@@ -208,6 +210,8 @@ export const ResourceList: FC<ResourceListProps> = ({
               sx={{
                 width: 28,
                 height: 28,
+                // Bigger hit area on touch screens (no hover = finger input).
+                "@media (hover: none)": { width: 36, height: 36 },
                 color: "primary.light",
                 bgcolor: "rgba(129, 140, 248, 0.05)",
                 "&:hover": { bgcolor: "rgba(129, 140, 248, 0.15)" },
@@ -221,6 +225,8 @@ export const ResourceList: FC<ResourceListProps> = ({
               sx={{
                 width: 28,
                 height: 28,
+                // Bigger hit area on touch screens (no hover = finger input).
+                "@media (hover: none)": { width: 36, height: 36 },
                 color: "error.light",
                 bgcolor: "rgba(248, 113, 113, 0.05)",
                 "&:hover": { bgcolor: "rgba(248, 113, 113, 0.15)" },
