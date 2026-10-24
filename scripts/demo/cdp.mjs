@@ -199,6 +199,12 @@ export async function launch({ width = 1440, height = 900 } = {}) {
       await send("Input.insertText", { text: String(value) });
       await sleep(150);
     },
+    /** Press a single key (e.g. "Enter") in the focused element. */
+    async press(key, code = key, vk = 13) {
+      await send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: vk });
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: vk });
+      await sleep(150);
+    },
     /** Click the first visible element matching a CSS selector. */
     async click(selector) {
       const ok = await retry(() => evaluate(`(() => {
@@ -255,7 +261,13 @@ export async function launch({ width = 1440, height = 900 } = {}) {
       try { ws.close(); } catch {}
       proc.kill();
       await sleep(300);
-      fs.rmSync(profile, { recursive: true, force: true });
+      // Chrome can still hold the profile dir for a moment after the kill
+      // (EPERM on Windows); retry, and never let cleanup fail the run.
+      try {
+        fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+      } catch (e) {
+        console.warn(`(could not remove throwaway profile ${profile}: ${e.code ?? e.message})`);
+      }
     },
   };
   return page;
