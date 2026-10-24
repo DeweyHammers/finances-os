@@ -137,6 +137,7 @@
     border-left: 3px solid var(--c, var(--indigo)); color: #e2e8f0; font-size: .95rem;
   }
   .why strong { color: var(--c, var(--indigo)); }
+  .step code { font: 600 .9em ui-monospace, Consolas, monospace; background: rgba(255,255,255,0.07); border: 1px solid var(--line); padding: 1px 7px; border-radius: 6px; color: var(--text); }
 
   figure { margin: 0 0 22px; }
   figure button {
@@ -213,6 +214,7 @@
   <nav class="toc" aria-label="Tour steps">
     <h4>The tour</h4>
     <ol>
+      <li><a href="#install">Download &amp; install</a></li>
       <li><a href="#start">A fresh start</a></li>
       <li><a href="#income">Add your income</a></li>
       <li><a href="#bills">Add your bills</a></li>
@@ -243,8 +245,15 @@
     </div>
 
     <!-- 1 -->
+    <section class="step" id="install" style="--c: var(--sky)">
+      <div class="step-head"><div class="num">01</div><div><h2>Download &amp; install</h2><p class="where">GitHub → Releases</p></div></div>
+      <p>Finances OS is a Windows app. Download the latest <strong>Finances OS Setup x.x.x.exe</strong> from the <a href="https://github.com/DeweyHammers/finances-os/releases/latest">Releases page</a> and run it; the installer lets you pick a folder and adds a desktop shortcut. Because the app isn't signed with a paid certificate, Windows SmartScreen may show a blue “Windows protected your PC” box the first time: click <strong>More info</strong>, then <strong>Run anyway</strong>.</p>
+      <div class="why"><strong>Why it matters:</strong> there's nothing else to set up. No account to create and no bank to connect; everything the app knows lives in a database file on your own PC.</div>
+    </section>
+
+    <!-- 2 -->
     <section class="step" id="start" style="--c: var(--indigo)">
-      <div class="step-head"><div class="num">01</div><div><h2>A fresh start</h2><p class="where">First launch</p></div></div>
+      <div class="step-head"><div class="num">02</div><div><h2>A fresh start</h2><p class="where">First launch</p></div></div>
       <p>A brand-new install has no data at all. Instead of blank tables, every page tells you what it's for and what to do first.</p>
       <div class="why"><strong>Why it matters:</strong> you never have to guess where to begin. The Overview points you to your income, since everything else is planned around your paydays.</div>
       <div class="pair">
@@ -253,9 +262,9 @@
       </div>
     </section>
 
-    <!-- 2 -->
+    <!-- 3 -->
     <section class="step" id="income" style="--c: var(--green)">
-      <div class="step-head"><div class="num">02</div><div><h2>Add your income</h2><p class="where">Income → Add Your First Income</p></div></div>
+      <div class="step-head"><div class="num">03</div><div><h2>Add your income</h2><p class="where">Income → Add Your First Income</p></div></div>
       <p>Enter what you take home each paycheck, how often you're paid, and on which day. Alex gets <strong>$1,150 weekly on Fridays</strong>.</p>
       <div class="why"><strong>Why it matters:</strong> your paydays build the pay-week grid. October has five Fridays, so Alex's October has five pay weeks, and every bill gets assigned to the paycheck that should cover it.</div>
       <div class="pair">
@@ -264,9 +273,9 @@
       </div>
     </section>
 
-    <!-- 3 -->
+    <!-- 4 -->
     <section class="step" id="bills" style="--c: var(--rose)">
-      <div class="step-head"><div class="num">03</div><div><h2>Add your bills</h2><p class="where">Bills → Create New Bill</p></div></div>
+      <div class="step-head"><div class="num">04</div><div><h2>Add your bills</h2><p class="where">Bills → Create New Bill</p></div></div>
       <p>Add each monthly bill with its amount and the day it's due. Alex has eight, from $1,400 rent on the 1st down to a $16 streaming plan on the 27th.</p>
       <div class="why"><strong>Why it matters:</strong> due dates are what let the app work out which paycheck pays for what. Tick “Never split” for a bill that must be paid in one go from a single paycheck.</div>
       <div class="pair">
@@ -275,9 +284,9 @@
       </div>
     </section>
 
-    <!-- 4 -->
+    <!-- 5 -->
     <section class="step" id="personal" style="--c: var(--indigo)">
-      <div class="step-head"><div class="num">04</div><div><h2>Everyday spending</h2><p class="where">Personal → Create New Personal</p></div></div>
+      <div class="step-head"><div class="num">05</div><div><h2>Everyday spending</h2><p class="where">Personal → Create New Personal</p></div></div>
       <p>Personal expenses are the money you spend (or set aside) as you go. <strong>Every Pay Week</strong> gives a fresh allowance from each paycheck: groceries, gas, fun money, and Alex's $100 savings transfer. <strong>Split Monthly</strong> spreads one monthly total across the weeks (household supplies).</p>
       <div class="why"><strong>Why it matters:</strong> once allowances are set aside, the surplus you see each week is money you can actually spend or save. It isn't already promised to groceries.</div>
       <div class="pair">
@@ -286,20 +295,20 @@
       </div>
     </section>
 
-    <!-- 5 -->
+    <!-- 6 -->
     <section class="step" id="yearly" style="--c: var(--green)">
-      <div class="step-head"><div class="num">05</div><div><h2>Yearly costs</h2><p class="where">Yearly Costs → Create New Yearly Cost</p></div></div>
+      <div class="step-head"><div class="num">06</div><div><h2>Yearly costs</h2><p class="where">Yearly Costs → Create New Yearly Cost</p></div></div>
       <p>Some bills only show up once a year: car registration, a club membership, holiday gifts. Add them with the month and day they're due.</p>
       <div class="why"><strong>Why it matters:</strong> the costs that hurt most are the ones you forget. The Overview lays them out by month so you can see them coming.</div>
       <figure><button data-full="img/tour/09-yearly-list.png"><img loading="lazy" src="img/tour/09-yearly-list.png" alt="Yearly Costs list with four annual expenses." width="1920" height="1080"></button><figcaption>Four annual costs, $765 a year in total.</figcaption></figure>
     </section>
 
-    <!-- 6 -->
+    <!-- 7 -->
     <section class="step" id="optimize" style="--c: var(--amber)">
-      <div class="step-head"><div class="num">06</div><div><h2>Overview &amp; Optimize</h2><p class="where">Overview → Optimize Now</p></div></div>
+      <div class="step-head"><div class="num">07</div><div><h2>Overview &amp; Optimize</h2><p class="where">Overview → Optimize Now</p></div></div>
       <p>The Overview now shows October as five pay weeks: income, expenses and the surplus left in each. Before optimizing, every bill sits in the week it's due. November's $1,400 rent lands in Pay Week 5, leaving Alex <strong>$595 short</strong> that week.</p>
       <figure><button data-full="img/tour/10-overview-before-optimize.png"><img loading="lazy" src="img/tour/10-overview-before-optimize.png" alt="Overview before optimizing: Pay Week 5 shows a negative surplus of 495 dollars." width="1920" height="1080"></button><figcaption>Before: week 5 goes negative, and the app suggests re-optimizing.</figcaption></figure>
-      <p>One click on <strong>Optimize</strong> spreads big bills across earlier paychecks and plans the next three years. Rent is now saved a little each week, and every week clears the $300 surplus target.</p>
+      <p>One click on <strong>Optimize</strong> spreads big bills across earlier paychecks and plans the next three years. Rent is now saved a little each week, and every week clears the $300 surplus target. That $300 a week is just the default: change it any time with the pencil on the <em>Surplus Target</em> pill at the top of the Overview.</p>
       <div class="why"><strong>Why it matters:</strong> you see a bad week coming weeks ahead, and the fix is already planned. Split cards show how much of a bill has been saved so far.</div>
       <div class="pair">
         <figure><button data-full="img/tour/11-overview-optimized.png"><img loading="lazy" src="img/tour/11-overview-optimized.png" alt="Overview after optimizing: every pay week has a positive surplus." width="1920" height="1080"></button><figcaption>After: $369 left over in four weeks, $463 in the fifth.</figcaption></figure>
@@ -307,17 +316,17 @@
       </div>
     </section>
 
-    <!-- 7 -->
+    <!-- 8 -->
     <section class="step" id="account" style="--c: var(--sky)">
-      <div class="step-head"><div class="num">07</div><div><h2>Add your bank account</h2><p class="where">Sidebar → Cash → Add Account</p></div></div>
+      <div class="step-head"><div class="num">08</div><div><h2>Add your bank account</h2><p class="where">Sidebar → Cash → Add Account</p></div></div>
       <p>Add a checking account with its current balance. Alex starts with $1,800. Balances are always calculated from the transactions, so they never drift.</p>
       <div class="why"><strong>Why it matters:</strong> your real money is what the Plan hands out. The starting balance becomes your first “Ready to Assign” dollars.</div>
       <figure><button data-full="img/tour/13-account-form.png"><img loading="lazy" src="img/tour/13-account-form.png" alt="Add Account form: Checking with a starting balance of 1800." width="1920" height="1080"></button><figcaption>Checking, $1,800.</figcaption></figure>
     </section>
 
-    <!-- 8 -->
+    <!-- 9 -->
     <section class="step" id="plan" style="--c: var(--indigo)">
-      <div class="step-head"><div class="num">08</div><div><h2>Build your Plan</h2><p class="where">Plan → Create your first group</p></div></div>
+      <div class="step-head"><div class="num">09</div><div><h2>Build your Plan</h2><p class="where">Plan → Create your first group</p></div></div>
       <p>The Plan is a zero-based budget: every dollar gets a job. Create groups (Alex uses <em>Bills</em>, <em>Everyday</em> and <em>Goals</em>) and fill them with your bills and personal expenses, including Alex's $100-a-week Savings.</p>
       <div class="why"><strong>Why it matters:</strong> items linked to your bills and allowances know their own amounts and schedules, so the Plan can fund them for you on payday.</div>
       <div class="pair">
@@ -326,39 +335,42 @@
       </div>
     </section>
 
-    <!-- 9 -->
-    <section class="step" id="payday" style="--c: var(--green)">
-      <div class="step-head"><div class="num">09</div><div><h2>Payday: Auto-assign</h2><p class="where">Plan → Assign → Auto</p></div></div>
-      <p>Friday, October 2nd: Alex records the paycheck. In the Plan, <strong>Assign → Auto</strong> funds this pay week in one click: each allowance gets its weekly amount, and each bill gets exactly the slice the Optimize schedule set for this week.</p>
-      <div class="why"><strong>Why it matters:</strong> no math on payday. The Plan and the Overview always agree, and an amber ⚠ appears if an item ever drifts from the schedule.</div>
-      <figure><button data-full="img/tour/16-plan-payday.png"><img loading="lazy" src="img/tour/16-plan-payday.png" alt="Plan on payday with the new paycheck ready to assign." width="1920" height="1080"></button><figcaption>The paycheck lands in Ready to Assign.</figcaption></figure>
-      <div class="pair">
-        <figure><button data-full="img/tour/17-plan-auto-assign.png"><img loading="lazy" src="img/tour/17-plan-auto-assign.png" alt="Assign popover on the Auto tab showing the current pay week." width="1920" height="1080"></button><figcaption>Auto-assign for the current pay week.</figcaption></figure>
-        <figure><button data-full="img/tour/18-plan-funded.png"><img loading="lazy" src="img/tour/18-plan-funded.png" alt="Plan after auto-assign with items funded." width="1920" height="1080"></button><figcaption>Every item funded for this week.</figcaption></figure>
-      </div>
-    </section>
-
     <!-- 10 -->
-    <section class="step" id="spend" style="--c: var(--sky)">
-      <div class="step-head"><div class="num">10</div><div><h2>Track your spending</h2><p class="where">Cash → Checking</p></div></div>
-      <p>Through October, Alex logs purchases and bill payments in the checking ledger, each one tagged with a Plan item. Every Friday: record the paycheck, then click Auto.</p>
-      <div class="why"><strong>Why it matters:</strong> each item's <em>Available</em> balance shows what's really left in that envelope, so overspending shows up the same day, not at the end of the month.</div>
+    <section class="step" id="payday" style="--c: var(--green)">
+      <div class="step-head"><div class="num">10</div><div><h2>Payday: Auto-assign</h2><p class="where">Plan → Assign → Auto</p></div></div>
+      <p>Friday, October 2nd: payday. Alex records the paycheck in <strong>Cash → Checking → Add Transaction</strong>: an inflow for the paycheck amount, the memo <code>Income</code>, and no category. That lands the money in Ready to Assign, and the memo is what tells the app a paycheck has arrived. Then, in the Plan, <strong>Assign → Auto</strong> funds this pay week in one click: each allowance gets its weekly amount, and each bill gets exactly the slice the Optimize schedule set for this week.</p>
+      <div class="why"><strong>Why it matters:</strong> no math on payday. The Plan and the Overview always agree, and an amber ⚠ appears if an item ever drifts from the schedule.</div>
       <div class="pair">
-        <figure><button data-full="img/tour/20-cash-ledger.png"><img loading="lazy" src="img/tour/20-cash-ledger.png" alt="Checking account ledger with October transactions." width="1920" height="1080"></button><figcaption>The checking ledger at month end.</figcaption></figure>
-        <figure><button data-full="img/tour/19-plan-month-end.png"><img loading="lazy" src="img/tour/19-plan-month-end.png" alt="Plan at the end of October showing activity and available balances." width="1920" height="1080"></button><figcaption>The Plan after five paydays.</figcaption></figure>
+        <figure><button data-full="img/tour/16-paycheck-form.png"><img loading="lazy" src="img/tour/16-paycheck-form.png" alt="New Transaction form in the checking account: Employer Payroll, memo Income, no category, inflow 1150." width="1920" height="1080"></button><figcaption>Recording the paycheck: inflow, memo “Income”, no category.</figcaption></figure>
+        <figure><button data-full="img/tour/17-plan-payday.png"><img loading="lazy" src="img/tour/17-plan-payday.png" alt="Plan on payday with the new paycheck ready to assign." width="1920" height="1080"></button><figcaption>The paycheck lands in Ready to Assign.</figcaption></figure>
+      </div>
+      <div class="pair">
+        <figure><button data-full="img/tour/18-plan-auto-assign.png"><img loading="lazy" src="img/tour/18-plan-auto-assign.png" alt="Assign popover on the Auto tab showing the current pay week." width="1920" height="1080"></button><figcaption>Auto-assign for the current pay week.</figcaption></figure>
+        <figure><button data-full="img/tour/19-plan-funded.png"><img loading="lazy" src="img/tour/19-plan-funded.png" alt="Plan after auto-assign with items funded." width="1920" height="1080"></button><figcaption>Every item funded for this week.</figcaption></figure>
       </div>
     </section>
 
     <!-- 11 -->
+    <section class="step" id="spend" style="--c: var(--sky)">
+      <div class="step-head"><div class="num">11</div><div><h2>Track your spending</h2><p class="where">Cash → Checking</p></div></div>
+      <p>Through October, Alex logs purchases and bill payments in the checking ledger, each one tagged with a Plan item. Every Friday: record the paycheck, then click Auto.</p>
+      <div class="why"><strong>Why it matters:</strong> each item's <em>Available</em> balance shows what's really left in that envelope, so overspending shows up the same day, not at the end of the month.</div>
+      <div class="pair">
+        <figure><button data-full="img/tour/21-cash-ledger.png"><img loading="lazy" src="img/tour/21-cash-ledger.png" alt="Checking account ledger with October transactions." width="1920" height="1080"></button><figcaption>The checking ledger at month end.</figcaption></figure>
+        <figure><button data-full="img/tour/20-plan-month-end.png"><img loading="lazy" src="img/tour/20-plan-month-end.png" alt="Plan at the end of October showing activity and available balances." width="1920" height="1080"></button><figcaption>The Plan after five paydays.</figcaption></figure>
+      </div>
+    </section>
+
+    <!-- 12 -->
     <section class="step" id="stats" style="--c: var(--rose)">
-      <div class="step-head"><div class="num">11</div><div><h2>Look back</h2><p class="where">Statistics · Overview</p></div></div>
+      <div class="step-head"><div class="num">12</div><div><h2>Look back</h2><p class="where">Statistics · Overview</p></div></div>
       <p>Statistics breaks spending (and income) down by item and payee, month by month and across the year. Click any bar to jump into that month.</p>
       <div class="why"><strong>Why it matters:</strong> a plan is only as good as what actually happened. Seeing where October really went makes November's plan better.</div>
       <div class="pair">
-        <figure><button data-full="img/tour/22-statistics-month.png"><img loading="lazy" src="img/tour/22-statistics-month.png" alt="Statistics month view: donut chart of October spending by item." width="1920" height="1080"></button><figcaption>October, item by item.</figcaption></figure>
-        <figure><button data-full="img/tour/23-statistics-year.png"><img loading="lazy" src="img/tour/23-statistics-year.png" alt="Statistics yearly view: stacked bars by month." width="1920" height="1080"></button><figcaption>The year so far.</figcaption></figure>
+        <figure><button data-full="img/tour/23-statistics-month.png"><img loading="lazy" src="img/tour/23-statistics-month.png" alt="Statistics month view: donut chart of October spending by item." width="1920" height="1080"></button><figcaption>October, item by item.</figcaption></figure>
+        <figure><button data-full="img/tour/24-statistics-year.png"><img loading="lazy" src="img/tour/24-statistics-year.png" alt="Statistics yearly view: stacked bars by month." width="1920" height="1080"></button><figcaption>The year so far.</figcaption></figure>
       </div>
-      <figure><button data-full="img/tour/21-overview-month-end.png"><img loading="lazy" src="img/tour/21-overview-month-end.png" alt="Overview at month end, with past pay weeks locked." width="1920" height="1080"></button><figcaption>The Overview on October 30th, with the current pay week marked NOW. Weeks that have started are locked, so re-optimizing never rewrites money that's already been handed out.</figcaption></figure>
+      <figure><button data-full="img/tour/22-overview-month-end.png"><img loading="lazy" src="img/tour/22-overview-month-end.png" alt="Overview at month end, with past pay weeks locked." width="1920" height="1080"></button><figcaption>The Overview on October 30th, with the current pay week marked NOW. Weeks that have started are locked, so re-optimizing never rewrites money that's already been handed out.</figcaption></figure>
     </section>
   </div>
 </main>
