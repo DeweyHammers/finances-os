@@ -97,38 +97,109 @@ if (isProd && app) {
     `file:${path.join(process.cwd(), "prisma/dev.db")}`;
 }
 
-let prismaInstance: PrismaClient;
+// ── Swappable client (Sandbox mode, Oct 2026) ─────────────────────────────
+// `dbUrl` above is the REAL database (dev.db in dev, %APPDATA%inances-os// database.db in PROD, or the test-only override). Sandbox mode (main/
+// sandbox.ts) copies that file and points the API at the copy for a while, so
+// the client the routes talk to has to be replaceable at runtime. Every
+// consumer keeps importing `prisma` — it is a Proxy that forwards each access
+// to whichever client is current, so no call site knows about the swap.
+
+const REAL_DB_URL = dbUrl;
+
+function makeClient(url: string): PrismaClient {
+  return new PrismaClient({ datasources: { db: { url } } });
+}
+
+let currentDbUrl = REAL_DB_URL;
+let currentClient: PrismaClient;
 
 try {
-  prismaInstance =
-    globalForPrisma.prisma ||
-    new PrismaClient({
-      datasources: {
-        db: {
-          url: dbUrl,
-        },
-      },
-    });
+  // Dev hot-reload keeps the real client on `global` so a renderer rebuild
+  // doesn't leak a new connection each time. Only the real client is cached:
+  // a sandbox client lives exactly as long as the sandbox.
+  currentClient = globalForPrisma.prisma || makeClient(REAL_DB_URL);
   if (isProd) prismaLog("PrismaClient initialized successfully");
 } catch (e: any) {
   prismaLog(`CRITICAL: PrismaClient failed to initialize: ${e.message}`);
   throw e;
 }
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = currentClient;
 
-export const prisma = prismaInstance;
+/** The client the API is talking to right now (real or sandbox). */
+export function getClient(): PrismaClient {
+  return currentClient;
+}
+
+/** `file:` URL of the real database — the one Sandbox copies and restores. */
+export function getRealDatabaseUrl(): string {
+  return REAL_DB_URL;
+}
+
+/** `file:` URL of the database currently in use. */
+export function getCurrentDatabaseUrl(): string {
+  return currentDbUrl;
+}
+
+/** Filesystem path behind a Prisma SQLite `file:` URL. */
+export function databaseUrlToPath(url: string): string {
+  return url.replace(/^file:/, "");
+}
+
+/**
+ * Point the API at another SQLite file. The previous client is disconnected
+ * first so its file handle is released (Windows won't let the sandbox file be
+ * deleted or the real file be overwritten while a handle is open), then
+ * `beforeConnect` may touch the files, and only then is the new client
+ * created. Prisma connects lazily, on the first query, so nothing holds the
+ * new file open until a route actually uses it.
+ */
+export async function switchDatabase(
+  url: string,
+  beforeConnect?: () => void,
+): Promise<void> {
+  const previous = currentClient;
+  await previous.$disconnect();
+  beforeConnect?.();
+  currentClient = makeClient(url);
+  currentDbUrl = url;
+  if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = currentClient;
+}
+
+/**
+ * The client every route and test uses. A Proxy over `getClient()` so the
+ * import stays a plain `prisma.bill.findMany(...)` while Sandbox swaps the
+ * target underneath. Functions are bound to the live client because Prisma's
+ * `$transaction` / `$queryRaw` read `this`.
+ */
+export const prisma: PrismaClient = new Proxy({} as PrismaClient, {
+  get(_target, prop) {
+    const client = currentClient as any;
+    const value = client[prop];
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+  has(_target, prop) {
+    return prop in (currentClient as any);
+  },
+  ownKeys() {
+    return Reflect.ownKeys(currentClient as any);
+  },
+  getOwnPropertyDescriptor(_target, prop) {
+    const desc = Reflect.getOwnPropertyDescriptor(currentClient as any, prop);
+    return desc ? { ...desc, configurable: true } : undefined;
+  },
+});
 
 export function getModel(resource: string) {
+  const client = currentClient as any;
   const modelName = resource.charAt(0).toLowerCase() + resource.slice(1);
-  let model = (prisma as any)[modelName];
+  let model = client[modelName];
 
   if (!model) {
-    const keys = Object.keys(prisma);
+    const keys = Object.keys(client);
     const match = keys.find(
       (key) => key.toLowerCase() === resource.toLowerCase(),
     );
-    if (match) model = (prisma as any)[match];
+    if (match) model = client[match];
   }
   return model;
 }
-
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;

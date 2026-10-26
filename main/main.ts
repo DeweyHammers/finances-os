@@ -5,6 +5,7 @@ import { app, ipcMain, protocol, session } from "electron";
 import serve from "electron-serve";
 import { createWindow } from "./helpers/create-window";
 import { startServer, API_PORT } from "./api-server";
+import { cleanupStaleSandbox } from "./sandbox";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -31,6 +32,10 @@ const cleanup = () => {
 (async () => {
   console.log("App starting...");
   await app.whenReady();
+
+  // A sandbox copy left by a crash is never resumed — the app always opens
+  // on the real database (see main/sandbox.ts).
+  cleanupStaleSandbox();
 
   // 3. Start API server after ready
   startServer(API_PORT);

@@ -1,5 +1,12 @@
 import express, { Request, Response, NextFunction } from "express";
 import { getModel, prisma } from "../shared/prisma";
+import {
+  SandboxError,
+  discardSandbox,
+  enterSandbox,
+  getSandboxStatus,
+  keepSandbox,
+} from "./sandbox";
 
 // ── Network exposure ──
 // This server fronts the whole finance database with no auth, so it must only
@@ -169,6 +176,43 @@ app.patch("/api/Income/:id", async (req: Request, res: Response) => {
 });
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Sandbox: try changes on a copy of the database (main/sandbox.ts) ─────────
+// Registered BEFORE the generic /api/:resource routes, which would otherwise
+// treat "sandbox" as a model name and 404.
+app.get("/api/sandbox", async (_req: Request, res: Response) => {
+  try {
+    res.json(await getSandboxStatus());
+  } catch (error: any) {
+    console.error("API Error GET /api/sandbox:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const sandboxActions = {
+  enter: enterSandbox,
+  discard: discardSandbox,
+  keep: keepSandbox,
+} as const;
+
+app.post("/api/sandbox/:action", async (req: Request, res: Response) => {
+  const action = req.params.action as keyof typeof sandboxActions;
+  const run = sandboxActions[action];
+  if (!run) {
+    res.status(404).json({ error: `Unknown sandbox action ${String(action)}` });
+    return;
+  }
+  try {
+    res.json(await run());
+  } catch (error: any) {
+    // A wrong-state call (enter twice, discard when inactive) is the caller's
+    // mistake, not a server failure.
+    const status = error instanceof SandboxError ? 409 : 500;
+    console.error(`API Error POST /api/sandbox/${action}:`, error);
+    res.status(status).json({ error: error.message });
+  }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 // List & Create
 app.get("/api/:resource", async (req: Request, res: Response) => {
   const resource = req.params.resource as string;
@@ -287,7 +331,7 @@ app.patch("/api/:resource/:id", async (req: Request, res: Response) => {
     // instead; the schema defaults fill every other column. Reads are left
     // alone: GET still 404s until something is saved, and the renderer keeps
     // its existing "no settings yet" fallbacks.
-    if (model === prisma.appSettings && id === "global") {
+    if (resource.toLowerCase() === "appsettings" && id === "global") {
       const item = await prisma.appSettings.upsert({
         where: { id },
         update: updateData,

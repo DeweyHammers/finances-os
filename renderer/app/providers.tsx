@@ -46,6 +46,9 @@ import PieChartIcon from "@mui/icons-material/PieChart";
 import InsightsIcon from "@mui/icons-material/Insights";
 import StorefrontIcon from "@mui/icons-material/Storefront";
 import { COLORS } from "../lib/constants";
+import { API_URL } from "../lib/api-url";
+import { SandboxProvider } from "../components/sandbox/SandboxContext";
+import { SandboxBanner } from "../components/sandbox/SandboxBanner";
 
 // IPC bridge address — the Electron main process spins up an in-memory REST
 // server on this port that translates HTTP calls into Prisma queries against
@@ -53,7 +56,6 @@ import { COLORS } from "../lib/constants";
 // Must be the IPv4 loopback literal, NOT "localhost": the server binds to
 // 127.0.0.1 only (main/api-server.ts → "Network exposure"), and "localhost"
 // may resolve to ::1 first.
-const API_URL = "http://127.0.0.1:5858/api";
 
 // ── MUI theme ──
 // Dark palette matched to the Tailwind slate-900/slate-800 tokens used
@@ -245,6 +247,7 @@ function App({ children }: { children: ReactNode }) {
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
+      <SandboxProvider>
       <Refine
         routerProvider={routerProvider}
         dataProvider={memoizedDataProvider}
@@ -279,12 +282,17 @@ function App({ children }: { children: ReactNode }) {
             sx: { overflowY: "auto", overflowX: "hidden" },
           }}
         >
+          {/* Amber "you're on a copy" strip; renders nothing unless a
+              sandbox is active. Inside the scrolling box so it sits above
+              the page, sticky so it stays put while the page scrolls. */}
+          <SandboxBanner />
           {children}
         </ThemedLayout>
         {/* KBar command palette (Cmd/Ctrl+K) — the provider wraps everything
             in <Providers> below; this renderer just mounts the overlay. */}
         <RefineKbar />
       </Refine>
+      </SandboxProvider>
     </Suspense>
   );
 }

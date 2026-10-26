@@ -51,6 +51,7 @@ import { formatMoney } from "../../lib/cents";
 import { SiderAccountRow } from "./SiderAccountRow";
 import { AddAccountModal } from "../accounts/AddAccountModal";
 import { EditAccountModal } from "../accounts/EditAccountModal";
+import { SandboxSiderButton } from "../sandbox/SandboxSiderButton";
 
 /** Width of the permanent sider column AND of the narrow-window drawer. */
 export const SIDER_WIDTH = 260;
@@ -349,9 +350,11 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
       />
       <NavLeaf href="/Income" label="Income" icon={<SavingsIcon />} />
 
-      {/* Flex spacer pushes any future footer content to the bottom; the 16px
-          box gives a little breathing room above the viewport edge. */}
+      {/* Flex spacer pushes the footer to the bottom; the 16px box gives a
+          little breathing room above the viewport edge. */}
       <Box sx={{ flex: 1 }} />
+      {/* Footer: "Try a sandbox" (or the "Sandbox active" label). */}
+      <SandboxSiderButton />
       <Box sx={{ height: 16 }} />
     </>
   );

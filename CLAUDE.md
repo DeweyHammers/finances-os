@@ -52,6 +52,16 @@ node scripts/demo/tour.mjs                 # fills the app with FAKE data step b
 - **All tour data is fictional** ("Alex"). The repo is public: never put real names, amounts, payees or employers in `tour.mjs` or the screenshots. Savings is a weekly *personal* item on purpose (a no-cycle Custom Plan item gets a flat amount per Auto-assign, but the ⚠ badge expects it monthly).
 - Re-run `tour.mjs` after UI changes, and update the numbers quoted in `docs/index.html` if they move.
 
+## Sandbox mode (Oct 2026)
+
+"Try a sandbox" (sider footer) lets the user experiment on a COPY of the database and then throw it away or keep it. `main/sandbox.ts` owns it; `shared/prisma.ts` makes it possible.
+
+- **`prisma` is a Proxy over a swappable client.** `switchDatabase(url, beforeConnect?)` disconnects the current client, runs the file operation while no client holds either file, then creates the next one (Prisma connects lazily on the first query). Every route and test keeps importing `prisma`; `getModel` reads the live client directly. Never compare a model by identity (`model === prisma.appSettings`) — compare the resource name.
+- **Files.** The copy is `sandbox.db` beside the real file (`prisma/sandbox.db` in dev, `%APPDATA%\finances-os\sandbox.db` in PROD; both gitignored by `*.db`). `enter` copies real → sandbox and switches; `discard` switches back and deletes the copy; `keep` writes `database.db.<stamp>.bak` (same naming as `db-sync.cjs`), overwrites the real file with the copy, switches back, deletes the copy. A sandbox never survives a restart: `cleanupStaleSandbox()` runs before the API starts and deletes any leftover copy, so the app always opens on real data.
+- **Routes.** `GET /api/sandbox` → `{ active, enteredAt, transactionsAdded }`; `POST /api/sandbox/{enter|discard|keep}`. Wrong-state calls (enter twice, discard when inactive) are `409` via `SandboxError`. Registered BEFORE the generic `/api/:resource` routes.
+- **Renderer.** `SandboxProvider` (app/providers.tsx) fetches the status once; `SandboxBanner` is the sticky amber strip above every page while active, with confirmed Discard (shows how many transactions were recorded in the sandbox — those are what Discard loses) and Keep; `SandboxSiderButton` is the entry point. Every action **reloads the window** on purpose: Refine's query cache, page state and the Overview's stale-alert check all have to restart against the other file. The raw fetches live in `lib/sandbox-api.ts`; `lib/api-url.ts` holds the shared `API_URL`.
+- **Tests.** `main/api-server.routes.test.ts` → `sandbox (/api/sandbox)` covers enter/discard/keep against the temp test DB (the copy lands in the temp dir, never near dev.db).
+
 ## Debugging artifacts (never committed)
 
 When taking pre-change safety snapshots (e.g. before an experimental UI test), drop them in `prisma/` using these naming conventions so `.gitignore` already covers them and they never surface in `git status` / VSCode source control:
