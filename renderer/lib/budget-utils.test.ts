@@ -16,7 +16,7 @@ import {
   evaluatePlanSync,
   hasPaycheckForPeriod,
 } from "./budget-utils";
-import { getPayPeriodsForMonth } from "./pay-period-utils";
+import { getPayPeriodsForMonth, getBillAllocationsForBill } from "./pay-period-utils";
 
 describe("monthKey", () => {
   it("returns YYYY-MM in UTC", () => {
@@ -1028,5 +1028,71 @@ describe("evaluatePlanSync", () => {
     expect(r.inPlay).toBe(false);
     expect(r.isOverfunded).toBe(false);
     expect(r.needsSync).toBe(false);
+  });
+});
+
+describe("Pre-saving — Plan page agrees with the Overview", () => {
+  // Wednesday paydays. Oct 2026 P4 = Oct 28 – Nov 3; Nov 2026 P1 = Nov 4-10.
+  // A $130 bill due the 4th fires in Nov P1 (nothing earlier in Nov to level
+  // into), so Optimize saved $55.31 ahead in Oct P4 (a pre-save row of
+  // October tagged coord 35 = 4 + 31) and left the $74.69 remainder in Nov P1.
+  const octPeriods = getPayPeriodsForMonth(2026, 9, 3);
+  const novPeriods = getPayPeriodsForMonth(2026, 10, 3);
+  const bill = { id: "bill4", amount: 130, dueDate: 4 };
+  const item = { id: "i-bill4", sourceType: "BILL" as const, sourceBillId: "bill4" };
+  const splits = [
+    { billId: "bill4", monthKey: "2026-10", weekIndex: 3, amountCents: 5531, occurrenceCoord: 35 },
+    { billId: "bill4", monthKey: "2026-11", weekIndex: 0, amountCents: 7469, occurrenceCoord: 4 },
+  ];
+  const resolve = (periods: typeof octPeriods, monthKey: string, periodKey: string) =>
+    resolveAutoAssignAmountForPeriod({ item, periodKey, periods, bills: [bill], personals: [], splits, monthKey });
+  const expected = (periods: typeof octPeriods, monthKey: string, throughPeriodIdx: number) =>
+    computeExpectedAssignedThroughPeriod({ item, throughPeriodIdx, periods, bills: [bill], personals: [], splits, monthKey });
+
+  it("October: Auto-assign funds the pre-save slice in P4 and nothing before", () => {
+    expect(["P1", "P2", "P3"].map((k) => resolve(octPeriods, "2026-10", k))).toEqual([0, 0, 0]);
+    expect(resolve(octPeriods, "2026-10", "P4")).toBe(5531);
+    expect(expected(octPeriods, "2026-10", 2)).toBe(0);
+    expect(expected(octPeriods, "2026-10", 3)).toBe(5531);
+  });
+
+  it("November: the P1 target is the FULL bill — prior-view cents sit in the same envelope", () => {
+    // The Overview's P1 card shows the $74.69 remainder with "Saved $130.00";
+    // the Plan's cumulative target through P1 must be that same $130.
+    const [p1] = getBillAllocationsForBill("bill4", 4, 130, novPeriods, "2026-11", splits);
+    expect(p1.amountCents + p1.priorViewSavedCents).toBe(13000);
+    for (const k of ["P1", "P2", "P3", "P4"]) expect(resolve(novPeriods, "2026-11", k)).toBe(13000);
+    expect(expected(novPeriods, "2026-11", 0)).toBe(13000);
+  });
+
+  it("November ⚠ badge: carried-over pre-save cents are not over-funding", () => {
+    // Envelope holds the $55.31 saved in October; Nov P1's paycheck is in.
+    const base = {
+      sourceType: "BILL",
+      expectedFullCents: expected(novPeriods, "2026-11", 0),
+      expectedPreviousFullCents: expected(novPeriods, "2026-11", -1),
+      graceActivityCents: 0,
+      activityCents: 0,
+      paydayPending: false,
+    };
+    // Before Auto-assign P1: short by exactly the remainder — Auto-assign's
+    // job (no Sync Plan work), never flagged as over.
+    const before = evaluatePlanSync({ ...base, availableCents: 5531 });
+    expect(before.isOverfunded).toBe(false);
+    expect(before.isUnderfunded).toBe(true);
+    expect(before.diffCents).toBe(-7469);
+    expect(before.needsSync).toBe(false);
+    // After Auto-assign P1 topped it up to $130: in sync.
+    const after = evaluatePlanSync({ ...base, availableCents: 13000 });
+    expect(after.isOverfunded).toBe(false);
+    expect(after.isUnderfunded).toBe(false);
+    expect(after.diffCents).toBe(0);
+  });
+
+  it("November without Nov rows yet (natural fallback) gives the same full target", () => {
+    const onlyOct = splits.slice(0, 1);
+    expect(
+      resolveAutoAssignAmountForPeriod({ item, periodKey: "P1", periods: novPeriods, bills: [bill], personals: [], splits: onlyOct, monthKey: "2026-11" }),
+    ).toBe(13000);
   });
 });

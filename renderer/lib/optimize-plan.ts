@@ -15,6 +15,12 @@
  *    a bill occurrence or emits an allocation into a locked week.
  *  - Locked weeks (started on/before today) are history: their rows are fed
  *    to the algorithm as `lockedAllocations` and never deleted or re-created.
+ *  - Pre-saving (Oct 2026): each month is balanced together with the NEXT
+ *    month's first pay week, so bills firing there (nothing earlier in that
+ *    view to level into) can be saved ahead from this month's unlocked
+ *    weeks. Those slices are rows of THIS month with a coord past its last
+ *    period; the next month then treats them as committed funding
+ *    (`priorViewAllocations`) and plans only the remainder in its first week.
  *
  * See CLAUDE.md → "Overview optimizer — locked-week semantics",
  * "Locked weeks in balancePayWeeks" and "Optimize horizon".
@@ -23,6 +29,7 @@ import {
   getPayPeriodsForMonth,
   balancePayWeeks,
   getBillOccurrencesInView,
+  isPreSaveCoord,
   assertNoUnderfundedBills,
   isPayWeekLocked,
   monthKeyOf,
@@ -140,8 +147,21 @@ export function planOptimize(inputs: OptimizeInputs): MonthWritePlan[] {
 
   const writePlans: MonthWritePlan[] = [];
 
-  // Main loop: horizonMonths forward from today. Each iteration is
-  // independent — one month's optimization never reads from another.
+  // The BillSplit rows each month WILL have once this run is applied: the DB
+  // rows to start with, replaced month by month as plans are made. Needed
+  // because pre-saving (CLAUDE.md → "Pre-saving") links consecutive months:
+  // month M reads the pre-save slices month M-1 just planned, which aren't in
+  // `splitRows` yet. Months before the horizon keep their DB rows.
+  const effectiveRows = new Map<string, any[]>();
+  for (const r of splitRows) {
+    const k = String(r.monthKey);
+    if (!effectiveRows.has(k)) effectiveRows.set(k, []);
+    effectiveRows.get(k)!.push(r);
+  }
+
+  // Main loop: horizonMonths forward from today. Apart from the pre-save
+  // hand-off above, each iteration is independent — one month's
+  // optimization never reads from another.
   for (let i = 0; i < horizonMonths; i++) {
     const target = new Date(today.getFullYear(), today.getMonth() + i, 1);
     const tYear = target.getFullYear();
@@ -150,6 +170,35 @@ export function planOptimize(inputs: OptimizeInputs): MonthWritePlan[] {
 
     const periods = getPayPeriodsForMonth(tYear, tMonth, payWeekday, today, biWeekly);
     if (periods.length === 0) continue;
+
+    // Pre-save slices the PREVIOUS view holds for this month's first-week
+    // occurrences: rows of the previous month whose coord lies past its last
+    // period. They map to this view's in-month coord by subtracting the
+    // previous month's length (the forward-extension convention).
+    const prev = new Date(tYear, tMonth - 1, 1);
+    const prevPeriods = getPayPeriodsForMonth(prev.getFullYear(), prev.getMonth(), payWeekday, today, biWeekly);
+    const prevDays = new Date(prev.getFullYear(), prev.getMonth() + 1, 0).getDate();
+    const priorViewAllocations = prevPeriods.length === 0
+      ? []
+      : (effectiveRows.get(monthKeyOf(prev.getFullYear(), prev.getMonth())) ?? [])
+          .filter((r: any) => isPreSaveCoord(Number(r.occurrenceCoord ?? 0), prevPeriods))
+          .map((r: any) => ({
+            billId: String(r.billId),
+            occurrenceCoord: Number(r.occurrenceCoord) - prevDays,
+            amountCents: Number(r.amountCents),
+          }));
+
+    // The NEXT view's first pay week (income + fixed personal, same rules as
+    // this month's own weeks) so this month's unlocked weeks can save ahead
+    // for the bills firing in it.
+    const next = new Date(tYear, tMonth + 1, 1);
+    const nextPeriods = getPayPeriodsForMonth(next.getFullYear(), next.getMonth(), payWeekday, today, biWeekly);
+    const nextViewFirstWeek = nextPeriods.length === 0
+      ? undefined
+      : {
+          incomeCents: computeIncomePerPeriodCents(incomes, nextPeriods, next.getFullYear(), next.getMonth(), incomeDefaults)[0],
+          fixedExpensesCents: computeOptimizerPersonalPerPeriod(personalBills, nextPeriods)[0],
+        };
 
     // Only the current month has a today coord; future months treat
     // every period as unlocked (nothing has been "paid" yet).
@@ -204,6 +253,8 @@ export function planOptimize(inputs: OptimizeInputs): MonthWritePlan[] {
       targetSurplusCents,
       todayCoord: tTodayCoord,
       lockedAllocations,
+      priorViewAllocations,
+      nextViewFirstWeek,
     });
 
     // Fail loud if the algorithm silently dropped funding for any bill
@@ -238,6 +289,14 @@ export function planOptimize(inputs: OptimizeInputs): MonthWritePlan[] {
     const markers: PlannedSplit[] = result.skipped
       .filter((s) => !s.hasLockedRows)
       .map((s) => ({ billId: s.billId, weekIndex: s.weekIndex, amountCents: 0, occurrenceCoord: s.occurrenceCoord }));
+
+    // What this month's rows look like once this plan is applied — the next
+    // iteration reads its pre-save slices from here. Locked rows survive;
+    // unlocked ones are replaced by the fresh allocations (+ markers).
+    effectiveRows.set(mk, [
+      ...existingForMonth.filter((o: any) => lockedWeekIndices.has(Number(o.weekIndex))),
+      ...[...result.allocations, ...markers].map((a) => ({ ...a, monthKey: mk })),
+    ]);
 
     // Fast-path early exit: if the new allocation set is identical to
     // what's already in the DB for this month, skip the delete+create

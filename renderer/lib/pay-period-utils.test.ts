@@ -17,7 +17,10 @@ import {
   monthKeyOf,
   clampDayToMonth,
   MIN_SPLIT_CENTS,
+  getPreSaveOccurrence,
+  isPreSaveCoord,
 } from "./pay-period-utils";
+import { planOptimize } from "./optimize-plan";
 
 // June 2026: Wednesdays on 3, 10, 17, 24
 // July 2026: Wednesdays on 1, 8, 15, 22, 29
@@ -1084,5 +1087,318 @@ describe("withLegacyIncomeFallback", () => {
       { name: "Income", amount: 1200, paymentCycle: "WEEKLY", payDay: 2, payWeekOffset: 0 },
     ]);
     expect(withLegacyIncomeFallback([], {})[0].amount).toBe(0);
+  });
+});
+
+// ── Pre-saving for next month's first pay week (Oct 2026) ──
+// Wednesday paydays. Oct 2026: P1 7-13, P2 14-20, P3 21-27, P4 28 – Nov 3.
+// Nov 2026 starts on a payday-adjacent day: first payday Nov 4, so bills due
+// the 4th–6th all land in Nov P1 with NO earlier Nov week to level into.
+// Pre-saving lets Oct's unlocked weeks put money aside for them. Generic
+// sample bills only (the repo is public).
+describe("Pre-saving — next view's first pay week", () => {
+  const octPeriods = getPayPeriodsForMonth(2026, 9, WED);
+  const novPeriods = getPayPeriodsForMonth(2026, 10, WED); // P1 4-10, P2 11-17, P3 18-24, P4 25 – Dec 1
+  const OCT = monthKeyOf(2026, 9);
+  const NOV = monthKeyOf(2026, 10);
+  // Four bills, $325 together, all firing in the next view's first week.
+  const CLUSTER = [
+    { id: "bill4a", amount: 130, dueDate: 4 },
+    { id: "bill4b", amount: 60, dueDate: 4 },
+    { id: "bill5", amount: 100, dueDate: 5 },
+    { id: "bill6", amount: 35, dueDate: 6 },
+  ];
+  const INCOME = 48000; // $480/wk
+  const FIXED = 7000;
+  const TARGET = 25000; // budget per week = $160; the cluster alone is $325
+  const baseInputs = {
+    periods: octPeriods,
+    incomePerPeriodCents: [INCOME, INCOME, INCOME, INCOME],
+    fixedExpensesPerPeriodCents: [FIXED, FIXED, FIXED, FIXED],
+    targetSurplusCents: TARGET,
+    nextViewFirstWeek: { incomeCents: INCOME, fixedExpensesCents: FIXED },
+  };
+  const sumCents = (rows: { amountCents: number }[]) => rows.reduce((s, r) => s + r.amountCents, 0);
+
+  describe("getPreSaveOccurrence / isPreSaveCoord", () => {
+    it("exposes the next view's first-week bounds on every period", () => {
+      for (const p of octPeriods) {
+        expect(p.nextViewFirstPayday).toBe(4);
+        expect(p.nextViewFirstWeekEndDay).toBe(10);
+        expect(p.daysInNextMonth).toBe(30);
+      }
+    });
+
+    it("a bill due the 4th (Nov 4 = first payday) is a pre-save candidate at coord 35", () => {
+      expect(getPreSaveOccurrence(4, octPeriods)).toEqual({ coord: 35, day: 4 });
+      expect(getPreSaveOccurrence(10, octPeriods)).toEqual({ coord: 41, day: 10 }); // last day of Nov P1
+    });
+
+    it("bills outside the next view's first week are not candidates", () => {
+      // Nov 3 is covered by Oct P4's forward extension (an Oct occurrence).
+      expect(getPreSaveOccurrence(3, octPeriods)).toBeNull();
+      // Nov 11 starts Nov P2 — that view can level it into P1 itself.
+      expect(getPreSaveOccurrence(11, octPeriods)).toBeNull();
+      expect(getPreSaveOccurrence(28, octPeriods)).toBeNull();
+    });
+
+    it("clamps the due date to the next month's length like the next view does", () => {
+      // Jan 2027 view: Wednesdays 6, 13, 20, 27 → Feb's first payday is Feb 3,
+      // first week Feb 3-9; Feb 2027 has 28 days. Due 31 → fires Feb 28 → not P1.
+      const jan = getPayPeriodsForMonth(2027, 0, WED);
+      expect(jan[0].daysInNextMonth).toBe(28);
+      expect(getPreSaveOccurrence(31, jan)).toBeNull();
+      expect(getPreSaveOccurrence(5, jan)).toEqual({ coord: 36, day: 5 });
+    });
+
+    it("isPreSaveCoord is true only past the view's last period end", () => {
+      expect(isPreSaveCoord(34, octPeriods)).toBe(false); // Nov 3 — Oct P4 forward extension
+      expect(isPreSaveCoord(35, octPeriods)).toBe(true);
+    });
+
+    it("the firing is still attributed to exactly one view (the next one)", () => {
+      // Oct never lists the Nov 4 firing as an occurrence …
+      expect(getBillOccurrencesInView(4, octPeriods)).toEqual([]);
+      // … Nov does, in P1 — and Nov's own pre-save candidate is Dec 4 (coord 34).
+      const nov = getBillOccurrencesInView(4, novPeriods);
+      expect(nov.map((o) => [o.coord, o.periodKey, o.inNextMonth])).toEqual([[4, "P1", false]]);
+      expect(getPreSaveOccurrence(4, novPeriods)).toEqual({ coord: 34, day: 4 });
+    });
+  });
+
+  describe("balancePayWeeks with the next view's first week", () => {
+    it("levels the cluster across this view's weeks and the next view's first week", () => {
+      const result = balancePayWeeks({ ...baseInputs, bills: CLUSTER });
+      expect(result.underfunded).toEqual([]);
+      expect(result.skipped).toEqual([]);
+      // Every emitted row is a pre-save slice in one of Oct's four weeks.
+      for (const a of result.allocations) {
+        expect(a.weekIndex).toBeLessThan(4);
+        expect(isPreSaveCoord(a.occurrenceCoord, octPeriods)).toBe(true);
+      }
+      // What Oct saves ahead plus what stays in Nov P1 is exactly the cluster.
+      expect(sumCents(result.allocations) + result.nextViewFirstWeekBillCents).toBe(32500);
+      // Nov P1 no longer carries the whole $325: like in-month leveling, the
+      // cluster is spread until every week (Nov P1 included) clears the
+      // surplus target — $160 of bills per week here.
+      expect(result.nextViewFirstWeekBillCents).toBeLessThan(32500);
+      const loads = [...result.perWeekBillCents, result.nextViewFirstWeekBillCents];
+      for (const load of loads) expect(load).toBeLessThanOrEqual(INCOME - FIXED - TARGET);
+      expect(result.feasible).toBe(true);
+    });
+
+    it("funds each occurrence exactly once (per-bill slices + next-week remainder = bill)", () => {
+      const result = balancePayWeeks({ ...baseInputs, bills: CLUSTER });
+      let nextWeekTotal = 0;
+      for (const b of CLUSTER) {
+        const coord = getPreSaveOccurrence(b.dueDate, octPeriods)!.coord;
+        const saved = sumCents(result.allocations.filter((a) => a.billId === b.id && a.occurrenceCoord === coord));
+        expect(saved).toBeLessThanOrEqual(Math.round(b.amount * 100));
+        nextWeekTotal += Math.round(b.amount * 100) - saved;
+      }
+      expect(nextWeekTotal).toBe(result.nextViewFirstWeekBillCents);
+    });
+
+    it("without nextViewFirstWeek nothing is pre-saved (old behavior)", () => {
+      const { nextViewFirstWeek: _omit, ...noNext } = baseInputs;
+      const result = balancePayWeeks({ ...noNext, bills: CLUSTER });
+      expect(result.allocations).toEqual([]);
+      expect(result.nextViewFirstWeekBillCents).toBe(0);
+      expect(result.unplaced.sort()).toEqual(CLUSTER.map((b) => b.id).sort());
+    });
+
+    it("locked weeks never receive pre-save cents (Oct 26: only P4 is open)", () => {
+      const result = balancePayWeeks({ ...baseInputs, bills: CLUSTER, todayCoord: 26 });
+      expect(result.underfunded).toEqual([]);
+      expect(result.allocations.length).toBeGreaterThan(0);
+      for (const a of result.allocations) expect(a.weekIndex).toBe(3);
+      // Two open slots (Oct P4 + Nov P1) share the $325 evenly.
+      expect(sumCents(result.allocations) + result.nextViewFirstWeekBillCents).toBe(32500);
+      expect(Math.abs(sumCents(result.allocations) - result.nextViewFirstWeekBillCents)).toBeLessThanOrEqual(1);
+    });
+
+    it("a pre-save row already committed in a locked week counts and is not re-planned", () => {
+      const result = balancePayWeeks({
+        ...baseInputs,
+        bills: [CLUSTER[0]], // $130 due the 4th → coord 35
+        todayCoord: 26,
+        lockedAllocations: [{ billId: "bill4a", weekIndex: 1, amountCents: 2000, occurrenceCoord: 35 }],
+      });
+      expect(result.underfunded).toEqual([]);
+      expect(result.allocations.every((a) => a.weekIndex === 3)).toBe(true);
+      // Only the $110 remainder is leveled between Oct P4 and Nov P1.
+      expect(sumCents(result.allocations) + result.nextViewFirstWeekBillCents).toBe(11000);
+      // The locked $20 still counts toward Oct P2's load.
+      expect(result.perWeekBillCents[1]).toBe(2000);
+    });
+
+    it("this view's own bills never move into the next view's week", () => {
+      const result = balancePayWeeks({
+        ...baseInputs,
+        bills: [{ id: "big", amount: 300, dueDate: 28 }], // Oct P4 only
+      });
+      expect(result.nextViewFirstWeekBillCents).toBe(0);
+      expect(sumCents(result.allocations.filter((a) => a.billId === "big"))).toBe(30000);
+      expect(result.allocations.every((a) => a.weekIndex < 4)).toBe(true);
+    });
+
+    it("the next view treats prior-view slices as committed and plans only the remainder", () => {
+      const result = balancePayWeeks({
+        bills: [CLUSTER[0]],
+        periods: novPeriods,
+        incomePerPeriodCents: [INCOME, INCOME, INCOME, INCOME],
+        fixedExpensesPerPeriodCents: [FIXED, FIXED, FIXED, FIXED],
+        targetSurplusCents: TARGET,
+        priorViewAllocations: [{ billId: "bill4a", occurrenceCoord: 4, amountCents: 5531 }],
+      });
+      expect(result.underfunded).toEqual([]);
+      expect(result.allocations).toEqual([
+        { billId: "bill4a", weekIndex: 0, amountCents: 13000 - 5531, occurrenceCoord: 4 },
+      ]);
+      // Prior-view cents are funding, not load: they live in Oct's weeks.
+      expect(result.perWeekBillCents[0]).toBe(13000 - 5531);
+    });
+
+    it("a fully pre-saved occurrence needs no row and is not underfunded", () => {
+      const result = balancePayWeeks({
+        bills: [CLUSTER[0]],
+        periods: novPeriods,
+        incomePerPeriodCents: [INCOME, INCOME, INCOME, INCOME],
+        fixedExpensesPerPeriodCents: [FIXED, FIXED, FIXED, FIXED],
+        targetSurplusCents: TARGET,
+        priorViewAllocations: [{ billId: "bill4a", occurrenceCoord: 4, amountCents: 13000 }],
+      });
+      expect(result.underfunded).toEqual([]);
+      expect(result.allocations).toEqual([]);
+    });
+  });
+
+  describe("getBillAllocationsForBill — pre-save rows and prior-view funding", () => {
+    const octRow = { billId: "bill4a", monthKey: OCT, weekIndex: 3, amountCents: 5531, occurrenceCoord: 35 };
+    const novRow = { billId: "bill4a", monthKey: NOV, weekIndex: 0, amountCents: 7469, occurrenceCoord: 4 };
+
+    it("the prior month shows its pre-save slice as a split for next month's firing", () => {
+      expect(getBillAllocationsForBill("bill4a", 4, 130, octPeriods, OCT, [octRow, novRow])).toEqual([
+        { weekIndex: 3, periodKey: "P4", amountCents: 5531, isSplit: true, occurrenceCoord: 35, isPreSave: true, priorViewSavedCents: 0 },
+      ]);
+    });
+
+    it("the firing month's first-week row carries the prior-view cents (same envelope)", () => {
+      expect(getBillAllocationsForBill("bill4a", 4, 130, novPeriods, NOV, [octRow, novRow])).toEqual([
+        { weekIndex: 0, periodKey: "P1", amountCents: 7469, isSplit: true, occurrenceCoord: 4, isPreSave: false, priorViewSavedCents: 5531 },
+      ]);
+      expect(getBillAllocationCentsForPeriod("bill4a", 4, 130, novPeriods, NOV, [octRow, novRow], "P1")).toBe(7469);
+    });
+
+    it("natural fallback in the firing month is the remainder, never a second full amount", () => {
+      expect(getBillAllocationsForBill("bill4a", 4, 130, novPeriods, NOV, [octRow])).toEqual([
+        { weekIndex: 0, periodKey: "P1", amountCents: 7469, isSplit: true, occurrenceCoord: 4, isPreSave: false, priorViewSavedCents: 5531 },
+      ]);
+    });
+
+    it("without rows nothing changes: Oct shows nothing, Nov shows the full bill in P1", () => {
+      expect(getBillAllocationsForBill("bill4a", 4, 130, octPeriods, OCT, [])).toEqual([]);
+      expect(getBillAllocationsForBill("bill4a", 4, 130, novPeriods, NOV, [])).toEqual([
+        { weekIndex: 0, periodKey: "P1", amountCents: 13000, isSplit: false, occurrenceCoord: 4, isPreSave: false, priorViewSavedCents: 0 },
+      ]);
+    });
+
+    it("a prior-month forward-extension row is not mistaken for a pre-save", () => {
+      // Oct P4 funds the Nov 3 firing of a bill due the 3rd: coord 34 is an
+      // ordinary Oct occurrence (inside P4's Oct 28 – Nov 3 span), not a
+      // pre-save. Nov has no occurrence of that bill at all (Dec 3 belongs to
+      // Dec P1), so the Oct row must not surface in November either way.
+      const ext = { billId: "bill3", monthKey: OCT, weekIndex: 3, amountCents: 5000, occurrenceCoord: 34 };
+      expect(getBillAllocationsForBill("bill3", 3, 50, octPeriods, OCT, [ext])).toEqual([
+        { weekIndex: 3, periodKey: "P4", amountCents: 5000, isSplit: false, occurrenceCoord: 34, isPreSave: false, priorViewSavedCents: 0 },
+      ]);
+      expect(getBillAllocationsForBill("bill3", 3, 50, novPeriods, NOV, [ext])).toEqual([]);
+    });
+  });
+
+  describe("planOptimize end to end (generic data, Oct 26 2026)", () => {
+    const TODAY = new Date(2026, 9, 26, 12);
+    const income = { id: "inc", name: "Pay", amount: 480, paymentCycle: "WEEKLY", payDay: WED, payWeekOffset: 0, isPrimary: true };
+    const personals = [{ id: "p1", name: "Spending", amount: 70, repeatWeekly: true }];
+    const bills = CLUSTER.map((b) => ({ ...b, name: b.id, neverSplit: false }));
+    const inputs = (splitRows: any[]) => ({
+      today: TODAY,
+      bills,
+      personalBills: personals,
+      incomes: [income],
+      primaryIncome: income,
+      splitRows,
+      targetSurplusCents: TARGET,
+      horizonMonths: 3, // Oct, Nov, Dec
+    });
+    const apply = (rows: any[], plans: ReturnType<typeof planOptimize>) => {
+      let next = [...rows];
+      let seq = 0;
+      for (const p of plans) {
+        const doomed = new Set(p.toDelete.map((r: any) => r.id));
+        next = next.filter((r) => !doomed.has(r.id));
+        for (const c of p.toCreate) next.push({ id: `n${seq++}`, monthKey: p.mk, ...c });
+      }
+      return next;
+    };
+    const DEC = monthKeyOf(2026, 11);
+
+    it("saves ahead from Oct's open week, funds each firing once, writes nothing into locked weeks", () => {
+      const plans = planOptimize(inputs([]));
+      expect(plans.map((p) => p.mk)).toEqual([OCT, NOV, DEC]);
+      const rows = apply([], plans);
+      const of = (mk: string) => rows.filter((r) => r.monthKey === mk);
+
+      // Oct 26: P1–P3 have started. Only P4 (Oct 28) may hold pre-save rows.
+      expect(of(OCT).length).toBeGreaterThan(0);
+      for (const r of of(OCT)) {
+        expect(r.weekIndex).toBe(3);
+        expect(isPreSaveCoord(r.occurrenceCoord, octPeriods)).toBe(true);
+      }
+      // Each Nov firing = Oct's slices + Nov's P1 remainder, exactly once.
+      for (const b of CLUSTER) {
+        const octSaved = sumCents(of(OCT).filter((r) => r.billId === b.id && r.occurrenceCoord === b.dueDate + 31));
+        const novRemainder = sumCents(of(NOV).filter((r) => r.billId === b.id && r.occurrenceCoord === b.dueDate));
+        expect(octSaved + novRemainder, b.id).toBe(Math.round(b.amount * 100));
+        expect(of(NOV).filter((r) => r.billId === b.id && r.occurrenceCoord === b.dueDate).every((r) => r.weekIndex === 0)).toBe(true);
+        // Likewise Dec's firing = Nov's pre-save slices (coord day+30) + Dec P1.
+        const novSaved = sumCents(of(NOV).filter((r) => r.billId === b.id && r.occurrenceCoord === b.dueDate + 30));
+        const decRemainder = sumCents(of(DEC).filter((r) => r.billId === b.id && r.occurrenceCoord === b.dueDate));
+        expect(novSaved + decRemainder, b.id).toBe(Math.round(b.amount * 100));
+      }
+      // Nov P1 no longer carries the whole cluster, and the display helper agrees
+      // with the writer: the four P1 cards (remainder + prior-view cents) still
+      // add up to the full $325 of funding.
+      const novSplits = rows.map((r) => ({ ...r }));
+      let novP1Load = 0;
+      let novP1Funding = 0;
+      for (const b of bills) {
+        for (const a of getBillAllocationsForBill(b.id, b.dueDate, b.amount, novPeriods, NOV, novSplits)) {
+          if (a.periodKey !== "P1" || a.isPreSave) continue;
+          novP1Load += a.amountCents;
+          novP1Funding += a.amountCents + a.priorViewSavedCents;
+        }
+      }
+      expect(novP1Load).toBeLessThan(32500);
+      expect(novP1Funding).toBe(32500);
+    });
+
+    it("is idempotent once applied", () => {
+      const rows = apply([], planOptimize(inputs([])));
+      expect(planOptimize(inputs(rows))).toEqual([]);
+    });
+
+    it("re-planning keeps a pre-save row that sits in a locked week", () => {
+      // Pretend an earlier run (before Oct 21 started) saved $20 of bill4a in Oct P3.
+      const locked = { id: "old", billId: "bill4a", monthKey: OCT, weekIndex: 2, amountCents: 2000, occurrenceCoord: 35 };
+      const plans = planOptimize(inputs([locked]));
+      const oct = plans.find((p) => p.mk === OCT)!;
+      expect(oct.toDelete).toEqual([]);
+      const rows = apply([locked], plans);
+      const octSaved = sumCents(rows.filter((r) => r.monthKey === OCT && r.billId === "bill4a" && r.occurrenceCoord === 35));
+      const novRemainder = sumCents(rows.filter((r) => r.monthKey === NOV && r.billId === "bill4a" && r.occurrenceCoord === 4));
+      expect(octSaved).toBeGreaterThanOrEqual(2000);
+      expect(octSaved + novRemainder).toBe(13000);
+    });
   });
 });
