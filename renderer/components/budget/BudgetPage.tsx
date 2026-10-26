@@ -604,9 +604,14 @@ export const BudgetPage = () => {
             autoAssignInputs.monthKey,
             autoAssignInputs.splits,
           )) {
+            // A first-week occurrence's plan includes what the previous
+            // month pre-saved for it (same envelope), so a paid firing is
+            // credited with the whole bill, not just this month's slice.
+            // Pre-save rows for NEXT month's firing have coords past this
+            // view's last period and never match a grace window here.
             plannedCentsByCoord.set(
               a.occurrenceCoord,
-              (plannedCentsByCoord.get(a.occurrenceCoord) ?? 0) + a.amountCents,
+              (plannedCentsByCoord.get(a.occurrenceCoord) ?? 0) + a.amountCents + a.priorViewSavedCents,
             );
           }
         }

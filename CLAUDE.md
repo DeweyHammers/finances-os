@@ -52,6 +52,16 @@ node scripts/demo/tour.mjs                 # fills the app with FAKE data step b
 - **All tour data is fictional** ("Alex"). The repo is public: never put real names, amounts, payees or employers in `tour.mjs` or the screenshots. Savings is a weekly *personal* item on purpose (a no-cycle Custom Plan item gets a flat amount per Auto-assign, but the ⚠ badge expects it monthly).
 - Re-run `tour.mjs` after UI changes, and update the numbers quoted in `docs/index.html` if they move.
 
+## Sandbox mode (Oct 2026)
+
+"Try a sandbox" (Overview toolbar, left of Optimize) lets the user experiment on a COPY of the database and then throw it away or keep it. `main/sandbox.ts` owns it; `shared/prisma.ts` makes it possible.
+
+- **`prisma` is a Proxy over a swappable client.** `switchDatabase(url, beforeConnect?)` disconnects the current client, runs the file operation while no client holds either file, then creates the next one (Prisma connects lazily on the first query). Every route and test keeps importing `prisma`; `getModel` reads the live client directly. Never compare a model by identity (`model === prisma.appSettings`) — compare the resource name.
+- **Files.** The copy is `sandbox.db` beside the real file (`prisma/sandbox.db` in dev, `%APPDATA%\finances-os\sandbox.db` in PROD; both gitignored by `*.db`). `enter` copies real → sandbox and switches; `discard` switches back and deletes the copy; `keep` writes `database.db.<stamp>.bak` (same naming as `db-sync.cjs`), overwrites the real file with the copy, switches back, deletes the copy. A sandbox never survives a restart: `cleanupStaleSandbox()` runs before the API starts and deletes any leftover copy, so the app always opens on real data.
+- **Routes.** `GET /api/sandbox` → `{ active, enteredAt, transactionsAdded }`; `POST /api/sandbox/{enter|discard|keep}`. Wrong-state calls (enter twice, discard when inactive) are `409` via `SandboxError`. Registered BEFORE the generic `/api/:resource` routes.
+- **Renderer.** `SandboxProvider` (app/providers.tsx) fetches the status once; `SandboxBanner` is the sticky amber strip above every page while active, with confirmed Discard (shows how many transactions were recorded in the sandbox — those are what Discard loses) and Keep; `SandboxButton` is the entry point (renders nothing while a sandbox is active). The user asked for it in the Overview toolbar, not the sider — don't move it back. Every action **reloads the window** on purpose: Refine's query cache, page state and the Overview's stale-alert check all have to restart against the other file. The raw fetches live in `lib/sandbox-api.ts`; `lib/api-url.ts` holds the shared `API_URL`.
+- **Tests.** `main/api-server.routes.test.ts` → `sandbox (/api/sandbox)` covers enter/discard/keep against the temp test DB (the copy lands in the temp dir, never near dev.db).
+
 ## Debugging artifacts (never committed)
 
 When taking pre-change safety snapshots (e.g. before an experimental UI test), drop them in `prisma/` using these naming conventions so `.gitignore` already covers them and they never surface in `git status` / VSCode source control:
@@ -117,7 +127,7 @@ The renderer is plain Next.js with no Electron-only APIs, so the same UI is mean
 ### Multi-occurrence bills (Aug 2026)
 A monthly bill can fire **twice** within a single pay-period view — once as the in-month occurrence, once as the next-month forward-extension. Example: a bill with dueDate=4 in Sept 2026 has coord=4 (Sep 4, P1) AND coord=34 (Oct 4, P5).
 
-- `getBillOccurrencesInView(dueDate, periods)` in `pay-period-utils.ts` returns EVERY occurrence in the view (up to 2). Prefer this over `getBillPeriodKey` (which returns only the primary).
+- `getBillOccurrencesInView(dueDate, periods)` in `pay-period-utils.ts` returns EVERY occurrence in the view (up to 2). Prefer this over `getBillPeriodKey` (which returns only the primary). It never includes the next view's first-week firing — that is a pre-save candidate (`getPreSaveOccurrence`), see "Pre-saving".
 - `BillSplit.occurrenceCoord` tags which occurrence a split funds. Legacy rows (`coord=0`) map to the primary (next-month-preferred) occurrence for backward compat until re-optimized.
 - `balancePayWeeks` places per-`(billId, occurrenceCoord)` units, so a bill firing twice gets two independent placement decisions (each may be split further).
 - **Plan-page mapping invariant:** anywhere splits are read out of Refine and passed into `getBillAllocationsForBill` / `resolveAutoAssignAmountForPeriod` (currently `BudgetPage.tsx handleAutoAssign`, plus `OverviewPage.tsx`, `BillsOverview.tsx`, `CashFlowOverview.tsx`, `PersonalOverview.tsx`), the mapping MUST include `occurrenceCoord: Number(r.occurrenceCoord ?? 0)`. Dropping this field collapses non-primary occurrences into the primary's legacy-fallback bucket and double-counts the secondary firing (secondary gets natural attribution + primary picks up its splits). Regression pinned by `resolveAutoAssignAmountForPeriod — multi-occurrence bills` tests in `budget-utils.test.ts`.
@@ -140,13 +150,22 @@ For a bill due the 31st in a 30-day month, `getBillOccurrencesInView` clamps the
 - `planOptimize` throws in Phase A (before any write) if the algorithm ever emits an allocation into a locked week — that insert is what collided with the committed row in the Oct 2026 500.
 - Regression pinned by `Oct 2026 regression — locked weeks are never leveled into` in `pay-period-utils.test.ts`.
 
+### Pre-saving for next month's first pay week (Oct 2026)
+A bill that fires in the NEXT view's FIRST pay week has no earlier week in that view to level into: when a month's first payday is the 4th, bills due the 4th–6th all land on that one paycheck (Nov and Dec 2026 showed ~$85 surplus in P1 vs $160–$220 elsewhere). Optimize now saves ahead for them from the current month's unlocked weeks.
+- **Attribution is unchanged** — still no backward extension. `getBillOccurrencesInView` never returns the next view's firing; the full-year coverage test still counts every firing in exactly one view. Pre-saving only adds optional `BillSplit` slices in the prior month.
+- **Candidate** = `getPreSaveOccurrence(dueDate, periods)`: the bill's day (clamped to the next month) lies in `[nextViewFirstPayday, nextViewFirstWeekEndDay]` (both on `PayPeriod`, with `daysInNextMonth`). Its coord in the prior view is `day + daysInMonth` — the forward-extension convention — which is always PAST the view's last period end (`isPreSaveCoord`). That is how display code recognises a pre-save row; there is no natural fallback for one.
+- **Balance**: `balancePayWeeks` takes `nextViewFirstWeek` (that week's income + optimizer personal expenses) and adds it as one VIRTUAL week (index `periods.length`) that only pre-save units may use; this view's own bills never move into it. Phase 2 levels the cluster across the unlocked weeks + the virtual week until no week is over budget. Virtual-week rows are NOT returned (`nextViewFirstWeekBillCents` reports the total) — the next month plans its own first week. Locked weeks still never receive new cents; a pre-save row already in a locked week is committed (`lockedAllocations`) and only the remainder is leveled.
+- **Next month** gets `priorViewAllocations` (prior-month rows with `isPreSaveCoord`, re-keyed to its in-month coord by subtracting the prior month's length): committed funding that reduces the occurrence's remainder and counts in `assertNoUnderfundedBills`, but never enters that month's `perWeek` and never counts as a row (`hasLockedRows`). `planOptimize` carries each month's freshly planned rows forward in `effectiveRows` so month M reads M-1's pre-saves from the same run; the fast path and idempotency hold across the pair.
+- **Display / Plan**: `getBillAllocationsForBill` returns pre-save rows with `isPreSave: true, isSplit: true` (BillsOverview: "Split · Dec 4th" in November with cumulative Saved) and puts `priorViewSavedCents` on the first row of a first-week occurrence (capped at what its own rows leave uncovered, which neutralises leftover orphan-era rows in locked history). The natural fallback for such an occurrence is the remainder, not a second full amount. `resolveAutoAssignAmountForPeriod` treats either flag as cumulative and adds `priorViewSavedCents`, so in the firing month the P1 target is the FULL bill (the pre-saved cents sit in the same envelope) and the ⚠ badge never reads them as over-funding; BudgetPage's paid-occurrence credit includes them too. All split mappings keep `occurrenceCoord` (see the Plan-page mapping invariant).
+- Pinned by the `Pre-saving` describes in `pay-period-utils.test.ts` (helper, balance, locked weeks, prior-view funding, display, `planOptimize` end to end + idempotency) and `budget-utils.test.ts` (Auto-assign / badge agree with the Overview).
+
 ### Bill balance schema
 `BillSplit(billId, monthKey, weekIndex, amountCents, occurrenceCoord)` with `@@unique([billId, monthKey, weekIndex, occurrenceCoord])` — replaces the old `BillPayWeekOverride` table (removed). `occurrenceCoord` distinguishes multiple firings of the same bill in one view. The `balancePayWeeks` algorithm writes splits to fine-tune per-week amounts.
 
 ### Overview optimizer — locked-week semantics
 `planOptimize` (`renderer/lib/optimize-plan.ts`) treats every split row in a locked past week as "already committed" (`lockedAllocations`), regardless of whether it matches the algorithm's natural attribution. Only splits in NON-locked weeks get deleted and recomputed on Optimize. Legacy `coord=0` rows are resolved to the primary occurrence via `getBillOccurrencesInView`. Deleting locked history was the bug that caused P3/P4 to inherit the full two split bills amounts and crush the weekly surplus.
 
-`handleOptimize` (OverviewPage) is two-phase: **Phase A = `planOptimize`**, a pure function that plans all 36 months (balance + `assertNoUnderfundedBills`) with zero DB writes, **Phase B applies** deletes → creates (unlocked allocations + $0 skipped markers). A planning failure leaves the DB untouched. The old single loop deleted a month's rows and then died mid-create, silently dropping two split bills from Oct 2026. Failures show an error toast and keep the stale alert; success alone clears it.
+`handleOptimize` (OverviewPage) is two-phase: **Phase A = `planOptimize`**, a pure function that plans all 36 months (balance + `assertNoUnderfundedBills`) with zero DB writes, **Phase B applies** deletes → creates (unlocked allocations + $0 skipped markers). A planning failure leaves the DB untouched. The old single loop deleted a month's rows and then died mid-create, silently dropping two split bills from Oct 2026. Failures show an error toast and keep the stale alert; success alone clears it. Since Oct 2026 each month is balanced together with the NEXT month's first pay week (see "Pre-saving"), so consecutive months are linked through `effectiveRows`; everything else about a month is still independent.
 
 ### Optimize horizon
 The Optimize loop runs `OPTIMIZE_HORIZON_MONTHS` (currently **36** = 3 years) forward from today. Bumped up from 12 so users scrolling to future months always see properly-planned `BillSplit` rows instead of raw un-optimized amounts. Iterations are independent (each month reads only its own state), so the cost scales linearly — first run writes ~50 splits/month × 36 months; subsequent runs hit the identical-signature fast-path early-exit and skip untouched months entirely. The constant lives in `lib/optimize-plan.ts`; the success toast reads it. If you change the horizon, update the doc comments and the `36` expectations in the Optimize tests.
@@ -216,7 +235,7 @@ Add `successNotification: false, errorNotification: false` to any `useList`/`use
 ## Tests
 
 ```
-npm run test          # run all (251 tests as of Oct 2026)
+npm run test          # run all (285 tests as of Oct 26 2026, incl. the local lock-ins)
 npm run test:watch    # watch mode
 ```
 
@@ -226,9 +245,11 @@ Key invariants covered by `pay-period-utils.test.ts`:
 - **Locked-allocation preservation** — a bill with half its amount locked in P2 has only the remaining half placed in unlocked weeks (not the full amount again).
 - **Assertion helper** — `assertNoUnderfundedBills` throws on any short-funded occurrence; the Overview optimizer calls it after every month's balance.
 - **Oct 2026 regression (modeled on real data, anonymized)** — locked weeks (incl. the current, started week) never receive new cents; the exact 500 setup emits nothing into locked P1; a bill moved into the current week (31st → 18th) or a price bump there lands in `skipped`; the $0 marker makes the skip idempotent; the next month plans it normally.
+- **Pre-saving (generic $325 cluster due the 4th–6th, Oct → Nov 2026)** — Oct's open week saves ahead for Nov P1, each firing is funded exactly once across the two views, locked weeks stay untouched, the next view plans only the remainder, `planOptimize` is idempotent once applied.
 
 Key invariants covered by `budget-utils.test.ts`:
 - **Plan ↔ Overview alignment (multi-occurrence)** — `resolveAutoAssignAmountForPeriod` returns the correct cumulative envelope amount when splits carry proper `occurrenceCoord`. Regression guard for the BudgetPage mapping — if occurrenceCoord is ever stripped upstream, cumulative totals inflate (e.g. P5 → 3× instead of 2× the bill on the multi-occurrence case).
+- **Plan ↔ Overview alignment (pre-saving)** — the prior month's Auto-assign targets its pre-save slice in the week it was saved; in the firing month the P1 target is the full bill (pre-saved cents included) and `evaluatePlanSync` neither flags them as over-funding nor asks Sync Plan to pull them back.
 
 ### Lock-in tests (refactor safety net, Oct 2026)
 The user's rule for cleanup work is **no change in how the app functions**. These tests pin today's behavior so a refactor that changes anything fails.

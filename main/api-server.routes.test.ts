@@ -12,7 +12,7 @@
  * every row, and set that env var BEFORE importing the server, so these tests
  * can never read or write the real dev database.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import fs from "fs";
 import os from "os";
@@ -229,5 +229,91 @@ describe("network gate (real HTTP)", () => {
   it("403s a rebinding Host header", async () => {
     const res = await request(server).get("/api/Bill").set("Host", "evil.example:5858");
     expect(res.status).toBe(403);
+  });
+});
+
+// ── Sandbox mode (main/sandbox.ts) ───────────────────────────────────────────
+// The sandbox copy is written beside the test DB (tmpDir/sandbox.db), so like
+// everything else here it never goes near dev.db.
+describe("sandbox (/api/sandbox)", () => {
+  const sandboxFile = path.join(tmpDir, "sandbox.db");
+  const status = async () => (await api().get("/api/sandbox")).body;
+  const realBackups = () =>
+    fs.readdirSync(tmpDir).filter((f) => f.startsWith("test.db.") && f.endsWith(".bak"));
+
+  // Never leave a test's sandbox active for the next one.
+  afterEach(async () => {
+    if ((await status()).active) await api().post("/api/sandbox/discard");
+    for (const f of realBackups()) fs.unlinkSync(path.join(tmpDir, f));
+  });
+
+  it("is inactive by default and rejects wrong-state or unknown actions", async () => {
+    expect(await status()).toEqual({ active: false, enteredAt: null, transactionsAdded: 0 });
+    expect((await api().post("/api/sandbox/discard")).status).toBe(409);
+    expect((await api().post("/api/sandbox/keep")).status).toBe(409);
+    expect((await api().post("/api/sandbox/explode")).status).toBe(404);
+    expect(fs.existsSync(sandboxFile)).toBe(false);
+  });
+
+  it("enter → edits land in the copy; discard → real data untouched, copy deleted", async () => {
+    const before = (await api().post("/api/Bill").send({ name: "Real Bill", amount: 10, dueDate: 1 })).body;
+
+    const entered = await api().post("/api/sandbox/enter");
+    expect(entered.status).toBe(200);
+    expect(entered.body.active).toBe(true);
+    expect(fs.existsSync(sandboxFile)).toBe(true);
+    expect((await api().post("/api/sandbox/enter")).status).toBe(409); // already active
+
+    // The copy starts as a snapshot of the real data…
+    expect((await api().get("/api/Bill")).body.map((b: any) => b.id)).toEqual([before.id]);
+    // …and edits inside it stay inside it.
+    await api().post("/api/Bill").send({ name: "What-if Bill", amount: 99, dueDate: 2 });
+    await api().delete(`/api/Bill/${before.id}`);
+    await api().patch("/api/AppSettings/global").send({ wifeWeeklyTargetCents: 11111 });
+    expect((await api().get("/api/Bill")).body.map((b: any) => b.name)).toEqual(["What-if Bill"]);
+
+    const discarded = await api().post("/api/sandbox/discard");
+    expect(discarded.status).toBe(200);
+    expect(discarded.body).toEqual({ active: false, enteredAt: null, transactionsAdded: 0 });
+    expect(fs.existsSync(sandboxFile)).toBe(false);
+
+    // Real data is exactly as it was before `enter`.
+    expect((await api().get("/api/Bill")).body.map((b: any) => b.id)).toEqual([before.id]);
+    expect((await api().get("/api/AppSettings/global")).status).toBe(404);
+    expect(realBackups()).toEqual([]);
+  });
+
+  it("keep → the copy replaces the real data, with a .bak of the old real file", async () => {
+    const before = (await api().post("/api/Bill").send({ name: "Real Bill", amount: 10, dueDate: 1 })).body;
+    await api().post("/api/sandbox/enter");
+    const added = (await api().post("/api/Bill").send({ name: "Kept Bill", amount: 5, dueDate: 3 })).body;
+
+    const kept = await api().post("/api/sandbox/keep");
+    expect(kept.status).toBe(200);
+    expect(kept.body).toMatchObject({ active: false, enteredAt: null });
+    expect(kept.body.backupPath).toMatch(/test\.db\..*\.bak$/);
+    expect(fs.existsSync(kept.body.backupPath)).toBe(true);
+    expect(fs.existsSync(sandboxFile)).toBe(false);
+
+    // The real database now holds the sandbox's rows…
+    expect((await api().get("/api/Bill")).body.map((b: any) => b.id).sort()).toEqual([added.id, before.id].sort());
+    // …and the backup holds what it looked like before Keep.
+    const backup = fs.readFileSync(kept.body.backupPath);
+    expect(backup.length).toBeGreaterThan(0);
+    expect(realBackups()).toHaveLength(1);
+  });
+
+  it("reports how many transactions were recorded inside the sandbox", async () => {
+    const acct = (await api().post("/api/Account").send({ name: "Checking" })).body;
+    await api().post("/api/AccountTransaction").send({ accountId: acct.id, inflowCents: 100 });
+    await api().post("/api/sandbox/enter");
+    expect((await status()).transactionsAdded).toBe(0);
+
+    await api().post("/api/AccountTransaction").send({ accountId: acct.id, outflowCents: 200 });
+    await api().post("/api/AccountTransaction").send({ accountId: acct.id, outflowCents: 300 });
+    const s = await status();
+    expect(s.active).toBe(true);
+    expect(typeof s.enteredAt).toBe("string");
+    expect(s.transactionsAdded).toBe(2);
   });
 });

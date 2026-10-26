@@ -63,8 +63,14 @@ interface AllocatedBill {
   coord: number;
   /** Cumulative cents allocated toward this occurrence through this pay week
    * (sum of all splits for the same billId+occurrenceCoord with weekIndex ≤
-   * this period). Lets a split card show "$74.60 of $149.20" progress. */
+   * this period, plus whatever the previous month pre-saved for it). Lets a
+   * split card show "$74.60 of $149.20" progress. */
   cumulativeCents: number;
+  /** True for a slice saved ahead for NEXT month's first-pay-week firing
+   * (CLAUDE.md → "Pre-saving"). */
+  isPreSave: boolean;
+  /** Cents the PREVIOUS month already saved for this occurrence. */
+  priorViewSavedCents: number;
 }
 
 export const BillsOverview: React.FC<BillsOverviewProps> = ({
@@ -126,13 +132,17 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
         const inNextMonth = a.occurrenceCoord > daysInMonth;
         // Cumulative through this pay week for THIS occurrence only —
         // splits for a different occurrence of the same bill don't count.
-        const cumulativeCents = allocs
-          .filter(
-            (x) =>
-              x.occurrenceCoord === a.occurrenceCoord &&
-              x.weekIndex <= period.index,
-          )
-          .reduce((s, x) => s + x.amountCents, 0);
+        // `priorViewSavedCents` (on the occurrence's first row) folds in what
+        // last month's pay weeks already saved ahead for it.
+        const sameOcc = allocs.filter(
+          (x) =>
+            x.occurrenceCoord === a.occurrenceCoord &&
+            x.weekIndex <= period.index,
+        );
+        const cumulativeCents = sameOcc.reduce(
+          (s, x) => s + x.amountCents + x.priorViewSavedCents,
+          0,
+        );
         out.push({
           bill: b,
           amountCents: a.amountCents,
@@ -141,6 +151,8 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
           occInNextMonth: inNextMonth,
           coord: a.occurrenceCoord,
           cumulativeCents,
+          isPreSave: a.isPreSave,
+          priorViewSavedCents: sameOcc.reduce((s, x) => s + x.priorViewSavedCents, 0),
         });
       }
     }
@@ -260,7 +272,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
           </Box>
 
           <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-            {periodBills.map(({ bill, amountCents, isSplit, occDay, occInNextMonth, cumulativeCents }) => {
+            {periodBills.map(({ bill, amountCents, isSplit, occDay, occInNextMonth, coord, cumulativeCents, isPreSave, priorViewSavedCents }) => {
               const clampedDay = clampDayToMonth(occDay, year, month);
               // Only prefix the month abbreviation for NEXT-month (forward-
               // extended) occurrences — in the current view an in-month bill
@@ -312,7 +324,10 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
               );
               return (
                 <Box
-                  key={`${bill.id}-${period.key}`}
+                  // One bill can legitimately appear twice in a week: its own
+                  // firing plus a slice saved ahead for next month (different
+                  // occurrence coords), so the key carries the coord too.
+                  key={`${bill.id}-${coord}-${period.key}`}
                   sx={{ position: "relative", opacity: isSkipped ? 0.55 : 1 }}
                 >
                   <DashboardCard
@@ -332,7 +347,13 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
                             Split across pay weeks
                           </TooltipTitle>
                           <TooltipBody>
-                            Total ${totalDollars.toFixed(2)} auto-balanced across this month's pay weeks.
+                            {isPreSave
+                              ? // Saved ahead: the firing is in NEXT month's first pay
+                                // week, which has nothing earlier to level into.
+                                `Total $${totalDollars.toFixed(2)} is due in ${nextMonthAbbr}'s first pay week — part of it is saved ahead from this month's pay weeks.`
+                              : priorViewSavedCents > 0
+                                ? `Total $${totalDollars.toFixed(2)} — $${(priorViewSavedCents / 100).toFixed(2)} was saved ahead in last month's pay weeks.`
+                                : `Total $${totalDollars.toFixed(2)} auto-balanced across this month's pay weeks.`}
                           </TooltipBody>
                         </>
                       }

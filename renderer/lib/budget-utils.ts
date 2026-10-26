@@ -262,12 +262,20 @@ export const resolveAutoAssignAmountForPeriod = (params: {
       // Auto for P3 should top the category up to the sum of slices through
       // P3, not just P3's slice (which would go negative and add nothing once
       // prior weeks have covered more than this week's share).
-      if (allocs.length > 1) {
+      // Pre-saving makes an occurrence cumulative too: a pre-save slice in
+      // this month funds next month's first-week firing, and a first-week
+      // occurrence here may carry cents the previous month already saved
+      // (`priorViewSavedCents`, on its first row) — those sit in the same
+      // envelope, so the target through P1 is the FULL bill, not just the
+      // remainder, and the ⚠ badge never reads them as over-funding.
+      const cumulative =
+        allocs.length > 1 || allocs.some((a) => a.isPreSave || a.priorViewSavedCents > 0);
+      if (cumulative) {
         const targetIdx = periods.findIndex((p) => p.key === periodKey);
         if (targetIdx < 0) return 0;
         return allocs
           .filter((a) => a.weekIndex <= targetIdx)
-          .reduce((acc, a) => acc + a.amountCents, 0);
+          .reduce((acc, a) => acc + a.amountCents + a.priorViewSavedCents, 0);
       }
       // Single-week bill: only fund in its natural period.
       const only = allocs[0];
