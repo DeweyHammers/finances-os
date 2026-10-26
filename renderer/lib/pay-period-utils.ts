@@ -48,8 +48,25 @@
  *    home week so display code doesn't fall back to showing the full amount
  *    there (see OverviewPage.handleOptimize, BillsOverview "Skipped" card).
  *
+ * 6. PRE-SAVING (Oct 2026). A bill that fires in the NEXT view's FIRST pay
+ *    week (due on/after `nextViewFirstPayday`, no later than
+ *    `nextViewFirstWeekEndDay`) has no earlier week in that view to level
+ *    into — when the first payday is the 4th, bills due the 4th–6th all pile
+ *    onto that one paycheck. So this view's UNLOCKED weeks may save ahead for
+ *    it: `balancePayWeeks` gets the next view's first week as a virtual extra
+ *    week (`nextViewFirstWeek`) and levels those occurrences across this
+ *    view's unlocked weeks and that week. The slices saved here are ordinary
+ *    BillSplit rows of THIS month tagged `occurrenceCoord = day + daysInMonth`
+ *    (the forward-extension convention), which puts them PAST the view's
+ *    last period end — `isPreSaveCoord`. The firing itself still belongs to
+ *    exactly one view (the next one), so `getBillOccurrencesInView` never
+ *    returns it here; only persisted rows surface it (there is no natural
+ *    fallback for a pre-save). When the next view is balanced, those prior-
+ *    view rows count as committed funding (`priorViewAllocations`) and only
+ *    the remainder lands in its first week.
+ *
  * See CLAUDE.md → "Multi-occurrence bills", "Orphan-fallback skip",
- * "DueDate > daysInMonth clamping", "Retroactive planning" for more.
+ * "DueDate > daysInMonth clamping", "Pre-saving" for more.
  */
 
 /** Per-period accent color — indexed by 0-based pay-week position. */
@@ -82,6 +99,15 @@ export interface PayPeriod {
    * NOT be orphan-attributed to this view (that would double-count the
    * payment across two views). */
   nextViewFirstPayday: number | null;
+  /** Day-of-next-month on which the NEXT view's FIRST pay week ends (the day
+   * before its second payday, or its last day when it has one payday). A
+   * bill due in [nextViewFirstPayday, nextViewFirstWeekEndDay] lands in that
+   * first week with nothing earlier to level into, so this view may pre-save
+   * for it — see header note 6 and `getPreSaveOccurrence`. */
+  nextViewFirstWeekEndDay: number | null;
+  /** Length of the following calendar month — lets a pre-save clamp a bill's
+   * dueDate the way the next view clamps its own in-month coord. */
+  daysInNextMonth: number;
 }
 
 /**
@@ -145,6 +171,16 @@ export function getPayPeriodsForMonth(
   const nextMonthPayDays = listPayDays(nextYear, nextMonth);
   const nextFirstPayday =
     nextMonthPayDays.length > 0 ? nextMonthPayDays[0] : null;
+  // End of the next view's first pay week: the day before its second payday.
+  // With a single payday the whole month is that week (clamped to the month;
+  // any forward extension past it can't hold an in-month due date anyway).
+  const daysInNextMonth = new Date(nextYear, nextMonth + 1, 0).getDate();
+  const nextFirstWeekEndDay =
+    nextFirstPayday == null
+      ? null
+      : nextMonthPayDays.length > 1
+        ? nextMonthPayDays[1] - 1
+        : daysInNextMonth;
 
   // Each period starts on its payday and ends the day BEFORE the next payday.
   // The final period gets special treatment: it extends past daysInMonth to
@@ -213,6 +249,8 @@ export function getPayPeriodsForMonth(
       isCurrent,
       color: PERIOD_COLORS[i] ?? PERIOD_COLORS[PERIOD_COLORS.length - 1],
       nextViewFirstPayday: nextFirstPayday,
+      nextViewFirstWeekEndDay: nextFirstWeekEndDay,
+      daysInNextMonth,
     };
   });
 }
@@ -330,6 +368,47 @@ export function getBillOccurrencesInView(
   });
 }
 
+// ── Pre-save occurrences (header note 6) ──
+
+export interface PreSaveOccurrenceInfo {
+  /** Coord in THIS view's space: day + daysInMonth. Always > the last
+   * period's endDay, which is how persisted rows are recognised as pre-save
+   * slices (`isPreSaveCoord`). Equals the next view's in-month coord plus
+   * this month's length, so `coord - daysInMonth` recovers that occurrence. */
+  coord: number;
+  /** Calendar day of the firing in the next month (dueDate clamped to it). */
+  day: number;
+}
+
+/**
+ * The next view's FIRST-pay-week occurrence of a monthly bill, expressed in
+ * this view's coord space — or null when the bill doesn't fire in that week.
+ * That occurrence has no earlier week in its own view to level into, so this
+ * view's unlocked weeks are allowed to save ahead for it. It is deliberately
+ * NOT part of `getBillOccurrencesInView`: for counting, display fallback and
+ * grace windows the firing belongs to the next view alone.
+ */
+export function getPreSaveOccurrence(
+  dueDate: number,
+  periods: PayPeriod[],
+): PreSaveOccurrenceInfo | null {
+  if (periods.length === 0) return null;
+  const { daysInMonth, daysInNextMonth, nextViewFirstPayday, nextViewFirstWeekEndDay } = periods[0];
+  if (nextViewFirstPayday == null || nextViewFirstWeekEndDay == null) return null;
+  // Same clamp the next view applies to its in-month coord (a bill due the
+  // 31st fires on the 30th of a 30-day month), so the two coords agree.
+  const day = Math.min(dueDate, daysInNextMonth);
+  if (day < nextViewFirstPayday || day > nextViewFirstWeekEndDay) return null;
+  return { coord: day + daysInMonth, day };
+}
+
+/** True when a persisted row's coord lies past the view's last period — i.e.
+ * it is a pre-save slice for the next view's first pay week. */
+export function isPreSaveCoord(coord: number, periods: PayPeriod[]): boolean {
+  if (periods.length === 0) return false;
+  return coord > periods[periods.length - 1].endDay;
+}
+
 /**
  * Returns the PRIMARY period key for a monthly-recurring bill, using the old
  * "next-month occurrence wins" precedence rule. Kept for callers (like Personal
@@ -380,6 +459,50 @@ export interface BillAllocation {
   isSplit: boolean;
   /** Occurrence this allocation belongs to. */
   occurrenceCoord: number;
+  /** True for a pre-save slice: this row funds the NEXT view's first-week
+   * occurrence (its coord lies past this view's last period — header note
+   * 6). Rendered as "Split · <next month> <day>" in the prior month. */
+  isPreSave: boolean;
+  /** Cents the PREVIOUS view already saved for this occurrence (its pre-save
+   * rows). Carried on the occurrence's FIRST row only, so summing rows'
+   * `amountCents + priorViewSavedCents` never double-counts it. 0 elsewhere. */
+  priorViewSavedCents: number;
+}
+
+/** "YYYY-MM" → the previous month's key and that month's length. */
+function previousMonthOf(monthKey: string): { key: string; daysInMonth: number } {
+  const [y, m1] = monthKey.split("-").map(Number); // m1 is 1-based
+  const prev = new Date(y, m1 - 2, 1); // 0-based month (m1 - 1), minus one
+  return {
+    key: monthKeyOf(prev.getFullYear(), prev.getMonth()),
+    daysInMonth: new Date(prev.getFullYear(), prev.getMonth() + 1, 0).getDate(),
+  };
+}
+
+/**
+ * Cents the PREVIOUS view's BillSplit rows pre-saved for this view's
+ * in-month occurrence at `coord` (header note 6). Those rows are tagged with
+ * `coord + daysInPreviousMonth`, the forward-extension convention, which
+ * cannot collide with a genuine forward-extension row of that view (those
+ * end the day before this view's first payday, and only first-pay-week
+ * occurrences are ever pre-saved).
+ */
+export function getPriorViewSavedCents(
+  billId: string,
+  coord: number,
+  monthKey: string,
+  splits: BillSplitRecord[],
+): number {
+  const prev = previousMonthOf(monthKey);
+  const target = coord + prev.daysInMonth;
+  return splits
+    .filter(
+      (s) =>
+        s.billId === billId &&
+        s.monthKey === prev.key &&
+        (s.occurrenceCoord ?? 0) === target,
+    )
+    .reduce((sum, s) => sum + s.amountCents, 0);
 }
 
 /**
@@ -400,8 +523,8 @@ export function getBillAllocationsForBill(
   monthKey: string,
   splits: BillSplitRecord[],
 ): BillAllocation[] {
+  if (periods.length === 0) return [];
   const occurrences = getBillOccurrencesInView(dueDate, periods);
-  if (occurrences.length === 0) return [];
 
   const forBill = splits.filter(
     (s) =>
@@ -428,31 +551,78 @@ export function getBillAllocationsForBill(
       occSplits = forBill.filter((s) => (s.occurrenceCoord ?? 0) === 0);
     }
 
+    // Header note 6: an in-month occurrence in the FIRST pay week may have
+    // been pre-saved by the previous view. Those cents are part of this
+    // occurrence's funding (they sit in the same Plan envelope), so they
+    // make it a split, feed cumulative "Saved" totals and shrink the
+    // natural fallback to the remainder — never a second full amount.
+    // Capped at what this occurrence's own rows leave uncovered: a real
+    // pre-save plus its remainder equals the bill exactly, so the cap is a
+    // no-op for it, but it neutralises leftover rows from the pre-Aug-2026
+    // orphan era (a Sep 4 firing attributed to BOTH the Aug view and Sep P1)
+    // that carry the same coord signature in a locked past month.
+    const ownRowCents = occSplits.reduce((s, r) => s + r.amountCents, 0);
+    const priorViewSavedCents =
+      occ.weekIndex === 0 && !occ.inNextMonth && !occ.isOrphan
+        ? Math.min(
+            getPriorViewSavedCents(billId, occ.coord, monthKey, splits),
+            Math.max(0, amountCents - ownRowCents),
+          )
+        : 0;
+
     if (occSplits.length > 0) {
       // Split rows exist for this occurrence — honor them verbatim.
       // isSplit is per-occurrence: a bill with two occurrences that each
       // sit in a single week is NOT considered "split".
       const sorted = [...occSplits].sort((a, b) => a.weekIndex - b.weekIndex);
-      const isSplit = sorted.length > 1;
-      for (const s of sorted) {
+      const isSplit = sorted.length > 1 || priorViewSavedCents > 0;
+      sorted.forEach((s, i) => {
         result.push({
           weekIndex: s.weekIndex,
           periodKey: periods[s.weekIndex].key,
           amountCents: s.amountCents,
           isSplit,
           occurrenceCoord: occ.coord,
+          isPreSave: false,
+          priorViewSavedCents: i === 0 ? priorViewSavedCents : 0,
         });
-      }
+      });
     } else {
-      // No splits → natural attribution: full bill amount lands in the
-      // occurrence's home period. Ensures a bill never silently disappears
-      // just because BillSplit hasn't been populated yet.
+      // No splits → natural attribution: full bill amount (less whatever the
+      // previous view pre-saved) lands in the occurrence's home period.
+      // Ensures a bill never silently disappears just because BillSplit
+      // hasn't been populated yet.
       result.push({
         weekIndex: occ.weekIndex,
         periodKey: occ.periodKey,
-        amountCents,
-        isSplit: false,
+        amountCents: Math.max(0, amountCents - priorViewSavedCents),
+        isSplit: priorViewSavedCents > 0,
         occurrenceCoord: occ.coord,
+        isPreSave: false,
+        priorViewSavedCents,
+      });
+    }
+  }
+
+  // Pre-save slices for the NEXT view's first pay week (header note 6):
+  // rows of THIS month whose coord lies past the last period. They are only
+  // ever persisted (no natural fallback — the firing is counted by the next
+  // view), and always "split" because the remainder lives over there.
+  const preSaveRows = forBill.filter((s) => isPreSaveCoord(s.occurrenceCoord ?? 0, periods));
+  const preSaveCoords = Array.from(new Set(preSaveRows.map((s) => s.occurrenceCoord ?? 0))).sort((a, b) => a - b);
+  for (const coord of preSaveCoords) {
+    const rows = preSaveRows
+      .filter((s) => (s.occurrenceCoord ?? 0) === coord)
+      .sort((a, b) => a.weekIndex - b.weekIndex);
+    for (const s of rows) {
+      result.push({
+        weekIndex: s.weekIndex,
+        periodKey: periods[s.weekIndex].key,
+        amountCents: s.amountCents,
+        isSplit: true,
+        occurrenceCoord: coord,
+        isPreSave: true,
+        priorViewSavedCents: 0,
       });
     }
   }
@@ -549,6 +719,33 @@ export interface BalanceInputs {
    * algorithm never outputs allocations for locked weeks; occurrences that
    * only fit there land in `skipped` (header note 5). */
   lockedAllocations?: BalanceAllocation[];
+  /** Header note 6: pre-save slices the PREVIOUS view's weeks already put
+   * aside for this view's first-pay-week occurrences, keyed by THIS view's
+   * coord (= the row's coord minus the previous month's length). Committed
+   * funding for the occurrence (reduces its remainder, counts toward
+   * `underfunded`) but it lives in another month's weeks, so it never enters
+   * perWeek and never counts as a row of this month. */
+  priorViewAllocations?: PriorViewAllocation[];
+  /** Header note 6: the NEXT view's first pay week, so this view's unlocked
+   * weeks can pre-save for the bills firing in it. Joins the grid as one
+   * virtual extra week (index `periods.length`) that only those occurrences
+   * may use. Omit to disable pre-saving (e.g. no next view). */
+  nextViewFirstWeek?: NextViewFirstWeek;
+}
+
+export interface PriorViewAllocation {
+  billId: string;
+  /** This view's in-month coord of the occurrence (= its dueDate, clamped). */
+  occurrenceCoord: number;
+  amountCents: number;
+}
+
+export interface NextViewFirstWeek {
+  /** Income landing in the next view's first pay week, in cents. */
+  incomeCents: number;
+  /** Fixed (personal) expenses of that week, in cents — the optimizer's own
+   * rule, see `computeOptimizerPersonalPerPeriod` in optimize-plan.ts. */
+  fixedExpensesCents: number;
 }
 
 export interface BalanceAllocation {
@@ -583,6 +780,11 @@ export interface BalanceResult {
    * covered them outside the plan, e.g. from savings). Exempt from
    * `underfunded`. See header note 5. */
   skipped: SkippedOccurrence[];
+  /** Bill cents the plan leaves in the NEXT view's first pay week (the
+   * remainders of its pre-save occurrences after this view saved ahead).
+   * 0 when `nextViewFirstWeek` wasn't supplied. Informational — that week's
+   * rows are written by the next view's own balance. */
+  nextViewFirstWeekBillCents: number;
 }
 
 export interface SkippedOccurrence {
@@ -732,6 +934,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       unplaced: bills.map((b) => b.id),
       underfunded: [],
       skipped: [],
+      nextViewFirstWeekBillCents: 0,
     };
   }
 
@@ -747,6 +950,17 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     if (isPayWeekLocked(periods[i], todayCoord)) lockedWeeks.add(i);
   }
 
+  // Header note 6: the NEXT view's first pay week joins the grid as ONE
+  // virtual extra week (index V = N) when the caller supplies its income and
+  // fixed expenses and a next view exists. Only pre-save occurrences (bills
+  // firing in that week) may use it — it is their natural home — and this
+  // view's own bills never move into it. It is never locked: had it started,
+  // every week here would have started too and nothing could be leveled.
+  const nextWeek = inputs.nextViewFirstWeek;
+  const hasVirtual = nextWeek != null && periods[0].nextViewFirstPayday != null;
+  const V = N;
+  const W = hasVirtual ? N + 1 : N; // slots in budget / perWeek
+
   // "budget" per period = the cents available for bills after subtracting
   // fixed personal expenses and the surplus-target we want to preserve.
   // This is what perWeek needs to stay under (or shortfall exists).
@@ -756,7 +970,10 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       (fixedExpensesPerPeriodCents[i] ?? 0) -
       targetSurplusCents,
   );
-  const perWeek: number[] = new Array(N).fill(0);
+  if (hasVirtual) {
+    budget.push(nextWeek!.incomeCents - nextWeek!.fixedExpensesCents - targetSurplusCents);
+  }
+  const perWeek: number[] = new Array(W).fill(0);
 
   // Pre-populate perWeek with locked allocations so surplus math is accurate.
   for (const la of rawLocked) {
@@ -776,6 +993,15 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     lockedCentsPerOcc.set(k, (lockedCentsPerOcc.get(k) ?? 0) + la.amountCents);
     lockedRowsPerOcc.set(k, (lockedRowsPerOcc.get(k) ?? 0) + 1);
   }
+  // Prior-view pre-save slices (header note 6) are committed funding for
+  // this view's first-week occurrences: they shrink the remainder and count
+  // in the underfunded check. They sit in ANOTHER month's weeks, so they
+  // never enter perWeek, and they are not rows of this month (so they don't
+  // affect `hasLockedRows`).
+  for (const pa of inputs.priorViewAllocations ?? []) {
+    const k = occKey(pa.billId, pa.occurrenceCoord);
+    lockedCentsPerOcc.set(k, (lockedCentsPerOcc.get(k) ?? 0) + pa.amountCents);
+  }
 
   const unplaced: string[] = [];
   const underfunded: string[] = [];
@@ -787,6 +1013,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
   // skipped this cycle (see header note 5). Leveling into a locked week was
   // the Oct 2026 bug: it added a few dollars of a bill to a past paycheck that
   // already had a row for that bill, and the duplicate insert 500'd mid-write.
+  // The virtual week is never eligible for this view's own occurrences.
   const eligibleWeeks = (coord: number): number[] => {
     const out: number[] = [];
     for (let i = 0; i < N; i++) {
@@ -818,9 +1045,10 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
   };
 
   // A "unit" is one (bill, occurrence) pair. A bill can produce up to two
-  // units in a view — the in-month and the forward-extended next-month one.
-  // Each unit is placed independently so multi-occurrence months never lose
-  // a payment.
+  // units in a view — the in-month and the forward-extended next-month one —
+  // plus, with a virtual week, a PRE-SAVE unit for its next-view first-week
+  // firing. Each unit is placed independently so multi-occurrence months
+  // never lose a payment.
   interface WithMeta {
     bill: BillForBalance;
     coord: number;
@@ -830,6 +1058,8 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     splitEligible: number[];
     naturalIdx: number;
     amountCents: number; // remaining after locked cents
+    /** True for a next-view first-week occurrence saved ahead from here. */
+    isPreSave: boolean;
   }
 
   // An occurrence is "past-window" when its natural home period is already
@@ -895,6 +1125,36 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
         splitEligible,
         naturalIdx: naturalWeekIdx(occ.coord),
         amountCents: remainingCents,
+        isPreSave: false,
+      });
+    }
+  }
+
+  // Pre-save units (header note 6): every bill firing in the next view's
+  // first pay week gets a unit whose natural home is the virtual week and
+  // whose eligible weeks are ALL of this view's weeks (every payday here
+  // precedes the firing) plus the virtual week. Rows this view already holds
+  // for it in locked weeks (from an earlier run) are committed and only the
+  // remainder is leveled. Never skipped: the virtual week is always open.
+  if (hasVirtual) {
+    for (const b of bills) {
+      const pre = getPreSaveOccurrence(Number(b.dueDate), periods);
+      if (!pre) continue;
+      const key = occKey(b.id, pre.coord);
+      const remainingCents = Math.round(b.amount * 100) - (lockedCentsPerOcc.get(key) ?? 0);
+      if (remainingCents <= 0) continue;
+      const eligible: number[] = [];
+      for (let i = 0; i < N; i++) eligible.push(i);
+      eligible.push(V);
+      withMeta.push({
+        bill: b,
+        coord: pre.coord,
+        key,
+        eligible,
+        splitEligible: eligible.filter((i) => i === V || !lockedWeeks.has(i)),
+        naturalIdx: V,
+        amountCents: remainingCents,
+        isPreSave: true,
       });
     }
   }
@@ -922,10 +1182,12 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
   //      distributeBillLevel (levels the total bill load per week).
   //   4. If the new max shortfall isn't lower, roll back and stop — we've
   //      converged to whatever the constraints allow.
+  // The virtual week takes part like any other: when it is the most-shorted
+  // week, its pre-save units get leveled back across this view's open weeks.
   const shortfallOf = (i: number) => Math.max(0, -( budget[i] - perWeek[i]));
   const maxShortfall = () => {
     let m = 0;
-    for (let i = 0; i < N; i++) m = Math.max(m, shortfallOf(i));
+    for (let i = 0; i < W; i++) m = Math.max(m, shortfallOf(i));
     return m;
   };
 
@@ -935,7 +1197,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
   while (lastMax > 0) {
     let worstWeek = -1;
     let worstShort = 0;
-    for (let i = 0; i < N; i++) {
+    for (let i = 0; i < W; i++) {
       const s = shortfallOf(i);
       if (s > worstShort) {
         worstShort = s;
@@ -1013,10 +1275,14 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     lastMax = newMax;
   }
 
+  // Rows in the virtual week belong to the next view (its own balance writes
+  // them, with the prior-view slices as committed funding), so they are left
+  // out of `allocations` and reported only as a total.
   const allocations: BalanceAllocation[] = [];
   for (const w of withMeta) {
     const rows = placement.get(w.key) ?? [];
     for (const a of rows) {
+      if (hasVirtual && a.weekIndex === V) continue;
       allocations.push({
         billId: w.bill.id,
         weekIndex: a.weekIndex,
@@ -1048,14 +1314,25 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       }
     }
   }
+  // Same check for pre-save units: what this view saves ahead plus what it
+  // leaves in the virtual week (plus committed rows) must cover the bill.
+  for (const w of withMeta) {
+    if (!w.isPreSave) continue;
+    const placedCents = (placement.get(w.key) ?? []).reduce((s, r) => s + r.cents, 0);
+    const lockedCents = lockedCentsPerOcc.get(w.key) ?? 0;
+    if (placedCents + lockedCents < Math.round(w.bill.amount * 100)) {
+      underfunded.push(w.key);
+    }
+  }
 
   return {
     allocations,
-    perWeekBillCents: perWeek,
+    perWeekBillCents: perWeek.slice(0, N),
     feasible: maxShortfall() === 0,
     unplaced,
     underfunded,
     skipped,
+    nextViewFirstWeekBillCents: hasVirtual ? perWeek[V] : 0,
   };
 }
 
