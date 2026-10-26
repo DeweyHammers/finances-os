@@ -272,7 +272,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
           </Box>
 
           <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-            {periodBills.map(({ bill, amountCents, isSplit, occDay, occInNextMonth, cumulativeCents, isPreSave, priorViewSavedCents }) => {
+            {periodBills.map(({ bill, amountCents, isSplit, occDay, occInNextMonth, coord, cumulativeCents, isPreSave, priorViewSavedCents }) => {
               const clampedDay = clampDayToMonth(occDay, year, month);
               // Only prefix the month abbreviation for NEXT-month (forward-
               // extended) occurrences — in the current view an in-month bill
@@ -324,7 +324,10 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
               );
               return (
                 <Box
-                  key={`${bill.id}-${period.key}`}
+                  // One bill can legitimately appear twice in a week: its own
+                  // firing plus a slice saved ahead for next month (different
+                  // occurrence coords), so the key carries the coord too.
+                  key={`${bill.id}-${coord}-${period.key}`}
                   sx={{ position: "relative", opacity: isSkipped ? 0.55 : 1 }}
                 >
                   <DashboardCard
