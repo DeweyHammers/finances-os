@@ -57,13 +57,15 @@ The app opens on the **Plan** (zero-based budget) by default. Other sections liv
 
 - **Overview:** Landing page with three at-a-glance **summary tiles** at the top (**Bills** $/month, **Personal** $/month, **Yearly Costs** $/year — colored by section), followed by a **Monthly** section (month navigator + Surplus Target pill + Optimize button + Cash Flow & Allowance pay-week cards + Bills + Personal) and a **Yearly Costs** section below it. Every hover tooltip across the page (cash-flow breakdowns, split badges, warnings) shares the same dark-bg + section-colored-border visual language via `renderer/lib/tooltip-styles.tsx`.
   - **Month navigator** (`< June 2026 >`) lets you browse any month; defaults to the current month and shows a "CURRENT MONTH" label when on it.
-  - **Wife Target pill** — a compact editor left of the month picker showing the current per-week wife allowance target. Click the pencil to edit; Enter commits, Escape cancels, blur saves.
+  - **Surplus Target pill** — a compact editor left of the month picker showing the minimum surplus each pay week should keep after bills and personal. Click the pencil to edit; Enter commits, Escape cancels, blur saves.
   - **Optimize button** — always-visible pill in the toolbar to re-run the pay-week balance on demand. Plans the next **36 months (3 years)** so future-month navigation stays fully funded.
+  - **Try a sandbox button** — left of Optimize. Switches the whole app onto a copy of your database so you can cut a bill, bump the income or re-Optimize and see what happens, then **Discard** it or **Keep** it. See **Sandbox mode** below.
   - **Pay periods belong to their payday's month.** Each pay week starts on an in-month payday and runs until the day before the next payday. The last period of a month forward-extends into the next month up to the day before that month's first payday (e.g. July's P5 runs Jul 29 – Aug 4). There is **no backward extension** — bills due Aug 1-4 don't appear under August; they surface under July's P5 because Jul 29's paycheck funds them. This matches how the money actually moves.
   - **Multi-occurrence bills** — when a bill's next-month firing lands inside the forward extension AND the following view can't naturally cover it (its first payday falls after the due date), a bill can appear TWICE in one view. Example: in September 2026 a bill due the 4th appears in P1 for Sep 4 (in-month, natural) AND in P5-area splits for Oct 4 (Oct's first payday is Oct 7 — too late to fund Oct 4, so September must pre-save). Each occurrence is placed independently by the balancer.
   - **Orphan skip** — the algorithm refuses to double-count a payment across two views. If a bill's next-month firing IS naturally covered by the next view (that view's first payday ≤ due date), the current view leaves it alone.
-  - **Auto-Balance** — every time the view loads or bills/income/personal/target change (or a legacy `occurrenceCoord=0` split is detected), the app can re-plan which pay week funds each bill. Per-occurrence placement then iterative-split leveling: worst-shortfall week gets its largest splittable bill spread across the eligible **open** weeks. The goal: every pay week retains **≥ the wife weekly target** as surplus after bills + personal. When the target is unreachable given income, some weeks fall short but the plan still runs.
+  - **Auto-Balance** — every time the view loads or bills/income/personal/target change (or a legacy `occurrenceCoord=0` split is detected), the app can re-plan which pay week funds each bill. Per-occurrence placement then iterative-split leveling: worst-shortfall week gets its largest splittable bill spread across the eligible **open** weeks. The goal: every pay week retains **≥ the surplus target** as surplus after bills + personal. When the target is unreachable given income, some weeks fall short but the plan still runs.
   - **Locked weeks** — a pay week locks as soon as it **starts** (its paycheck has landed and been handed out), so the current week is locked too. Optimize keeps locked weeks' splits exactly as they are and never plans new money into them.
+  - **Pre-saving next month's first-week bills** — bills due in the first pay week of a month (say the 4th–6th, when the first payday is the 4th) have no earlier week in their own month to level into, so each month's open pay weeks save ahead for them. The slices show in the prior month as `Split · Dec 4th` cards; the firing month's first-week card shows the remainder with a cumulative `Saved` line. Attribution is unchanged (each firing is still counted in exactly one view), so the first week of every month ends up level with its neighbours instead of carrying the whole cluster.
   - **Skipped bills** — if a bill only fits into an already-locked week (e.g. its due date was moved into the current week, or its price went up after payday), it isn't planned this cycle: that paycheck is already spent, so you cover it outside the plan. Its card shows dimmed as **"Skipped · added after payday"** at $0.00, and the next month's occurrence is planned normally.
   - **Underfunded invariant** — `assertNoUnderfundedBills` throws if any bill occurrence ends up with `allocations + locked cents < bill.amount`. Skipped occurrences are exempt.
   - **Safe writes** — Optimize plans all 36 months in memory before touching the database, so a failure leaves your data unchanged and shows an error toast instead of a half-written plan.
@@ -75,6 +77,14 @@ The app opens on the **Plan** (zero-based budget) by default. Other sections liv
   - **Every Pay Week** — full amount hits every pay period.
   - **Split Monthly** — `amount` is a **monthly total** that gets distributed across pay weeks proportional to each week's leftover room after bills + fixed personal + surplus target. Splits are computed after the auto-balance runs so they only consume genuinely spare cash and never breach the surplus target. Great for savings goals ("$100/mo into Savings, spread wherever it fits").
 - **Yearly Costs:** Annual expenses scheduled by month and day.
+
+### 🔬 Sandbox mode
+
+Try changes without risking your real data. **Try a sandbox** (Overview toolbar) copies the database to `sandbox.db` beside the real file and points the app at the copy; an amber **Sandbox** banner stays pinned across every page while it's active. Everything works as normal in there — edit or delete bills, change the income, Optimize, assign on the Plan page.
+
+- **Discard** goes back to the real data and deletes the copy. The confirmation says how many transactions were recorded in the sandbox, since those are the edits most likely to be real.
+- **Keep** replaces the real data with the sandbox. A timestamped `.bak` of the real file is written first (same naming as `db:pull` / `db:push`), so even Keep can be undone by hand.
+- Closing the app always throws the sandbox away; a copy left behind by a crash is deleted on the next start, so the app always opens on real data.
 
 ### ⚙️ Income & Auto-Balance Settings
 
@@ -89,7 +99,9 @@ npm run test:watch # Watch mode
 npm run test:ui    # Vitest UI dashboard
 ```
 
-Vitest + Testing Library + Supertest. **204 tests** covering the budget math (cents, activity, available, RTA, auto-assign period resolver, move-money, balance adjustments), the pay-period calendar logic (payday-month attribution, `getBillPeriodKey`, `getBillOccurrencesInView` multi-occurrence enumeration, `clampDayToMonth`, override lookup, `balancePayWeeks` per-occurrence placement + locked-week skipping, `distributeSplitAcrossWeeks` largest-remainder rounding), a **full-year cross-view coverage invariant** (every real-world firing of every user bill from Aug 2026 → Jul 2027 is attributed to exactly one view — no double-count, no drops), a **locked-allocation preservation regression** (past-week partial payments count toward remaining amount, algo never re-places the full bill), an **Oct 2026 regression suite** built from real data (no new money into locked/current weeks, bills moved into the current week are skipped), the form components (AssignedCell, PayeeAutocomplete, SiderAccountRow), and the API server's body coercion.
+Vitest + Testing Library + Supertest. **269 tests** in the repo covering the budget math (cents, activity, available, RTA, auto-assign period resolver, move-money, balance adjustments), the pay-period calendar logic (payday-month attribution, `getBillPeriodKey`, `getBillOccurrencesInView` multi-occurrence enumeration, `clampDayToMonth`, override lookup, `balancePayWeeks` per-occurrence placement + locked-week skipping, `distributeSplitAcrossWeeks` largest-remainder rounding), a **full-year cross-view coverage invariant** (every real-world firing of every user bill from Aug 2026 → Jul 2027 is attributed to exactly one view — no double-count, no drops), a **locked-allocation preservation regression** (past-week partial payments count toward remaining amount, algo never re-places the full bill), an **Oct 2026 regression suite** built from real data (no new money into locked/current weeks, bills moved into the current week are skipped), **pre-saving** (a bill due the 4th with a first payday on the 4th is leveled across the prior month's open weeks, locked weeks untouched, the firing counted once, Auto-assign and the Plan ⚠ badge agreeing with the Overview), the form components (AssignedCell, PayeeAutocomplete, SiderAccountRow), and the API server over real HTTP against a throwaway SQLite copy (CRUD shape, body coercion, the Income single-primary rule, the loopback/Origin/Host gate, and **sandbox mode**: enter → discard leaves the real data untouched and deletes the copy, enter → keep replaces it with a `.bak` beside it, wrong-state calls are rejected).
+
+Every `git push` runs the whole suite first (`.githooks/pre-push`); a failing test cancels the push. A further set of **lock-in tests** pins the Overview, Plan and Optimize output on a frozen copy of real data; they're gitignored because the repo is public, so fresh clones run the 269 above and the author's checkout runs more.
 
 ## 🛠 Technical Architecture
 
@@ -144,7 +156,7 @@ npx prisma generate     # regenerate node_modules\.prisma\client (stop dev serve
 
 ## 📂 Project Structure
 
-- `/main` — Electron main process and Express API server.
+- `/main` — Electron main process, Express API server and sandbox mode (`sandbox.ts`).
 - `/renderer` — Next.js frontend (dashboard, lists, forms).
 - `/shared` — Prisma client and shared utilities used by both processes.
 - `/prisma` — Database schema and seed.
