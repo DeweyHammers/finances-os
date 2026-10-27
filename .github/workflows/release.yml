@@ -48,11 +48,16 @@ jobs:
           node-version: 24
           cache: npm
 
-      # `postinstall` runs electron-builder install-app-deps and @prisma/client
-      # generates the Windows query engine that electron-builder.yml copies
-      # into extraResources.
+      # `postinstall` runs electron-builder install-app-deps.
       - name: Install dependencies
         run: npm ci
+
+      # @prisma/client's own postinstall doesn't reliably generate on a clean
+      # `npm ci` (the first run failed with "@prisma/client did not initialize
+      # yet"), so generate explicitly. This also produces the Windows query
+      # engine that electron-builder.yml copies into extraResources.
+      - name: Generate Prisma client
+        run: npx prisma generate
 
       - name: Tag must match package.json version
         if: startsWith(github.ref, 'refs/tags/v')
