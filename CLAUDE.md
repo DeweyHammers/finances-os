@@ -262,7 +262,7 @@ The user's rule for cleanup work is **no change in how the app functions**. Thes
 - `OverviewPage.lockin.test.tsx`: Overview numbers + whole-page text snapshots for Sep/Oct/Nov.
 - `OverviewPage.optimize.lockin.test.tsx`: the exact BillSplit writes for four Optimize scenarios. `optimize-plan.lockin.test.ts`: planner invariants (a fresh re-plan rebuilds the fixture's rows exactly, locked weeks are never touched, runs are idempotent).
 - `BudgetPage.lockin.test.tsx`: Plan amounts, ⚠ badges / Sync Plan state, and the exact Auto-assign P3 writes after the Oct 21 paycheck.
-- `main/api-server.routes.test.ts`: real HTTP + Prisma against a wiped temp copy of the DB via the test-only `FINANCES_OS_TEST_DB_URL` (read in `shared/prisma.ts`). Never point it at dev.db.
+- `main/api-server.routes.test.ts`: real HTTP + Prisma against an EMPTY temp database built from `prisma/schema.prisma` by `scripts/empty-db.mjs` (shared with the template-db builder), via the test-only `FINANCES_OS_TEST_DB_URL` (read in `shared/prisma.ts`). It no longer copies dev.db, so it runs on a clean checkout (GitHub Actions). Never point it at dev.db.
 
 A snapshot diff means the app would show or write something different. Only re-record (`npx vitest run -u`) for a behavior change the user asked for, and say so in the commit. Run with `CI=true` to fail on missing snapshots instead of writing them.
 

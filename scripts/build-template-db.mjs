@@ -13,10 +13,10 @@
 //
 // Safety: the only file this script writes or deletes is prisma/template.db
 // (+ its journal), and it refuses to run if the output name is anything else.
-import { execSync } from "node:child_process";
-import { DatabaseSync } from "node:sqlite";
-import fs from "node:fs";
+// The actual work (schema script → SQLite → emptiness check) lives in
+// scripts/empty-db.mjs, shared with the API route tests.
 import path from "node:path";
+import { createEmptyDatabase } from "./empty-db.mjs";
 
 const ROOT = process.cwd();
 const TEMPLATE_DB = path.join(ROOT, "prisma", "template.db");
@@ -26,31 +26,8 @@ if (path.basename(TEMPLATE_DB) !== "template.db") {
   throw new Error("refusing: output is not template.db");
 }
 
-// Start from nothing — unlike demo.db, nothing holds this file open.
-for (const f of [TEMPLATE_DB, `${TEMPLATE_DB}-journal`]) {
-  if (fs.existsSync(f)) fs.unlinkSync(f);
-}
-
-// Ask Prisma for the CREATE TABLE script of the current schema (no DB needed).
-const sql = execSync(
-  "npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script",
-  { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-);
-
-const db = new DatabaseSync(TEMPLATE_DB);
-db.exec(sql);
-
-// Belt and braces: prove every table is empty before the build packages it.
-const tables = db
-  .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-  .all();
-if (tables.length === 0) throw new Error("template.db has no tables — schema script was empty");
-for (const { name } of tables) {
-  const { c } = db.prepare(`SELECT count(*) AS c FROM "${name}"`).get();
-  if (c !== 0) throw new Error(`template.db table ${name} is not empty (${c} rows)`);
-}
-db.close();
+const tables = createEmptyDatabase(TEMPLATE_DB, { root: ROOT });
 
 console.log(
-  `Empty template database created: ${path.relative(ROOT, TEMPLATE_DB)} (${tables.length} tables, 0 rows)`,
+  `Empty template database created: ${path.relative(ROOT, TEMPLATE_DB)} (${tables} tables, 0 rows)`,
 );

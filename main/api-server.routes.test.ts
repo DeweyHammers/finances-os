@@ -8,9 +8,11 @@
  * loopback/Origin/Host gate.
  *
  * Safety: shared/prisma.ts reads FINANCES_OS_TEST_DB_URL (test-only) before
- * falling back to prisma/dev.db. We copy dev.db's SCHEMA to a temp file, wipe
- * every row, and set that env var BEFORE importing the server, so these tests
- * can never read or write the real dev database.
+ * falling back to prisma/dev.db. We build an EMPTY database from the Prisma
+ * schema in a temp dir (scripts/empty-db.mjs — no dev.db needed, so this also
+ * runs on a clean checkout / GitHub Actions) and set that env var BEFORE
+ * importing the server, so these tests can never read or write the real dev
+ * database.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import request from "supertest";
@@ -41,8 +43,11 @@ const api = () => {
 };
 
 beforeAll(async () => {
-  // Schema-accurate empty DB: copy dev.db, then delete every row below.
-  fs.copyFileSync(path.join(process.cwd(), "prisma/dev.db"), tmpDb);
+  // Schema-accurate empty DB built from prisma/schema.prisma (the same helper
+  // that builds the installer's template.db). beforeEach still wipes every
+  // table so each test starts clean even if an earlier one leaves rows.
+  const { createEmptyDatabase } = await import("../scripts/empty-db.mjs");
+  createEmptyDatabase(tmpDb);
   process.env.FINANCES_OS_TEST_DB_URL = `file:${tmpDb.replace(/\\/g, "/")}`;
 
   const mod = await import("./api-server");
