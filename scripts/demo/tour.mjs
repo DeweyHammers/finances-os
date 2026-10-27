@@ -20,7 +20,9 @@ import { execSync } from "node:child_process";
 import { launch } from "./cdp.mjs";
 
 const OUT = path.join("docs", "img", "tour");
-const API = "http://127.0.0.1:5858/api";
+// `DEMO_API_PORT` matches serve.ts: run the demo API on another port (and the
+// renderer with NEXT_PUBLIC_API_URL) while the installed app still owns 5858.
+const API = `http://127.0.0.1:${process.env.DEMO_API_PORT ?? 5858}/api`;
 
 // ── Fake data ────────────────────────────────────────────────────────────
 const INCOME = { name: "Paycheck", amount: 1150, paymentCycle: "WEEKLY", payDay: 5 }; // Fridays

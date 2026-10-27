@@ -13,7 +13,7 @@ const EXPECTED = /API 404: .*\/api\/AppSettings\/global$/;
 const BAD_TEXT = /Application error|Unhandled Runtime Error|could not be found|\bNaN\b|\bundefined\b|Infinity/;
 const ROUTES = [
   "/", "/Overview", "/Plan", "/Statistics", "/Cash",
-  "/Bill", "/Personal", "/YearlyCosts", "/Income", "/Payees",
+  "/Bill", "/Personal", "/YearlyCosts", "/Income", "/Payees", "/Settings",
 ];
 const OUT = path.join("scripts", "demo", "out", "empty");
 

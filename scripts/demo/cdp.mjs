@@ -20,6 +20,9 @@ const BROWSERS = [
 
 const PORT = 9333;
 export const BASE_URL = "http://localhost:8888";
+// Port of the demo API (serve.ts `--port` / DEMO_API_PORT), so failed API
+// calls are still caught when the tour runs beside the installed app.
+const API_PORT = process.env.DEMO_API_PORT ?? "5858";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function launch({ width = 1440, height = 900 } = {}) {
@@ -89,7 +92,7 @@ export async function launch({ width = 1440, height = 900 } = {}) {
       case "Network.loadingFinished":
       case "Network.loadingFailed": inflightIds.delete(p.requestId); break;
       case "Network.responseReceived":
-        if (p.response.url.includes(":5858/") && p.response.status >= 400) {
+        if (p.response.url.includes(`:${API_PORT}/`) && p.response.status >= 400) {
           problems.push(`API ${p.response.status}: ${p.response.url}`);
         }
         break;
