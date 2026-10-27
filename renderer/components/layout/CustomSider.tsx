@@ -377,19 +377,18 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
 // ── SettingsLeaf ──
 // Looks like a NavLeaf but goes through the Settings context: a popup on a
 // desktop-width window, the /Settings page below the breakpoint (see
-// components/settings/SettingsDialogContext.tsx). Highlighted while the
-// popup is open or the page is showing.
+// components/settings/SettingsDialogContext.tsx). Highlighted only while the
+// PAGE is showing: the popup covers the page, so a highlight behind it would
+// just be noise (user feedback, Oct 27 2026).
 const SettingsLeaf = () => {
-  const { open, asPage, openSettings } = useSettingsDialog();
+  const { asPage, openSettings } = useSettingsDialog();
   const pathname = usePathname();
-  const onPage = asPage && ((pathname || "/").replace(/\/index\.html$/, "") || "/").startsWith("/Settings");
-  const active = open || onPage;
+  const active = asPage && ((pathname || "/").replace(/\/index\.html$/, "") || "/").startsWith("/Settings");
   return (
     <Box
       role="button"
       tabIndex={0}
       aria-haspopup="dialog"
-      aria-expanded={open}
       onClick={() => openSettings()}
       onKeyDown={(e) => {
         if (e.key === "Enter") openSettings();
