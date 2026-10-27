@@ -64,6 +64,10 @@ node scripts/demo/tour.mjs                 # fills the app with FAKE data step b
 - **Renderer.** `SandboxProvider` (app/providers.tsx) fetches the status once; `SandboxBanner` is the sticky amber strip above every page while active, with confirmed Discard (shows how many transactions were recorded in the sandbox — those are what Discard loses) and Keep; `SandboxButton` is the entry point (renders nothing while a sandbox is active). The user asked for it in the Overview toolbar, not the sider — don't move it back. Every action **reloads the window** on purpose: Refine's query cache, page state and the Overview's stale-alert check all have to restart against the other file. The raw fetches live in `lib/sandbox-api.ts`; `lib/api-url.ts` holds the shared `API_URL`.
 - **Tests.** `main/api-server.routes.test.ts` → `sandbox (/api/sandbox)` covers enter/discard/keep against the temp test DB (the copy lands in the temp dir, never near dev.db).
 
+## Settings page + app meta (Oct 27 2026)
+
+`/Settings` (`components/settings/SettingsPage.tsx`, Obsidian-style sections: General / Budget / Data / Phone & sync) is reached from the sider footer, next to the **connection indicator** (`components/layout/ConnectionStatus.tsx` + `lib/use-connection-status.ts`: pings `GET /api/meta` every 30 s, on tab focus and on online/offline; green/red/amber dot; click re-checks). Both use `lib/meta-api.ts`. Server side is `main/meta.ts` (no Electron imports — runs in the app, the hosted server and tests): `GET /api/meta` (version from package.json, mode `electron|dev|hosted`, platform, real database path, links), `GET /api/meta/updates` (latest GitHub Release vs running version; 502 when GitHub is unreachable), `GET/POST /api/backups` (`<db>.<stamp>.bak` beside the database via SQLite `VACUUM INTO`, plain copy as fallback; 409 while a sandbox is active). Routes are registered BEFORE `/api/:resource`. `main.ts` routes `target="_blank"` links to the system browser via `setWindowOpenHandler`. The "Sync across devices" row is a placeholder until `plans/phone-app-and-sync.md` Phase B lands — the master plan for the Android APK + Turso-based sync lives there; read it before any phone/sync work.
+
 ## Debugging artifacts (never committed)
 
 When taking pre-change safety snapshots (e.g. before an experimental UI test), drop them in `prisma/` using these naming conventions so `.gitignore` already covers them and they never surface in `git status` / VSCode source control:
@@ -85,6 +89,7 @@ renderer/
     Statistics/page.tsx   → components/budget/statistics/StatisticsPage.tsx
     YearlyCosts/page.tsx  → components/yearly-costs/list.tsx
     Income/page.tsx       → components/app-settings/sections/IncomePage.tsx
+    Settings/page.tsx     → components/settings/SettingsPage.tsx
     Bill, Personal, Payees → components/<domain>/list.tsx
     Cash/page.tsx         # exception: reads ?id= and delegates to AccountLedger
     providers.tsx         # Refine + MUI theme + IPC data provider

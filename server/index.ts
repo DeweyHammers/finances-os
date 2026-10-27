@@ -54,6 +54,8 @@ if (dbPath) {
   process.env.FINANCES_OS_TEST_DB_URL = `file:${abs.replace(/\\/g, "/")}`;
 }
 if (publicHosts) process.env.FINANCES_OS_PUBLIC_HOSTS = publicHosts;
+// Tells /api/meta (Settings page) that the app is served, not installed.
+process.env.FINANCES_OS_MODE = "hosted";
 
 (async () => {
   const { app, startServer } = await import("../main/api-server");

@@ -322,3 +322,59 @@ describe("sandbox (/api/sandbox)", () => {
     expect(s.transactionsAdded).toBe(2);
   });
 });
+
+describe("app meta + backups (/api/meta, /api/backups)", () => {
+  const backups = () =>
+    fs.readdirSync(tmpDir).filter((f) => f.startsWith("test.db.") && f.endsWith(".bak"));
+
+  afterEach(async () => {
+    if ((await api().get("/api/sandbox")).body.active) await api().post("/api/sandbox/discard");
+    for (const f of backups()) fs.unlinkSync(path.join(tmpDir, f));
+  });
+
+  it("reports the version, run mode and the REAL database path", async () => {
+    const res = await api().get("/api/meta");
+    expect(res.status).toBe(200);
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+    expect(res.body.version).toBe(pkg.version);
+    expect(res.body.mode).toBe("dev"); // no Electron, no FINANCES_OS_MODE here
+    expect(res.body.databasePath.replace(/\\/g, "/")).toBe(tmpDb.replace(/\\/g, "/"));
+    expect(res.body.releasesUrl).toContain("github.com");
+  });
+
+  it("is not shadowed by the generic resource routes", async () => {
+    // /api/meta/updates must reach the update route, not GET /api/:resource/:id.
+    // It talks to GitHub, so only the shape of a failure/success is asserted.
+    const res = await api().get("/api/meta/updates");
+    expect([200, 502]).toContain(res.status);
+    if (res.status === 200) expect(res.body).toHaveProperty("updateAvailable");
+    else expect(res.body.error).toContain("GitHub");
+  });
+
+  it("creates a timestamped .bak beside the database and lists it", async () => {
+    await api().post("/api/Bill").send({ name: "Backed up", amount: 5, dueDate: 3 });
+    expect((await api().get("/api/backups")).body).toMatchObject({ count: 0, lastBackupAt: null });
+
+    const created = await api().post("/api/backups");
+    expect(created.status).toBe(200);
+    expect(created.body.file.endsWith(".bak")).toBe(true);
+    expect(["vacuum", "copy"]).toContain(created.body.method);
+    expect(fs.existsSync(created.body.file)).toBe(true);
+    // A real SQLite file, not an empty placeholder.
+    expect(fs.readFileSync(created.body.file).subarray(0, 15).toString()).toBe("SQLite format 3");
+    expect(backups()).toHaveLength(1);
+
+    const listed = await api().get("/api/backups");
+    expect(listed.body.count).toBe(1);
+    expect(listed.body.lastBackupFile).toBe(created.body.file);
+    expect(listed.body.directory.replace(/\\/g, "/")).toBe(tmpDir.replace(/\\/g, "/"));
+  });
+
+  it("refuses to back up while a sandbox is active", async () => {
+    await api().post("/api/sandbox/enter");
+    const res = await api().post("/api/backups");
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/sandbox/i);
+    expect(backups()).toHaveLength(0);
+  });
+});

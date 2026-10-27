@@ -1,6 +1,13 @@
 import express, { Request, Response, NextFunction } from "express";
 import { getModel, prisma } from "../shared/prisma";
 import {
+  BackupError,
+  checkForUpdates,
+  createBackup,
+  getAppMeta,
+  listBackups,
+} from "./meta";
+import {
   SandboxError,
   discardSandbox,
   enterSandbox,
@@ -204,6 +211,35 @@ app.patch("/api/Income/:id", async (req: Request, res: Response) => {
   }
 });
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── App meta for the Settings page (main/meta.ts) ────────────────────────────
+// Registered BEFORE /api/:resource so "meta" and "backups" are never treated
+// as model names.
+app.get("/api/meta", (_req: Request, res: Response) => {
+  res.json(getAppMeta());
+});
+
+app.get("/api/meta/updates", async (_req: Request, res: Response) => {
+  try {
+    res.json(await checkForUpdates());
+  } catch (error: any) {
+    res.status(502).json({ error: `Could not check GitHub: ${error.message}` });
+  }
+});
+
+app.get("/api/backups", (_req: Request, res: Response) => {
+  res.json(listBackups());
+});
+
+app.post("/api/backups", async (_req: Request, res: Response) => {
+  try {
+    res.json(await createBackup());
+  } catch (error: any) {
+    const status = error instanceof BackupError ? error.status : 500;
+    if (status === 500) console.error("API Error POST /api/backups:", error);
+    res.status(status).json({ error: error.message });
+  }
+});
 
 // ── Sandbox: try changes on a copy of the database (main/sandbox.ts) ─────────
 // Registered BEFORE the generic /api/:resource routes, which would otherwise

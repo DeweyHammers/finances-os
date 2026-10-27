@@ -44,7 +44,9 @@ import SavingsIcon from "@mui/icons-material/Savings";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import AddIcon from "@mui/icons-material/Add";
+import SettingsIcon from "@mui/icons-material/Settings";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { ConnectionStatus } from "./ConnectionStatus";
 import { useList } from "@refinedev/core";
 import { computeAccountBalance } from "../../lib/budget-utils";
 import { formatMoney } from "../../lib/cents";
@@ -354,9 +356,13 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
       />
       <NavLeaf href="/Income" label="Income" icon={<SavingsIcon />} />
 
-      {/* Flex spacer pushes any future footer content to the bottom; the 16px
-          box gives a little breathing room above the viewport edge. */}
+      {/* Flex spacer pushes the footer (Settings + connection status) to the
+          bottom, like Obsidian's settings gear; the 16px box gives a little
+          breathing room above the viewport edge. */}
       <Box sx={{ flex: 1 }} />
+      <Box sx={{ pt: 2 }} />
+      <NavLeaf href="/Settings" label="Settings" icon={<SettingsIcon />} />
+      <ConnectionStatus />
       <Box sx={{ height: 16 }} />
     </>
   );
