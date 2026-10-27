@@ -1,64 +1,90 @@
 "use client";
 
 /**
- * useConnectionStatus — can this screen reach its server right now?
+ * Sync status for the whole renderer — the "sync icon" of
+ * plans/phone-app-and-sync.md, modelled on Obsidian's.
  *
- * Powers the status row above Settings in the sider and the Connection row
- * in Settings → Phone & sync. It is the "sync icon" of
- * plans/phone-app-and-sync.md, modelled on Obsidian's, and it only has a
- * meaning once a sync server is configured: on a local-only install there
- * is nothing to be connected TO (the app's own database server is the app
- * itself), so `configured` is false, nothing is polled, and both places
- * show nothing / "Local only" instead of a status (user decision,
- * Oct 27 2026: no "Connected" before a server exists, and no red light for
- * "no server configured" either — only a configured server that stops
- * answering is worth a warning).
+ * One poller (`SyncStatusProvider`, mounted in app/providers.tsx) asks
+ * `GET /api/sync` every `intervalMs`, immediately on mount, when the tab
+ * becomes visible again and on the browser's online/offline events (an
+ * `online` event also asks the server to sync right away). The sider row
+ * above Settings and the Connection row in Settings → Phone & sync both read
+ * it through `useConnectionStatus()`, so they can never disagree.
  *
- * While configured: pings `GET /api/meta` every `intervalMs`, immediately
- * on mount, when the tab becomes visible again and on the browser's
- * online/offline events. The last known state is kept while a check is in
- * flight so the dot never flickers between colours on every poll. Phase B
- * points the ping at the sync server and adds the "last synced" state.
+ * A local-only install (`configured: false`) shows nothing: there is nothing
+ * to be connected TO, so no "Connected" and no red light either (user
+ * decision, Oct 27 2026). Once a cloud database is set up the states are
+ * synced / syncing / offline / paused (sandbox) / blocked (the database is
+ * newer than this app). The last known state is kept while a check is in
+ * flight so the dot never flickers between colours on every poll.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchMeta } from "./meta-api";
+import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { fetchSyncStatus, syncNow, type SyncState, type SyncStatus } from "./sync-api";
 
-export type ConnectionState = "unknown" | "connected" | "offline";
+export type { SyncState, SyncStatus };
 
 export interface ConnectionStatus {
-  /** A sync server is set up on this device. False = local only. */
+  /** A cloud database is set up on this device. False = local only. */
   configured: boolean;
-  state: ConnectionState;
-  /** A check is in flight right now. */
+  /** "unknown" until the first answer; then the server's state. */
+  state: SyncState | "unknown";
+  /** The server's full answer, null until the first one. */
+  status: SyncStatus | null;
+  /** A status check or a sync is in flight right now. */
   checking: boolean;
-  /** When the server last answered. */
-  lastOkAt: Date | null;
-  /** Message of the last failed check, null after a success. */
+  /** The server could not be reached at all (not the cloud — the app's own API). */
+  apiDown: boolean;
+  /** When the cloud was last synced. */
+  lastSyncedAt: Date | null;
+  /** The server's last sync error, null after a success. */
   lastError: string | null;
-  /** Force a check now (the indicator's dot is clickable). */
-  refresh: () => void;
+  /** Re-read the status (cheap). */
+  refresh: () => Promise<void>;
+  /** Ask the server to sync now, then re-read (the indicator's dot does this). */
+  syncNow: () => Promise<void>;
+  /** Hand a status the caller just received (connect / disconnect) to everyone. */
+  apply: (status: SyncStatus) => void;
 }
 
 const PING_TIMEOUT_MS = 5000;
 
+let latest: SyncStatus | null = null;
+
 /**
- * Whether a sync server is configured on this device. Phase B of
- * plans/phone-app-and-sync.md reads this from the saved sync settings; until
- * then every install is local only.
+ * Whether a cloud database is configured on this device, from the last
+ * status the poller received (false until the first answer).
  */
 export function isSyncConfigured(): boolean {
-  return false;
+  return latest?.configured ?? false;
 }
 
-export function useConnectionStatus(intervalMs = 30_000): ConnectionStatus {
-  const configured = isSyncConfigured();
-  const [state, setState] = useState<ConnectionState>("unknown");
+const noop = async () => {};
+const ConnectionContext = createContext<ConnectionStatus>({
+  configured: false,
+  state: "unknown",
+  status: null,
+  checking: false,
+  apiDown: false,
+  lastSyncedAt: null,
+  lastError: null,
+  refresh: noop,
+  syncNow: noop,
+  apply: () => {},
+});
+
+function useSyncPoller(intervalMs: number): ConnectionStatus {
+  const [status, setStatus] = useState<SyncStatus | null>(latest);
   const [checking, setChecking] = useState(false);
-  const [lastOkAt, setLastOkAt] = useState<Date | null>(null);
-  const [lastError, setLastError] = useState<string | null>(null);
+  const [apiDown, setApiDown] = useState(false);
   const inFlight = useRef<AbortController | null>(null);
 
-  const check = useCallback(async () => {
+  const apply = useCallback((next: SyncStatus) => {
+    latest = next;
+    setStatus(next);
+    setApiDown(false);
+  }, []);
+
+  const refresh = useCallback(async () => {
     // One check at a time; a forced refresh cancels the previous one.
     inFlight.current?.abort();
     const ctrl = new AbortController();
@@ -66,15 +92,12 @@ export function useConnectionStatus(intervalMs = 30_000): ConnectionStatus {
     const timer = setTimeout(() => ctrl.abort(), PING_TIMEOUT_MS);
     setChecking(true);
     try {
-      await fetchMeta(ctrl.signal);
+      const next = await fetchSyncStatus(ctrl.signal);
       if (ctrl.signal.aborted) return;
-      setState("connected");
-      setLastOkAt(new Date());
-      setLastError(null);
-    } catch (e: any) {
+      apply(next);
+    } catch {
       if (ctrl.signal.aborted && inFlight.current !== ctrl) return; // superseded
-      setState("offline");
-      setLastError(e?.name === "AbortError" ? "No answer in 5 s" : e?.message || String(e));
+      setApiDown(true);
     } finally {
       clearTimeout(timer);
       if (inFlight.current === ctrl) {
@@ -82,29 +105,61 @@ export function useConnectionStatus(intervalMs = 30_000): ConnectionStatus {
         setChecking(false);
       }
     }
-  }, []);
+  }, [apply]);
+
+  const sync = useCallback(async () => {
+    setChecking(true);
+    try {
+      apply(await syncNow());
+    } catch {
+      // The failure is in the status the server keeps; show that.
+      await refresh();
+    } finally {
+      setChecking(false);
+    }
+  }, [apply, refresh]);
 
   useEffect(() => {
-    // Local only: nothing to reach, so nothing to poll.
-    if (!configured) return;
-    check();
-    const id = setInterval(check, intervalMs);
+    refresh();
+    const id = setInterval(refresh, intervalMs);
     const onVisible = () => {
-      if (document.visibilityState === "visible") check();
+      if (document.visibilityState === "visible") refresh();
     };
-    window.addEventListener("online", check);
-    window.addEventListener("offline", check);
+    const onOnline = () => void sync();
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", refresh);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(id);
-      window.removeEventListener("online", check);
-      window.removeEventListener("offline", check);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", refresh);
       document.removeEventListener("visibilitychange", onVisible);
       inFlight.current?.abort();
     };
-  }, [check, intervalMs, configured]);
+  }, [refresh, sync, intervalMs]);
 
-  return { configured, state, checking, lastOkAt, lastError, refresh: check };
+  return {
+    configured: status?.configured ?? false,
+    state: status?.state ?? "unknown",
+    status,
+    checking: checking || !!status?.syncing,
+    apiDown,
+    lastSyncedAt: status?.lastSyncedAt ? new Date(status.lastSyncedAt) : null,
+    lastError: status?.lastError ?? null,
+    refresh,
+    syncNow: sync,
+    apply,
+  };
+}
+
+export function SyncStatusProvider({ children, intervalMs = 30_000 }: { children: ReactNode; intervalMs?: number }) {
+  const value = useSyncPoller(intervalMs);
+  return createElement(ConnectionContext.Provider, { value }, children);
+}
+
+/** The shared status (see SyncStatusProvider). */
+export function useConnectionStatus(): ConnectionStatus {
+  return useContext(ConnectionContext);
 }
 
 /** "just now", "3 min ago", "2 h ago", or a clock time for anything older. */

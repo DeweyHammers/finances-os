@@ -13,6 +13,10 @@
  * (`cleanupStaleSandbox`), so the app always opens on the real data. Every
  * route reaches the current file through `getStore()` in shared/db.ts; this
  * module only decides which file that is.
+ *
+ * With sync on (main/sync.ts) the "real" database is the replica of the
+ * cloud: enter dumps its rows into the sandbox file and pauses sync, discard
+ * reopens the replica, keep pushes the sandbox's rows to the cloud first.
  */
 import fs from "fs";
 import path from "path";
@@ -23,6 +27,13 @@ import {
   switchDatabase,
 } from "../shared/db";
 import { getModelByName } from "../shared/data";
+import {
+  backupFilePath,
+  isSyncConfigured,
+  keepSandboxToSync,
+  pauseSyncForSandbox,
+  resumeSyncAfterSandbox,
+} from "./sync";
 
 export const SANDBOX_FILENAME = "sandbox.db";
 
@@ -91,10 +102,16 @@ export async function enterSandbox(): Promise<SandboxStatus> {
   const sandbox = sandboxDbPath();
   // The baseline is counted on the real file before the copy so the two agree.
   baselineTxnCount = await getStore().count(getModelByName("AccountTransaction"));
-  // The copy runs after the real store has closed its file (see switchDatabase)
-  // so it can't catch a half-written page.
-  const real = realDbPath();
-  await switchDatabase(toUrl(sandbox), () => fs.copyFileSync(real, sandbox));
+  if (isSyncConfigured()) {
+    // Synced: the API is on the replica, whose rows are dumped into the plain
+    // sandbox file; sync pauses until Keep/Discard (main/sync.ts).
+    await pauseSyncForSandbox(sandbox);
+  } else {
+    // The copy runs after the real store has closed its file (see
+    // switchDatabase) so it can't catch a half-written page.
+    const real = realDbPath();
+    await switchDatabase(toUrl(sandbox), () => fs.copyFileSync(real, sandbox));
+  }
   enteredAt = new Date().toISOString();
   console.log(`[Sandbox] entered — API now on ${sandbox}`);
   return getSandboxStatus();
@@ -102,7 +119,9 @@ export async function enterSandbox(): Promise<SandboxStatus> {
 
 export async function discardSandbox(): Promise<SandboxStatus> {
   if (!isSandboxActive()) throw new SandboxError("Sandbox is not active");
-  await switchDatabase(getRealDatabaseUrl());
+  // Synced: back on the replica (sync resumes); local: back on the real file.
+  if (isSyncConfigured()) await resumeSyncAfterSandbox();
+  else await switchDatabase(getRealDatabaseUrl());
   enteredAt = null;
   await removeSandboxFile();
   console.log("[Sandbox] discarded — API back on the real database");
@@ -118,16 +137,22 @@ export async function keepSandbox(): Promise<SandboxStatus & { backupPath: strin
   if (!isSandboxActive()) throw new SandboxError("Sandbox is not active");
   const real = realDbPath();
   const sandbox = sandboxDbPath();
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const backupPath = `${real}.${stamp}.bak`;
+  const backupPath = backupFilePath();
 
-  // switchDatabase closes the sandbox store, then runs the copy while nothing
-  // holds either file, then creates the real store (which opens the freshly
-  // overwritten file on its first query).
-  await switchDatabase(getRealDatabaseUrl(), () => {
-    fs.copyFileSync(real, backupPath);
-    fs.copyFileSync(sandbox, real);
-  });
+  if (isSyncConfigured()) {
+    // Synced: the sandbox's rows replace the cloud's and the replica pulls
+    // them (main/sync.ts). Throws — and the sandbox stays active — when the
+    // cloud can't be reached.
+    await keepSandboxToSync(sandbox, backupPath);
+  } else {
+    // switchDatabase closes the sandbox store, then runs the copy while
+    // nothing holds either file, then creates the real store (which opens
+    // the freshly overwritten file on its first query).
+    await switchDatabase(getRealDatabaseUrl(), () => {
+      fs.copyFileSync(real, backupPath);
+      fs.copyFileSync(sandbox, real);
+    });
+  }
   enteredAt = null;
   await removeSandboxFile();
   console.log(`[Sandbox] kept — real database replaced, backup at ${backupPath}`);

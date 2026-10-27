@@ -12,5 +12,17 @@ export { splitStatements, quoteIdent } from "./sql";
 export type { Row, SqlConnection, SqlExecutor, SqlValue } from "./sql";
 export { transformBody, toStorage, fromStorage } from "./coerce";
 export { DataError } from "./errors";
+export {
+  copyDatabase,
+  countDataRows,
+  dumpDatabase,
+  hasNoTables,
+  loadDatabase,
+  loadStatements,
+  schemaStatementsIfNotExists,
+  schemaVersionGate,
+  tablesInFkOrder,
+} from "./transfer";
+export type { DatabaseDump, Statement, TableDump } from "./transfer";
 export type { DataErrorCode } from "./errors";
 export { cuid } from "./cuid";

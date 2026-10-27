@@ -8,17 +8,21 @@
  *      finances-os\database.db in PROD (copied from the empty template.db on
  *      a fresh install), or the test-only FINANCES_OS_TEST_DB_URL override.
  *   2. Hold the swappable connection. Sandbox mode (main/sandbox.ts) copies
- *      the real file and points the API at the copy for a while; every route
- *      reaches whichever file is current through `getStore()`.
- *   3. `switchDatabase(url, beforeConnect)`: close the current file, let the
- *      caller copy / overwrite / delete files while nothing holds them, then
- *      open the next one lazily (on its first query).
+ *      the database and points the API at the copy for a while, and sync
+ *      (main/sync.ts) points it at an embedded replica of the cloud database;
+ *      every route reaches whichever file is current through `getStore()`.
+ *   3. `switchDatabase(target, beforeConnect)`: close the current file, let
+ *      the caller copy / overwrite / delete files while nothing holds them,
+ *      then open the next one lazily (on its first query).
+ *
+ * "Primary" is the database the app returns to after a sandbox: the real
+ * local file, or — once sync is on — the replica. main/sync.ts sets it.
  */
 import { app } from "electron";
 import path from "path";
 import fs from "fs";
 import { DataStore } from "./data";
-import { openLibsql } from "./data/backends/libsql";
+import { openLibsql, type LibsqlConnection, type LibsqlSyncOptions } from "./data/backends/libsql";
 
 const isProd = process.env.NODE_ENV === "production" || (app && app.isPackaged);
 
@@ -96,57 +100,119 @@ if (isProd && app) {
     `file:${path.join(process.cwd(), "prisma/dev.db")}`;
 }
 
-// ── Swappable store (Sandbox mode, Oct 2026) ──────────────────────────────
-// `dbUrl` above is the REAL database. Sandbox mode copies that file and
-// points the API at the copy for a while, so the store the routes talk to
-// has to be replaceable at runtime.
+// ── Swappable store (Sandbox mode, Oct 2026; sync, Phase B) ───────────────
+// `dbUrl` above is the REAL database. Sandbox mode copies it and points the
+// API at the copy for a while; sync points the API at a replica file. So the
+// store the routes talk to has to be replaceable at runtime.
 
 const REAL_DB_URL = dbUrl;
+
+/** Where the API points: a `file:` URL plus how to open it. */
+export interface DatabaseTarget {
+  url: string;
+  /** Open as an embedded replica of this remote (see backends/libsql.ts). */
+  sync?: LibsqlSyncOptions;
+  /** Refuse writes (the offline fallback for a replica whose cloud is unreachable). */
+  readOnly?: boolean;
+}
 
 /** `file:` URL → filesystem path (the URL always uses forward slashes). */
 export function databaseUrlToPath(url: string): string {
   return url.replace(/^file:/, "");
 }
 
-function makeStore(url: string): DataStore {
-  return new DataStore(openLibsql(databaseUrlToPath(url)));
+/** Filesystem path → `file:` URL. */
+export function pathToDatabaseUrl(p: string): string {
+  return `file:${p.split("\\").join("/")}`;
 }
 
-let currentDbUrl = REAL_DB_URL;
-let currentStore: DataStore = makeStore(REAL_DB_URL);
+/**
+ * How a target becomes a connection. Replaceable ONLY by tests (main/sync
+ * tests stand in a plain file for the replica so no network is needed);
+ * the app always uses openLibsql.
+ */
+type ConnectionOpener = (target: DatabaseTarget) => LibsqlConnection;
+let openConnection: ConnectionOpener = (target) =>
+  openLibsql(databaseUrlToPath(target.url), { sync: target.sync, readOnly: target.readOnly });
+
+export function __setConnectionOpenerForTests(opener: ConnectionOpener | null): void {
+  openConnection = opener ?? ((target) =>
+    openLibsql(databaseUrlToPath(target.url), { sync: target.sync, readOnly: target.readOnly }));
+}
+
+function toTarget(target: string | DatabaseTarget): DatabaseTarget {
+  return typeof target === "string" ? { url: target } : target;
+}
+
+function makeStore(target: DatabaseTarget): { store: DataStore; connection: LibsqlConnection } {
+  const connection = openConnection(target);
+  return { store: new DataStore(connection), connection };
+}
+
+let primary: DatabaseTarget = { url: REAL_DB_URL };
+let currentTarget: DatabaseTarget = primary;
+let current = makeStore(primary);
 if (isProd) dbLog("Data layer initialized (libsql)");
 
-/** The store the API is talking to right now (real or sandbox). */
+/** The store the API is talking to right now (real, replica or sandbox). */
 export function getStore(): DataStore {
-  return currentStore;
+  return current.store;
 }
 
-/** `file:` URL of the real database — the one Sandbox copies and restores. */
+/** The connection under the current store (main/sync.ts opens it eagerly). */
+export function getCurrentConnection(): LibsqlConnection {
+  return current.connection;
+}
+
+/** `file:` URL of the real local database file — the one Sandbox copies and sync replaces. */
 export function getRealDatabaseUrl(): string {
   return REAL_DB_URL;
 }
 
 /** `file:` URL of the database currently in use. */
 export function getCurrentDatabaseUrl(): string {
-  return currentDbUrl;
+  return currentTarget.url;
+}
+
+/** The target currently in use (url + how it was opened). */
+export function getCurrentTarget(): DatabaseTarget {
+  return currentTarget;
+}
+
+/** The database the app returns to after a sandbox: the real file, or the replica once synced. */
+export function getPrimaryDatabase(): DatabaseTarget {
+  return primary;
+}
+
+/** Record the primary without switching to it (main/sync.ts). */
+export function setPrimaryDatabase(target: string | DatabaseTarget): void {
+  primary = toTarget(target);
 }
 
 /**
- * Point the API at another SQLite file. The current store is closed first so
+ * Point the API at another database. The current store is closed first so
  * its file handle is released (Windows won't let the sandbox file be deleted
  * or the real file be overwritten while a handle is open), then
  * `beforeConnect` may touch the files, and only then is the new store
  * created. The libsql backend opens its file lazily, on the first query, so
- * nothing holds the new file open until a route actually uses it.
+ * nothing holds the new file open until a route actually uses it — except a
+ * replica, which main/sync.ts opens eagerly to learn whether the cloud is
+ * reachable.
  */
 export async function switchDatabase(
-  url: string,
+  target: string | DatabaseTarget,
   beforeConnect?: () => void,
 ): Promise<void> {
-  await currentStore.close();
+  await current.store.close();
   beforeConnect?.();
-  currentStore = makeStore(url);
-  currentDbUrl = url;
+  const next = toTarget(target);
+  current = makeStore(next);
+  currentTarget = next;
+}
+
+/** `switchDatabase(getPrimaryDatabase())`. */
+export function switchToPrimary(beforeConnect?: () => void): Promise<void> {
+  return switchDatabase(primary, beforeConnect);
 }
 
 /**
@@ -157,10 +223,10 @@ export async function switchDatabase(
  */
 export const prisma = {
   $queryRawUnsafe: <T = any>(sql: string): Promise<T> =>
-    currentStore.raw(sql) as Promise<T>,
+    current.store.raw(sql) as Promise<T>,
   $executeRawUnsafe: async (sql: string): Promise<number> => {
-    await currentStore.raw(sql);
+    await current.store.raw(sql);
     return 0;
   },
-  $disconnect: (): Promise<void> => currentStore.close(),
+  $disconnect: (): Promise<void> => current.store.close(),
 };

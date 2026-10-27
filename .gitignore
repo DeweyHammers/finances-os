@@ -46,3 +46,9 @@ _archived
 # scratch output. The tour's own screenshots live in docs/img/tour/ and ARE
 # committed (all made-up data). prisma/demo.db is covered by `*.db` above.
 /scripts/demo/out/
+
+# Sync (Phase B, plans/phone-app-and-sync.md): the device's cloud URL + encrypted
+# token, and the embedded replica of the cloud database with libsql's side
+# files. Both live beside the database (prisma/ in dev) and never belong in git.
+/prisma/sync.json
+/prisma/replica.db*
