@@ -210,6 +210,11 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
               display: "flex",
               justifyContent: "space-between",
               alignItems: "flex-start",
+              // On a narrow card the TOTAL moves under the label as one piece
+              // instead of "PAY WEEK" / "4 NOW" and "TOTAL:" / "$451.80"
+              // breaking across lines.
+              flexWrap: "wrap",
+              columnGap: 1,
               mb: 1.5,
               px: 1,
               borderBottom: `1px solid ${period.color}33`,
@@ -225,6 +230,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
                   textTransform: "uppercase",
                   letterSpacing: "1.5px",
                   display: "block",
+                  whiteSpace: "nowrap",
                 }}
               >
                 {period.label}
@@ -258,6 +264,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
                 fontWeight: 800,
                 color: "text.secondary",
                 letterSpacing: 0.5,
+                whiteSpace: "nowrap",
               }}
             >
               TOTAL:{" "}

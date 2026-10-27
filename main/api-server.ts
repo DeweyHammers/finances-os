@@ -39,10 +39,17 @@ export function isAllowedOrigin(origin: string, isProd: boolean): boolean {
   return false;
 }
 
+/**
+ * Port the server is actually listening on. `startServer(port)` records it so
+ * the Host check below matches a non-default port (the demo server can run on
+ * another port while the installed app owns 5858); until then it is API_PORT.
+ */
+let listeningPort = API_PORT;
+
 /** Host header must point at the loopback listener (DNS-rebinding guard). */
-export function isAllowedHost(host: string | undefined): boolean {
+export function isAllowedHost(host: string | undefined, port = listeningPort): boolean {
   if (!host) return false;
-  return host === `${API_HOST}:${API_PORT}` || host === `localhost:${API_PORT}`;
+  return host === `${API_HOST}:${port}` || host === `localhost:${port}`;
 }
 
 const app = express();
@@ -387,6 +394,9 @@ app.delete("/api/:resource/:id", async (req: Request, res: Response) => {
 });
 
 export function startServer(port = API_PORT) {
+  // Port 0 = "any free port" (the route tests). Those callers keep sending
+  // Host 127.0.0.1:5858, so the check stays on API_PORT for them.
+  if (port > 0) listeningPort = port;
   // Loopback only — see "Network exposure" at the top of this file. Without
   // the host argument Express listens on every interface (LAN-reachable).
   return app.listen(port, API_HOST, () => {

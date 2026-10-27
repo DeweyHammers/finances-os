@@ -201,7 +201,9 @@ export const IncomesSection = () => {
           startIcon={<AddIcon sx={{ fontSize: 16 }} />}
           onClick={openAdd}
           size="small"
-          sx={{ fontWeight: 700, borderRadius: 2 }}
+          // nowrap + flexShrink 0: on a phone the title wraps, the button never
+          // breaks into "Add" / "Income".
+          sx={{ fontWeight: 700, borderRadius: 2, whiteSpace: "nowrap", flexShrink: 0 }}
         >
           Add Income
         </Button>

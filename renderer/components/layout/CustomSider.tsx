@@ -290,7 +290,12 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
         </Typography>
       </Box>
 
-      <Collapse in={cashOpen} timeout="auto">
+      {/* flexShrink: 0 — MUI Collapse sets `min-height: 0` on its root, so as a
+          flex child of the sider column it was the ONLY item allowed to shrink
+          when the window got short. Its rows then overflowed visibly on top of
+          Payees / Expenses instead of pushing them down (the sider scrolls;
+          nothing should ever shrink). */}
+      <Collapse in={cashOpen} timeout="auto" sx={{ flexShrink: 0 }}>
         <Box>
           {accounts
             .filter((a) => !a.closed)
@@ -371,6 +376,10 @@ const siderSurfaceSx = {
   flexDirection: "column",
   overflowY: "auto",
   overflowX: "hidden",
+  // The column scrolls when it is taller than the window; no row may shrink
+  // (see the Cash <Collapse> note in SiderContent). The `flex: 1` spacer
+  // keeps a 0 basis, so it still collapses to nothing.
+  "& > *": { flexShrink: 0 },
 } as const;
 
 export const CustomSider = () => {

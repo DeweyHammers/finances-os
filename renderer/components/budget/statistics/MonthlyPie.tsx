@@ -158,7 +158,10 @@ export const MonthlyPie = ({
     <Box
       sx={{
         display: "grid",
-        gridTemplateColumns: { xs: "1fr", md: `${SIZE}px 1fr` },
+        // minmax(0, 1fr): a plain 1fr column refuses to go below its content's
+        // minimum width, and the legend used to inherit the donut's 320px
+        // inside a ~270px phone card — clipping every amount on the right.
+        gridTemplateColumns: { xs: "minmax(0, 1fr)", md: `${SIZE}px minmax(0, 1fr)` },
         gap: 4,
         alignItems: { xs: "stretch", md: "center" },
         flex: 1,
@@ -166,16 +169,23 @@ export const MonthlyPie = ({
         overflow: "hidden",
       }}
     >
+      {/* The donut is drawn in a fixed SIZE×SIZE coordinate space (viewBox) and
+          scales down with the card on a phone; all the arc math stays in px. */}
       <Box
         sx={{
           position: "relative",
-          width: SIZE,
-          height: SIZE,
+          width: `min(${SIZE}px, 100%)`,
+          aspectRatio: "1 / 1",
           mx: "auto",
           flexShrink: 0,
         }}
       >
-        <svg width={SIZE} height={SIZE} style={{ display: "block" }}>
+        <svg
+          viewBox={`0 0 ${SIZE} ${SIZE}`}
+          width="100%"
+          height="100%"
+          style={{ display: "block" }}
+        >
           {slices.map(({ item, start, end }) => {
             const isHover = hoverItemId === item.itemId;
             const r = isHover ? HOVER_RADIUS : RADIUS;
@@ -214,7 +224,9 @@ export const MonthlyPie = ({
             top: "50%",
             left: "50%",
             transform: "translate(-50%, -50%)",
-            width: INNER_RADIUS * 2 - 16,
+            // Percentage of the (scaled) donut, so the label still fits the
+            // hole when the whole thing is drawn smaller than SIZE.
+            width: `${((INNER_RADIUS * 2 - 16) / SIZE) * 100}%`,
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
@@ -310,9 +322,11 @@ export const MonthlyPie = ({
                 sx={{
                   display: "grid",
                   gridTemplateColumns: "auto 1fr auto auto",
-                  gap: 1.5,
+                  // Tighter gaps and no reserved column widths on a phone so
+                  // the item name keeps as much room as possible.
+                  gap: { xs: 1, md: 1.5 },
                   alignItems: "center",
-                  px: 1.5,
+                  px: { xs: 1, md: 1.5 },
                   py: 0.75,
                   borderRadius: 1,
                   cursor: "pointer",
@@ -350,7 +364,7 @@ export const MonthlyPie = ({
                     fontSize: "0.75rem",
                     color: "text.secondary",
                     fontVariantNumeric: "tabular-nums",
-                    minWidth: 48,
+                    minWidth: { xs: 0, md: 48 },
                     textAlign: "right",
                   }}
                 >
@@ -362,7 +376,7 @@ export const MonthlyPie = ({
                     color: "#cbd5e1",
                     fontWeight: 700,
                     fontVariantNumeric: "tabular-nums",
-                    minWidth: 90,
+                    minWidth: { xs: 0, md: 90 },
                     textAlign: "right",
                   }}
                 >

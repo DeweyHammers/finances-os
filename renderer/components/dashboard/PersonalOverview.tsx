@@ -212,6 +212,10 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
               display: "flex",
               justifyContent: "space-between",
               alignItems: "flex-start",
+              // Same wrapping rule as BillsOverview: the TOTAL drops under the
+              // label as one piece on a narrow card.
+              flexWrap: "wrap",
+              columnGap: 1,
               mb: 1.5,
               px: 1,
               borderBottom: `1px solid ${period.color}33`,
@@ -227,6 +231,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
                   textTransform: "uppercase",
                   letterSpacing: "1.5px",
                   display: "block",
+                  whiteSpace: "nowrap",
                 }}
               >
                 {period.label}
@@ -256,7 +261,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
             </Box>
             <Typography
               variant="caption"
-              sx={{ fontWeight: 800, color: "text.secondary", letterSpacing: 0.5 }}
+              sx={{ fontWeight: 800, color: "text.secondary", letterSpacing: 0.5, whiteSpace: "nowrap" }}
             >
               TOTAL:{" "}
               <span style={{ color: "white" }}>
