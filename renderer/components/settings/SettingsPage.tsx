@@ -88,10 +88,8 @@ const Section = ({ title, blurb, children }: { title: string; blurb: string; chi
     <Typography sx={{ color: "text.secondary", fontSize: "0.85rem", mb: 2 }}>{blurb}</Typography>
     <Box
       sx={{
-        bgcolor: "rgba(30, 41, 59, 0.55)",
-        border: "1px solid rgba(129, 140, 248, 0.15)",
-        borderRadius: 3,
-        px: { xs: 2, sm: 3 },
+        // Rows sit directly on the panel (Discord-style); the dividers do the
+        // separating, so no second card inside the card.
         "& > hr:last-child": { display: "none" },
       }}
     >
@@ -566,17 +564,32 @@ export const SettingsPage = ({ tab }: { tab?: string }) => {
         </Box>
       </Box>
 
-      {/* ── Tabs + the open section ── */}
+      {/* ── Tabs + the open section ──
+          One panel, like Obsidian's settings window: the tab column on a
+          slightly darker ground, the open section beside it. */}
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "200px minmax(0, 1fr)" },
-          gap: { xs: 2, md: 4 },
-          alignItems: "start",
+          gridTemplateColumns: { xs: "minmax(0, 1fr)", md: "220px minmax(0, 1fr)" },
+          alignItems: "stretch",
+          bgcolor: "rgba(30, 41, 59, 0.45)",
+          border: "1px solid rgba(129, 140, 248, 0.15)",
+          borderRadius: 3,
+          overflow: "hidden",
+          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.25)",
         }}
       >
-        <TabNav active={active} onSelect={selectTab} />
-        {sections[active]}
+        <Box
+          sx={{
+            p: { xs: 1.5, md: 2 },
+            bgcolor: "rgba(15, 23, 42, 0.5)",
+            borderRight: { md: "1px solid rgba(255,255,255,0.06)" },
+            borderBottom: { xs: "1px solid rgba(255,255,255,0.06)", md: "none" },
+          }}
+        >
+          <TabNav active={active} onSelect={selectTab} />
+        </Box>
+        <Box sx={{ p: { xs: 2, md: 4 }, minWidth: 0, minHeight: { md: 420 } }}>{sections[active]}</Box>
       </Box>
 
       <Snackbar
