@@ -35,6 +35,8 @@ npx prisma generate  # Regenerate the client after a schema change — CLOSE the
 
 **NEVER run `npm run db:push` without explicit user instruction.** DEV is for experimentation; PROD changes are deliberate.
 
+**Releases are built by GitHub Actions, not on this PC.** `.github/workflows/release.yml` runs on a hosted Windows runner when a `v*` tag is pushed: `npm ci` → `npm test` → `npm run build` → GitHub Release with the installer attached; it fails fast if the tag doesn't match `package.json`'s version. Reason (Oct 26 2026): Windows Smart App Control is enforced on the dev PC and blocks electron-builder from executing its fresh unsigned NSIS stub (`spawn UNKNOWN` during `computeScriptAndSignUninstaller`; Code Integrity event 3077), so `npm run build` dies after the renderer/main build. The installed app itself still runs. Don't try to turn Smart App Control off from here — it's one-way on Windows 11 and the user's call. To release: bump the version, merge to main, `git tag vX.Y.Z && git push origin vX.Y.Z`, then install the exe from the Release page.
+
 ## Demo tour (docs/ → GitHub Pages)
 
 `docs/index.html` is a public step-by-step picture tour (served by GitHub Pages from `main` → `/docs`; the README links to it). Its screenshots in `docs/img/tour/` are generated, never hand-made:

@@ -199,6 +199,11 @@
     <p>Big bills get split across several paychecks so no single week gets crushed, and every week stays above your surplus target.</p>
   </div>
   <div class="feature">
+    <div class="icon-tile" style="--c: var(--amber)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M13 11.33 18 18H6l5-6.67V6h2m2.96-2H8.04c-.42 0-.65.48-.39.81L9 6.5v4.17L3.2 18.4c-.49.66-.02 1.6.8 1.6h16c.82 0 1.29-.94.8-1.6L15 10.67V6.5l1.35-1.69c.26-.33.03-.81-.39-.81"/></svg></div>
+    <h3>Try it in a sandbox</h3>
+    <p>Wondering what cancelling a bill would do? Switch to a copy of your data, change anything, re-optimize, then keep it or throw it away.</p>
+  </div>
+  <div class="feature">
     <div class="icon-tile" style="--c: var(--green)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 2v20c-5.07-.5-9-4.79-9-10s3.93-9.5 9-10m2.03 0v8.99H22c-.47-4.74-4.24-8.52-8.97-8.99m0 11.01V22c4.74-.47 8.5-4.25 8.97-8.99z"/></svg></div>
     <h3>Zero-based Plan</h3>
     <p>Give every dollar a job. Auto-assign funds each bill and allowance with exactly what this payday owes it.</p>
@@ -225,6 +230,7 @@
       <li><a href="#plan">Build your Plan</a></li>
       <li><a href="#payday">Payday: Auto-assign</a></li>
       <li><a href="#spend">Track your spending</a></li>
+      <li><a href="#sandbox">What if? Try a sandbox</a></li>
       <li><a href="#stats">Look back</a></li>
     </ol>
   </nav>
@@ -362,13 +368,25 @@
     </section>
 
     <!-- 12 -->
+    <section class="step" id="sandbox" style="--c: var(--amber)">
+      <div class="step-head"><div class="num">12</div><div><h2>What if? Try a sandbox</h2><p class="where">Overview → Try a sandbox</p></div></div>
+      <p>At the end of the month Alex wonders: what would next month look like without the gym? <strong>Try a sandbox</strong> switches the whole app onto a <em>copy</em> of the data. An amber banner stays on every page while it's active. Alex deletes the gym membership, clicks Optimize, and flips to November to see the result, all without touching the real numbers.</p>
+      <p>When you're done, <strong>Discard</strong> throws the copy away and the app goes straight back to your real data. If you like what you see, <strong>Keep</strong> makes it real instead (a backup of the old data is saved first). Closing the app always discards the sandbox.</p>
+      <div class="why"><strong>Why it matters:</strong> you can test a decision before you make it, and a wrong experiment costs nothing.</div>
+      <div class="pair">
+        <figure><button data-full="img/tour/23-sandbox-whatif.png"><img loading="lazy" src="img/tour/23-sandbox-whatif.png" alt="Overview in sandbox mode showing November with the gym bill removed, under an amber Sandbox banner." width="1920" height="1080"></button><figcaption>November without the gym, on a copy of the data.</figcaption></figure>
+        <figure><button data-full="img/tour/24-sandbox-discard.png"><img loading="lazy" src="img/tour/24-sandbox-discard.png" alt="Discard the sandbox confirmation dialog." width="1920" height="1080"></button><figcaption>Discard puts everything back the way it was.</figcaption></figure>
+      </div>
+    </section>
+
+    <!-- 13 -->
     <section class="step" id="stats" style="--c: var(--rose)">
-      <div class="step-head"><div class="num">12</div><div><h2>Look back</h2><p class="where">Statistics · Overview</p></div></div>
+      <div class="step-head"><div class="num">13</div><div><h2>Look back</h2><p class="where">Statistics · Overview</p></div></div>
       <p>Statistics breaks spending (and income) down by item and payee, month by month and across the year. Click any bar to jump into that month.</p>
       <div class="why"><strong>Why it matters:</strong> a plan is only as good as what actually happened. Seeing where October really went makes November's plan better.</div>
       <div class="pair">
-        <figure><button data-full="img/tour/23-statistics-month.png"><img loading="lazy" src="img/tour/23-statistics-month.png" alt="Statistics month view: donut chart of October spending by item." width="1920" height="1080"></button><figcaption>October, item by item.</figcaption></figure>
-        <figure><button data-full="img/tour/24-statistics-year.png"><img loading="lazy" src="img/tour/24-statistics-year.png" alt="Statistics yearly view: stacked bars by month." width="1920" height="1080"></button><figcaption>The year so far.</figcaption></figure>
+        <figure><button data-full="img/tour/25-statistics-month.png"><img loading="lazy" src="img/tour/25-statistics-month.png" alt="Statistics month view: donut chart of October spending by item." width="1920" height="1080"></button><figcaption>October, item by item.</figcaption></figure>
+        <figure><button data-full="img/tour/26-statistics-year.png"><img loading="lazy" src="img/tour/26-statistics-year.png" alt="Statistics yearly view: stacked bars by month." width="1920" height="1080"></button><figcaption>The year so far.</figcaption></figure>
       </div>
       <figure><button data-full="img/tour/22-overview-month-end.png"><img loading="lazy" src="img/tour/22-overview-month-end.png" alt="Overview at month end, with past pay weeks locked." width="1920" height="1080"></button><figcaption>The Overview on October 30th, with the current pay week marked NOW. Weeks that have started are locked, so re-optimizing never rewrites money that's already been handed out.</figcaption></figure>
     </section>
