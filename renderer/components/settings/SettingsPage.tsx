@@ -417,7 +417,11 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
         <Button
           variant="outlined"
           size="small"
-          onClick={() => router.push("/Income")}
+          onClick={() => {
+            // Leaving for another page: the popup closes behind the navigation.
+            onClose?.();
+            router.push("/Income");
+          }}
           sx={{ fontWeight: 700, borderRadius: 2, whiteSpace: "nowrap" }}
         >
           Open Income
