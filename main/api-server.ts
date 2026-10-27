@@ -36,7 +36,26 @@ export const API_PORT = 5858;
 export function isAllowedOrigin(origin: string, isProd: boolean): boolean {
   if (origin.startsWith("app://")) return true;
   if (!isProd && /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) return true;
+  // Hosted mode (server/index.ts): the UI is served from the same origin as
+  // the API, so its requests carry that origin. Only the hosts the operator
+  // listed are accepted; https only once NODE_ENV=production.
+  for (const host of publicHosts()) {
+    if (origin === `https://${host}`) return true;
+    if (!isProd && origin === `http://${host}`) return true;
+  }
   return false;
+}
+
+/**
+ * Hosts (host or host:port, exact match) the server may be reached as when it
+ * runs in hosted mode — set by server/index.ts from FINANCES_OS_PUBLIC_HOSTS.
+ * Empty in the Electron app, where only the loopback is ever allowed.
+ */
+export function publicHosts(): string[] {
+  return (process.env.FINANCES_OS_PUBLIC_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 /**
@@ -49,10 +68,13 @@ let listeningPort = API_PORT;
 /** Host header must point at the loopback listener (DNS-rebinding guard). */
 export function isAllowedHost(host: string | undefined, port = listeningPort): boolean {
   if (!host) return false;
-  return host === `${API_HOST}:${port}` || host === `localhost:${port}`;
+  if (host === `${API_HOST}:${port}` || host === `localhost:${port}`) return true;
+  return publicHosts().includes(host.toLowerCase());
 }
 
-const app = express();
+// Exported so server/index.ts (hosted mode) can mount the renderer's static
+// export on the same Express app. The Electron app never touches it directly.
+export const app = express();
 app.use(express.json());
 
 // Origin / Host gate + CORS. Runs before every route (and before preflight
@@ -393,13 +415,14 @@ app.delete("/api/:resource/:id", async (req: Request, res: Response) => {
   }
 });
 
-export function startServer(port = API_PORT) {
+export function startServer(port = API_PORT, host = API_HOST) {
   // Port 0 = "any free port" (the route tests). Those callers keep sending
   // Host 127.0.0.1:5858, so the check stays on API_PORT for them.
   if (port > 0) listeningPort = port;
-  // Loopback only — see "Network exposure" at the top of this file. Without
-  // the host argument Express listens on every interface (LAN-reachable).
-  return app.listen(port, API_HOST, () => {
-    console.log(`API Server running on http://${API_HOST}:${port}`);
+  // Loopback only by default — see "Network exposure" at the top of this
+  // file. Only server/index.ts (hosted mode, behind its own login) passes
+  // another bind address; the Electron app never does.
+  return app.listen(port, host, () => {
+    console.log(`API Server running on http://${host}:${port}`);
   });
 }
