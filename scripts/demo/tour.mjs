@@ -15,6 +15,7 @@
 // through the real UI forms (so the tour shows the form); the rest go in
 // through the same REST API the forms use.
 import path from "node:path";
+import fs from "node:fs";
 import { execSync } from "node:child_process";
 import { launch } from "./cdp.mjs";
 
@@ -72,6 +73,11 @@ async function shot(page, name) {
   shotNo++;
   const file = path.join(OUT, `${String(shotNo).padStart(2, "0")}-${name}.png`);
   await page.shot(file);
+  // The page's text next to every picture (scripts/demo/out/ is gitignored):
+  // docs/index.html quotes numbers from these shots, so this is where to read
+  // them after a re-run instead of squinting at the PNGs.
+  fs.mkdirSync(path.join("scripts", "demo", "out"), { recursive: true });
+  fs.writeFileSync(path.join("scripts", "demo", "out", `${name}.txt`), await page.text());
   console.log(`  📸 ${file}`);
 }
 
@@ -296,6 +302,38 @@ try {
   await shot(page, "cash-ledger");
   await page.goto("/Overview");
   await shot(page, "overview-month-end");
+
+  console.log("Step 11 · what if? (sandbox)");
+  // Alex wonders what cancelling the gym would do to next month. Try it on a
+  // COPY of the data: "Try a sandbox" copies the database and reloads the page
+  // with the amber banner; the real data is untouched until Keep.
+  await page.clickText("Try a sandbox");
+  await page.sleep(1500);
+  await page.settle();
+  await waitForText(page, /You're working on a copy/);
+  const gym = (await api("GET", "Bill")).find((b) => b.name === "Gym Membership");
+  await api("DELETE", `Bill/${gym.id}`);
+  await page.goto("/Overview");
+  await waitForText(page, /Bills were added or updated/);
+  await page.clickText("Optimize");
+  await page.settle(2000, 180000);
+  await waitForNoText(page, /Bills were added or updated|Optimize failed/, 60000);
+  await page.sleep(3500);
+  // November is where the change shows (October's weeks are all locked).
+  await page.click('button:has(svg[data-testid="NavigateNextIcon"])');
+  await page.sleep(800);
+  await page.settle();
+  await shot(page, "sandbox-whatif");
+  await page.clickText("Discard");
+  await page.sleep(600);
+  await page.settle();
+  await shot(page, "sandbox-discard");
+  await page.clickText("Discard changes");
+  await page.sleep(1500);
+  await page.settle();
+  await page.goto("/Overview");
+  await waitForNoText(page, /You're working on a copy/);
+
   await page.goto("/Statistics");
   await page.clickText("Month-to-Month");
   await shot(page, "statistics-month");
