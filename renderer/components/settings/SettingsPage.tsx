@@ -259,18 +259,29 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
   const { mutate: updateSettings } = useUpdate();
   const remoteCents = Number((settingsQuery.data?.data as any)?.wifeWeeklyTargetCents ?? 30000);
   const [surplusDraft, setSurplusDraft] = useState<string | null>(null);
+  // Cents sent by the last Save, until the server reports them back. The
+  // draft stays on screen meanwhile: clearing it on Save showed the OLD
+  // stored amount for the length of the round trip.
+  const [surplusPending, setSurplusPending] = useState<number | null>(null);
   const surplusValue = surplusDraft ?? String(fromCents(remoteCents));
   const surplusDirty = surplusDraft !== null && toCents(surplusDraft) !== remoteCents;
   const saveSurplus = () => {
     if (!surplusDirty) return;
+    const cents = toCents(surplusValue);
+    setSurplusPending(cents);
     updateSettings({
       resource: "AppSettings",
       id: "global",
-      values: { wifeWeeklyTargetCents: toCents(surplusValue) },
+      values: { wifeWeeklyTargetCents: cents },
       successNotification: false,
     });
-    setSurplusDraft(null);
   };
+  useEffect(() => {
+    if (surplusPending !== null && remoteCents === surplusPending) {
+      setSurplusPending(null);
+      setSurplusDraft(null);
+    }
+  }, [remoteCents, surplusPending]);
 
   // Backups
   const [backups, setBackups] = useState<BackupInfo | null>(cachedBackups);
