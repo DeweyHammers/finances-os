@@ -25,9 +25,10 @@ export const SettingsDialog = () => {
       slotProps={{
         paper: {
           sx: {
-            width: "calc(100vw - 48px)",
-            height: "calc(100vh - 48px)",
-            maxWidth: 1500,
+            // Large but not wall-to-wall: a clear margin of page around it.
+            width: "min(calc(100vw - 96px), 1240px)",
+            height: "min(calc(100vh - 96px), 820px)",
+            maxWidth: "none",
             m: 0,
             bgcolor: "#0f172a",
             backgroundImage: "none",

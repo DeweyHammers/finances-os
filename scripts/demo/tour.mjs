@@ -308,11 +308,9 @@ try {
   // COPY of the data: "Try a sandbox" (Settings -> Data) copies the database
   // and reloads the page with the amber banner; the real data is untouched
   // until Keep.
-  // At 1920 wide Settings is a popup: the route opens it a moment after
-  // landing, so give the dialog time to fade in before looking for the button.
+  // The /Settings URL is the page form of Settings on every width (in-app it
+  // is a popup on desktop), so the tour can land on the Data tab directly.
   await page.goto("/Settings?tab=data");
-  await page.sleep(1000);
-  await page.settle();
   await page.clickText("Try a sandbox");
   await page.sleep(1500);
   await page.settle();

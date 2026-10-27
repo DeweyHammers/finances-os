@@ -589,7 +589,9 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
               <CloseIcon />
             </IconButton>
           </Tooltip>
-          <Box sx={{ maxWidth: 860, pr: 7 }}>{sections[active]}</Box>
+          {/* Rows span the whole column (label left, control right); only the
+              close button's corner is kept clear. */}
+          <Box sx={{ pr: 7 }}>{sections[active]}</Box>
         </Box>
         {toastEl}
       </>
