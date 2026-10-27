@@ -1,9 +1,12 @@
 "use client";
 
 /**
- * SettingsPage — /Settings?tab=…, laid out like Obsidian's and Discord's
+ * SettingsPage — the Settings content, laid out like Obsidian's and Discord's
  * settings: a narrow nav of tabs on the left, ONE section at a time on the
- * right as a card of rows (label + explanation left, control right).
+ * right as a panel of rows (label + explanation left, control right). On a
+ * desktop-width window it is shown inside SettingsDialog (a popup, with the
+ * close button); below the sider breakpoint it is the /Settings page (see
+ * SettingsDialogContext for the rule).
  *
  *  general  — version + "Check for updates" (GitHub Releases), help, issues
  *  budget   — surplus target (the ONLY place it is edited; the Overview pill
@@ -13,9 +16,9 @@
  *  sync     — run mode, "Local only" until a sync server exists, and what
  *             sync will be (plans/phone-app-and-sync.md): no controls yet
  *
- * The open tab lives in the URL (`?tab=budget`), read by app/Settings/
- * page.tsx, so links can land on a tab and a reload keeps it. Below the
- * `md` breakpoint the nav becomes a horizontal strip above the card.
+ * The open tab is a prop: dialog state in the popup, the `?tab=` query on
+ * the page (read by app/Settings/page.tsx). Below the `md` breakpoint the
+ * nav becomes a horizontal strip above the rows.
  *
  * Non-resource calls go through lib/meta-api.ts; the surplus target goes
  * through Refine like everywhere else.
@@ -40,6 +43,7 @@ import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import BackupIcon from "@mui/icons-material/Backup";
 import SettingsIcon from "@mui/icons-material/Settings";
+import CloseIcon from "@mui/icons-material/Close";
 import TuneIcon from "@mui/icons-material/Tune";
 import SavingsIcon from "@mui/icons-material/Savings";
 import StorageIcon from "@mui/icons-material/Storage";
@@ -62,10 +66,9 @@ import { useConnectionStatus } from "../../lib/use-connection-status";
 import { useSandbox } from "../sandbox/SandboxContext";
 import { SandboxButton } from "../sandbox/SandboxButton";
 import { ConnectionStatus } from "../layout/ConnectionStatus";
+import type { SettingsTab } from "./SettingsDialogContext";
 
 // ── Tabs ────────────────────────────────────────────────────────────────────
-
-export type SettingsTab = "general" | "budget" | "data" | "sync";
 
 const TABS: { id: SettingsTab; label: string; blurb: string; icon: React.ReactNode }[] = [
   { id: "general", label: "General", blurb: "Version, updates and help.", icon: <TuneIcon /> },
@@ -73,11 +76,6 @@ const TABS: { id: SettingsTab; label: string; blurb: string; icon: React.ReactNo
   { id: "data", label: "Data", blurb: "Where your data lives, backups and the sandbox.", icon: <StorageIcon /> },
   { id: "sync", label: "Phone & sync", blurb: "This device, other devices and what sync will be.", icon: <SyncIcon /> },
 ];
-
-/** The tab for a `?tab=` value; anything unknown opens General. */
-function resolveTab(value: string | undefined): SettingsTab {
-  return (TABS.find((t) => t.id === value)?.id ?? "general") as SettingsTab;
-}
 
 // ── Layout helpers ──────────────────────────────────────────────────────────
 
@@ -214,13 +212,16 @@ const linkButton = {
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
-export const SettingsPage = ({ tab }: { tab?: string }) => {
+interface SettingsPageProps {
+  tab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
+  /** Present inside the popup: renders the close button. Absent on the page form. */
+  onClose?: () => void;
+}
+
+export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: SettingsPageProps) => {
   const router = useRouter();
-  const active = resolveTab(tab);
-  const activeTab = TABS.find((t) => t.id === active)!;
-  // The tab is URL state so links (Overview's surplus pill → Budget) and
-  // reloads land on the right section.
-  const selectTab = (next: SettingsTab) => router.push(`/Settings?tab=${next}`);
+  const activeTab = TABS.find((t) => t.id === active) ?? TABS[0];
 
   // App facts
   const [meta, setMeta] = useState<AppMeta | null>(null);
@@ -525,6 +526,77 @@ export const SettingsPage = ({ tab }: { tab?: string }) => {
 
   const sections: Record<SettingsTab, React.ReactNode> = { general, budget, data, sync };
 
+  const toastEl = (
+    <Snackbar
+      open={toastOpen}
+      autoHideDuration={4000}
+      onClose={() => setToastOpen(false)}
+      message={toastMsg}
+      anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      slots={{ transition: Fade }}
+      slotProps={{ transition: { onExited: () => setToastMsg("") } as any }}
+    />
+  );
+
+  // ── Popup form (desktop) ──
+  // Discord's layout: the tab column flush against the left edge, the open
+  // section filling the rest, the close button in the top-right corner. No
+  // hero header and no outer margins — the window edge is the frame.
+  if (onClose) {
+    return (
+      <>
+        <Box
+          sx={{
+            width: 240,
+            flexShrink: 0,
+            bgcolor: "rgba(15, 23, 42, 0.6)",
+            borderRight: "1px solid rgba(255,255,255,0.06)",
+            p: 2,
+            pt: 3,
+            overflowY: "auto",
+          }}
+        >
+          <Typography
+            id="settings-dialog-title"
+            sx={{
+              px: 1.5,
+              pb: 1,
+              fontSize: "0.72rem",
+              fontWeight: 900,
+              letterSpacing: 1.5,
+              textTransform: "uppercase",
+              color: "text.secondary",
+            }}
+          >
+            Settings
+          </Typography>
+          <TabNav active={active} onSelect={selectTab} />
+        </Box>
+        <Box sx={{ flex: 1, minWidth: 0, overflowY: "auto", position: "relative", px: 5, py: 4 }}>
+          <Tooltip title="Close (Esc)">
+            <IconButton
+              onClick={onClose}
+              aria-label="Close settings"
+              sx={{
+                position: "absolute",
+                top: 20,
+                right: 24,
+                color: "#94a3b8",
+                border: "1px solid rgba(255,255,255,0.1)",
+                "&:hover": { color: "white", bgcolor: "rgba(129, 140, 248, 0.12)" },
+              }}
+            >
+              <CloseIcon />
+            </IconButton>
+          </Tooltip>
+          <Box sx={{ maxWidth: 860, pr: 7 }}>{sections[active]}</Box>
+        </Box>
+        {toastEl}
+      </>
+    );
+  }
+
+  // ── Page form (below the sider breakpoint) ──
   return (
     <Box
       sx={{
@@ -551,7 +623,7 @@ export const SettingsPage = ({ tab }: { tab?: string }) => {
         >
           <SettingsIcon sx={{ color: "white", fontSize: "1.8rem" }} />
         </Box>
-        <Box>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
           <Typography
             variant="h4"
             sx={{ fontWeight: 900, letterSpacing: "-1px", color: "white", fontSize: { xs: "1.6rem", sm: "2.125rem" } }}
@@ -565,8 +637,8 @@ export const SettingsPage = ({ tab }: { tab?: string }) => {
       </Box>
 
       {/* ── Tabs + the open section ──
-          One panel, like Obsidian's settings window: the tab column on a
-          slightly darker ground, the open section beside it. */}
+          One panel: the tab strip on a slightly darker ground, the open
+          section below it. */}
       <Box
         sx={{
           display: "grid",
@@ -592,15 +664,7 @@ export const SettingsPage = ({ tab }: { tab?: string }) => {
         <Box sx={{ p: { xs: 2, md: 4 }, minWidth: 0, minHeight: { md: 420 } }}>{sections[active]}</Box>
       </Box>
 
-      <Snackbar
-        open={toastOpen}
-        autoHideDuration={4000}
-        onClose={() => setToastOpen(false)}
-        message={toastMsg}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
-        slots={{ transition: Fade }}
-        slotProps={{ transition: { onExited: () => setToastMsg("") } as any }}
-      />
+      {toastEl}
     </Box>
   );
 };

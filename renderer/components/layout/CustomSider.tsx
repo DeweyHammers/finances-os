@@ -47,6 +47,8 @@ import AddIcon from "@mui/icons-material/Add";
 import SettingsIcon from "@mui/icons-material/Settings";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { ConnectionStatus } from "./ConnectionStatus";
+import { useSettingsDialog } from "../settings/SettingsDialogContext";
+import { SIDER_BREAKPOINT } from "../../lib/constants";
 import { useList } from "@refinedev/core";
 import { computeAccountBalance } from "../../lib/budget-utils";
 import { formatMoney } from "../../lib/cents";
@@ -59,8 +61,9 @@ export const SIDER_WIDTH = 260;
 
 /** MUI breakpoint key below which the sider becomes a drawer. `md` = 900px.
  *  Shared with MobileTopBar so the hamburger appears exactly when the column
- *  disappears — never both, never neither. */
-export const SIDER_BREAKPOINT = "md" as const;
+ *  disappears — never both, never neither. Defined in lib/constants.ts and
+ *  re-exported here for the existing importers. */
+export { SIDER_BREAKPOINT };
 
 // ── NavLeaf ──
 // Single clickable nav row. Handles the "am I the active route?" highlight and
@@ -364,9 +367,54 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
       {/* Sync status — renders nothing until a sync server is configured, and
           sits ABOVE Settings so it is never in the way of that last click. */}
       <ConnectionStatus />
-      <NavLeaf href="/Settings" label="Settings" icon={<SettingsIcon />} />
+      {/* Settings is a popup over the current page, not a route. */}
+      <SettingsLeaf />
       <Box sx={{ height: 16 }} />
     </>
+  );
+};
+
+// ── SettingsLeaf ──
+// Looks like a NavLeaf but goes through the Settings context: a popup on a
+// desktop-width window, the /Settings page below the breakpoint (see
+// components/settings/SettingsDialogContext.tsx). Highlighted while the
+// popup is open or the page is showing.
+const SettingsLeaf = () => {
+  const { open, asPage, openSettings } = useSettingsDialog();
+  const pathname = usePathname();
+  const onPage = asPage && ((pathname || "/").replace(/\/index\.html$/, "") || "/").startsWith("/Settings");
+  const active = open || onPage;
+  return (
+    <Box
+      role="button"
+      tabIndex={0}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      onClick={() => openSettings()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") openSettings();
+      }}
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 1.5,
+        px: 2,
+        py: 1.25,
+        mx: 1.5,
+        my: 0.25,
+        borderRadius: "8px",
+        cursor: "pointer",
+        bgcolor: active ? "rgba(129, 140, 248, 0.15)" : "transparent",
+        color: active ? "primary.light" : "#cbd5e1",
+        "&:hover": {
+          bgcolor: active ? "rgba(129, 140, 248, 0.20)" : "rgba(129, 140, 248, 0.08)",
+        },
+        "& svg": { color: active ? "primary.light" : "#94a3b8", fontSize: "1.2rem" },
+      }}
+    >
+      <SettingsIcon />
+      <Typography sx={{ fontSize: "0.95rem", fontWeight: 600 }}>Settings</Typography>
+    </Box>
   );
 };
 

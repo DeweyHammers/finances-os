@@ -7,21 +7,22 @@
  * The pay-week cards are judged against this number, so it stays in view
  * here, but it is edited in ONE place only: Settings → Budget (user decision,
  * Oct 27 2026 — until then the pill opened an inline editor). Clicking the
- * pill opens that tab. Value comes from `AppSettings.wifeWeeklyTargetCents`
+ * pill opens the Settings popup on that tab. Value comes from
+ * `AppSettings.wifeWeeklyTargetCents`
  * (DB column name kept for backward compat), default $300.
  */
 
 import { Box, Tooltip, Typography } from "@mui/material";
 import TrackChangesIcon from "@mui/icons-material/TrackChanges";
 import { useOne } from "@refinedev/core";
-import { useRouter } from "next/navigation";
 import { fromCents } from "../../lib/cents";
 import { tooltipStyleProps, TooltipBody, TooltipTitle } from "../../lib/tooltip-styles";
+import { useSettingsDialog } from "../settings/SettingsDialogContext";
 
 const ACCENT = "#818cf8";
 
 export const SurplusTargetPill = () => {
-  const router = useRouter();
+  const { openSettings } = useSettingsDialog();
   const { query } = useOne({
     resource: "AppSettings",
     id: "global",
@@ -49,7 +50,7 @@ export const SurplusTargetPill = () => {
       <Box
         component="button"
         aria-label="Surplus target — change it in Settings"
-        onClick={() => router.push("/Settings?tab=budget")}
+        onClick={() => openSettings("budget")}
         sx={{
           all: "unset",
           cursor: "pointer",

@@ -49,6 +49,8 @@ import { COLORS } from "../lib/constants";
 import { API_URL } from "../lib/api-url";
 import { SandboxProvider } from "../components/sandbox/SandboxContext";
 import { SandboxBanner } from "../components/sandbox/SandboxBanner";
+import { SettingsDialogProvider } from "../components/settings/SettingsDialogContext";
+import { SettingsDialog } from "../components/settings/SettingsDialog";
 
 // IPC bridge address — the Electron main process spins up an in-memory REST
 // server on this port that translates HTTP calls into Prisma queries against
@@ -262,6 +264,7 @@ function App({ children }: { children: ReactNode }) {
           warnWhenUnsavedChanges: false,
         }}
       >
+        <SettingsDialogProvider>
         <ThemedLayout
           Header={CustomHeader}
           Sider={CustomSider}
@@ -288,6 +291,10 @@ function App({ children }: { children: ReactNode }) {
           <SandboxBanner />
           {children}
         </ThemedLayout>
+        {/* Settings popup (desktop widths); the sider's Settings item and the
+            Overview's surplus pill open it — see components/settings. */}
+        <SettingsDialog />
+        </SettingsDialogProvider>
         {/* KBar command palette (Cmd/Ctrl+K) — the provider wraps everything
             in <Providers> below; this renderer just mounts the overlay. */}
         <RefineKbar />
