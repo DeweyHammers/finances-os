@@ -1,14 +1,22 @@
 "use client";
 
 /**
- * ConnectionStatus — the small "sync icon" row at the bottom of the sider
- * (and reused inside Settings → Sync). A coloured dot plus two short lines:
- * green "Connected · checked just now", red "Offline · last seen 10:42",
- * amber-pulsing while a check is in flight. Clicking it re-checks.
+ * ConnectionStatus — the sync status row: a coloured dot plus two short
+ * lines, green "Connected · checked just now", red "Offline · last seen
+ * 10:42", amber-pulsing while a check is in flight.
+ *
+ * It renders NOTHING until a sync server is configured (see
+ * useConnectionStatus): on a local-only install there is no server to report
+ * on, so the sider shows no row and Settings → Phone & sync says "Local
+ * only" instead. Once it shows, the row sits just ABOVE Settings in the
+ * sider as a plain status line — no hover highlight, not a button — so the
+ * pointer never trips over it on the way to Settings (user feedback,
+ * Oct 27 2026). Only the dot is interactive: hovering it explains the state,
+ * clicking it re-checks.
  *
  * Shares `useConnectionStatus` with the Settings page so the two can never
- * disagree. See plans/phone-app-and-sync.md for how this slot grows into
- * the sync status once the shared database exists.
+ * disagree. See plans/phone-app-and-sync.md for how this grows into the
+ * synced / syncing / offline states once the shared database exists.
  */
 import { useEffect, useState } from "react";
 import { Box, Tooltip, Typography } from "@mui/material";
@@ -50,50 +58,51 @@ export const ConnectionStatus = ({ status: external, variant = "sider" }: Connec
     return () => clearInterval(id);
   }, []);
 
+  // Local only: nothing to be connected to, so nothing to show.
+  if (!status.configured) return null;
+
   const color = DOT[status.state];
   const detail =
     status.state === "offline"
       ? `Last seen ${timeAgo(status.lastOkAt)}`
       : status.state === "connected"
         ? `Checked ${timeAgo(status.lastOkAt)}`
-        : "Reaching the database…";
+        : "Reaching the server…";
 
   return (
-    <Tooltip
-      {...tooltipStyleProps(color)}
-      title={
-        <>
-          <TooltipTitle color={color}>{LABEL[status.state]}</TooltipTitle>
-          <TooltipBody>
-            Database server at {apiOrigin()}.
-            {status.lastError ? ` Last error: ${status.lastError}.` : ""}
-            {" "}Click to check again.
-          </TooltipBody>
-        </>
-      }
+    <Box
+      aria-label={`Sync: ${LABEL[status.state]}`}
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 1.25,
+        px: variant === "sider" ? 2 : 0,
+        py: variant === "sider" ? 1 : 0,
+        mx: variant === "sider" ? 1.5 : 0,
+      }}
     >
-      <Box
-        role="button"
-        tabIndex={0}
-        aria-label={`Connection: ${LABEL[status.state]}`}
-        onClick={() => status.refresh()}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") status.refresh();
-        }}
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 1.25,
-          px: variant === "sider" ? 2 : 0,
-          py: variant === "sider" ? 1 : 0,
-          mx: variant === "sider" ? 1.5 : 0,
-          borderRadius: "8px",
-          cursor: "pointer",
-          "&:hover": { bgcolor: variant === "sider" ? "rgba(129, 140, 248, 0.08)" : "transparent" },
-          "&:focus-visible": { outline: "2px solid rgba(129, 140, 248, 0.5)", outlineOffset: -2 },
-        }}
+      {/* The dot is the only interactive part: hover for the detail, click to re-check. */}
+      <Tooltip
+        {...tooltipStyleProps(color)}
+        title={
+          <>
+            <TooltipTitle color={color}>{LABEL[status.state]}</TooltipTitle>
+            <TooltipBody>
+              Server at {apiOrigin()}.
+              {status.lastError ? ` Last error: ${status.lastError}.` : ""}
+              {" "}Click to check again.
+            </TooltipBody>
+          </>
+        }
       >
         <Box
+          role="button"
+          tabIndex={0}
+          aria-label="Check the connection again"
+          onClick={() => status.refresh()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") status.refresh();
+          }}
           sx={{
             width: 10,
             height: 10,
@@ -101,6 +110,8 @@ export const ConnectionStatus = ({ status: external, variant = "sider" }: Connec
             bgcolor: color,
             boxShadow: `0 0 8px ${color}99`,
             flexShrink: 0,
+            cursor: "pointer",
+            "&:focus-visible": { outline: `2px solid ${color}80`, outlineOffset: 2 },
             // Pulse only while a check is running.
             animation: status.checking ? "fo-pulse 1s ease-in-out infinite" : "none",
             "@keyframes fo-pulse": {
@@ -109,15 +120,15 @@ export const ConnectionStatus = ({ status: external, variant = "sider" }: Connec
             },
           }}
         />
-        <Box sx={{ minWidth: 0 }}>
-          <Typography sx={{ fontSize: "0.8rem", fontWeight: 700, color: "#cbd5e1", lineHeight: 1.2 }}>
-            {LABEL[status.state]}
-          </Typography>
-          <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1.2, whiteSpace: "nowrap" }}>
-            {detail}
-          </Typography>
-        </Box>
+      </Tooltip>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography sx={{ fontSize: "0.8rem", fontWeight: 700, color: "#cbd5e1", lineHeight: 1.2 }}>
+          {LABEL[status.state]}
+        </Typography>
+        <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1.2, whiteSpace: "nowrap" }}>
+          {detail}
+        </Typography>
       </Box>
-    </Tooltip>
+    </Box>
   );
 };

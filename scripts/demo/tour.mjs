@@ -305,8 +305,10 @@ try {
 
   console.log("Step 11 · what if? (sandbox)");
   // Alex wonders what cancelling the gym would do to next month. Try it on a
-  // COPY of the data: "Try a sandbox" copies the database and reloads the page
-  // with the amber banner; the real data is untouched until Keep.
+  // COPY of the data: "Try a sandbox" (Settings -> Data) copies the database
+  // and reloads the page with the amber banner; the real data is untouched
+  // until Keep.
+  await page.goto("/Settings?tab=data");
   await page.clickText("Try a sandbox");
   await page.sleep(1500);
   await page.settle();

@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * SandboxButton — the "Try a sandbox" entry point. Lives in the Overview
- * toolbar next to Optimize (the user's choice, Oct 2026: that's where what-if
- * experiments get judged). Entering copies the database and reloads (see
- * SandboxContext). While a sandbox is active it renders nothing: the amber
- * banner directly above the page already says so and owns Discard / Keep.
+ * SandboxButton — the "Try a sandbox" entry point, in Settings → Data (it
+ * sat in the Overview toolbar until Oct 27 2026, when the user moved the
+ * rarely-used controls out of that toolbar). Entering copies the database and
+ * reloads (see SandboxContext). While a sandbox is active it renders nothing:
+ * the amber banner above every page already says so and owns Discard / Keep.
  */
 
 import { Button } from "@mui/material";

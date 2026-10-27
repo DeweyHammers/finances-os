@@ -52,7 +52,6 @@ import { PersonalOverview } from "./PersonalOverview";
 import { YearlyOverview } from "./YearlyOverview";
 import { CashFlowOverview } from "./CashFlowOverview";
 import { SurplusTargetPill } from "./SurplusTargetPill";
-import { SandboxButton } from "../sandbox/SandboxButton";
 import { SHORT_MONTHS } from "../../lib/constants";
 import { useRouter } from "next/navigation";
 import {
@@ -706,9 +705,6 @@ export function OverviewPage() {
             gap: 1.5,
           }}
         >
-          {/* "Try a sandbox" — hidden while a sandbox is active (the banner
-              above the page owns Discard / Keep then). */}
-          <SandboxButton />
           <Button
             variant="outlined"
             size="small"

@@ -361,8 +361,10 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
           breathing room above the viewport edge. */}
       <Box sx={{ flex: 1 }} />
       <Box sx={{ pt: 2 }} />
-      <NavLeaf href="/Settings" label="Settings" icon={<SettingsIcon />} />
+      {/* Sync status — renders nothing until a sync server is configured, and
+          sits ABOVE Settings so it is never in the way of that last click. */}
       <ConnectionStatus />
+      <NavLeaf href="/Settings" label="Settings" icon={<SettingsIcon />} />
       <Box sx={{ height: 16 }} />
     </>
   );
