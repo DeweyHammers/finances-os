@@ -316,7 +316,7 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
   // ── Sections ──
 
   const general = (
-    <Section title="General" blurb={activeTab.blurb}>
+    <Section key="general" title="General" blurb={activeTab.blurb}>
       <Row
         label={meta ? `Version ${meta.version}` : "Version"}
         description={
@@ -377,7 +377,7 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
   );
 
   const budget = (
-    <Section title="Budget" blurb={activeTab.blurb}>
+    <Section key="budget" title="Budget" blurb={activeTab.blurb}>
       <Row
         label="Surplus target"
         description="The minimum each pay week must clear after bills and personal spending. Optimize plans bill splits around it. The Overview shows it next to the pay weeks; this is the only place to change it."
@@ -431,7 +431,7 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
   );
 
   const data = (
-    <Section title="Data" blurb={activeTab.blurb}>
+    <Section key="data" title="Data" blurb={activeTab.blurb}>
       <Row
         label="Database"
         description={
@@ -497,7 +497,7 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
   );
 
   const sync = (
-    <Section title="Phone & sync" blurb={activeTab.blurb}>
+    <Section key="sync" title="Phone & sync" blurb={activeTab.blurb}>
       <Row
         label="Where this app runs"
         description={
@@ -531,6 +531,10 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
     </Section>
   );
 
+  // Each section carries its tab as `key`: without it React reuses the row
+  // elements across tabs (same component types at the same positions), and
+  // a button that changes variant - "Back up now" (contained) becoming "Open
+  // Income" (outlined) - animates between the two for a moment.
   const sections: Record<SettingsTab, React.ReactNode> = { general, budget, data, sync };
 
   const toastEl = (
