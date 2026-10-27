@@ -39,7 +39,7 @@ interface SettingsDialogValue {
   /** Dialog open (always false while `asPage`). */
   open: boolean;
   tab: SettingsTab;
-  /** Open Settings on `tab` (or the tab it was last on): dialog or page per `asPage`. */
+  /** Open Settings on `tab` (General when omitted): dialog or page per `asPage`. */
   openSettings: (tab?: SettingsTab) => void;
   closeSettings: () => void;
   setTab: (tab: SettingsTab) => void;
@@ -56,12 +56,15 @@ export function SettingsDialogProvider({ children }: { children: ReactNode }) {
 
   const openSettings = useCallback(
     (next?: SettingsTab) => {
-      const target = next ?? tab;
-      if (next) setTab(next);
+      // Without a tab, Settings always starts on General (user feedback,
+      // Oct 27 2026: reopening on the last tab was confusing); callers that
+      // want a tab name it (the surplus pill → Budget).
+      const target = next ?? "general";
+      setTab(target);
       if (asPage) router.push(settingsHref(target));
       else setOpen(true);
     },
-    [asPage, router, tab],
+    [asPage, router],
   );
   const closeSettings = useCallback(() => setOpen(false), []);
 
