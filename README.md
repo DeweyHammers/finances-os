@@ -115,6 +115,10 @@ Every `git push` runs the whole suite first (`.githooks/pre-push`); a failing te
 
 ### Production Mode (Recommended)
 
+The installer for each version is built by GitHub Actions (`.github/workflows/release.yml`) on a hosted Windows runner and attached to the matching [GitHub Release](https://github.com/DeweyHammers/finances-os/releases). To cut a release: bump `version` in `package.json`, merge to `main`, then tag and push (`git tag v1.2.0 && git push origin v1.2.0`). The workflow runs the test suite, builds, and publishes. "Run workflow" on the Actions tab builds any branch without releasing and keeps the installer as an artifact. Building on a runner also sidesteps Windows Smart App Control, which blocks electron-builder's unsigned NSIS stub on a PC where it's enforced.
+
+To build locally instead:
+
 1. **Build:**
    ```bash
    npm run build
