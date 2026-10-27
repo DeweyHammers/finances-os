@@ -53,10 +53,12 @@ import { useRouter } from "next/navigation";
 import { fromCents, toCents } from "../../lib/cents";
 import {
   apiOrigin,
+  cachedBackups,
+  cachedMeta,
   createBackup,
-  fetchBackups,
-  fetchMeta,
   fetchUpdateCheck,
+  loadBackups,
+  loadMeta,
   MODE_LABELS,
   type AppMeta,
   type BackupInfo,
@@ -223,11 +225,12 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
   const router = useRouter();
   const activeTab = TABS.find((t) => t.id === active) ?? TABS[0];
 
-  // App facts
-  const [meta, setMeta] = useState<AppMeta | null>(null);
+  // App facts — usually already cached (prefetched at app start), so the
+  // first render has them and the link buttons never blink disabled.
+  const [meta, setMeta] = useState<AppMeta | null>(cachedMeta);
   const [metaError, setMetaError] = useState<string | null>(null);
   useEffect(() => {
-    fetchMeta().then(setMeta).catch((e) => setMetaError(e.message));
+    loadMeta().then(setMeta).catch((e) => setMetaError(e.message));
   }, []);
 
   // Update check
@@ -270,10 +273,10 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
   };
 
   // Backups
-  const [backups, setBackups] = useState<BackupInfo | null>(null);
+  const [backups, setBackups] = useState<BackupInfo | null>(cachedBackups);
   const [backingUp, setBackingUp] = useState(false);
   useEffect(() => {
-    fetchBackups().then(setBackups).catch(() => {});
+    loadBackups().then(setBackups).catch(() => {});
   }, []);
   // Toast (CLAUDE.md → "Toast pattern"): message kept until the exit animation ends.
   const [toastOpen, setToastOpen] = useState(false);

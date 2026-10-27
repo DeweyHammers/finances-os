@@ -14,10 +14,11 @@
  * — just says which tab it wants. Mounted once in app/providers.tsx together
  * with <SettingsDialog />.
  */
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMediaQuery, useTheme } from "@mui/material";
 import { useRouter } from "next/navigation";
 import { SIDER_BREAKPOINT } from "../../lib/constants";
+import { loadBackups, loadMeta } from "../../lib/meta-api";
 
 export type SettingsTab = "general" | "budget" | "data" | "sync";
 
@@ -53,6 +54,13 @@ export function SettingsDialogProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<SettingsTab>("general");
+
+  // Warm the app-facts and backup caches once at start, so the popup's
+  // first render already has them (lib/meta-api.ts → "App-session cache").
+  useEffect(() => {
+    loadMeta().catch(() => {});
+    loadBackups().catch(() => {});
+  }, []);
 
   const openSettings = useCallback(
     (next?: SettingsTab) => {

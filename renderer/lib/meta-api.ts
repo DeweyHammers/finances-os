@@ -60,7 +60,55 @@ export async function fetchBackups(): Promise<BackupInfo> {
 }
 
 export async function createBackup(): Promise<BackupResult> {
-  return parse<BackupResult>(await fetch(`${API_URL}/backups`, { method: "POST" }));
+  const result = parse<BackupResult>(await fetch(`${API_URL}/backups`, { method: "POST" }));
+  backupsCache = await result;
+  return result;
+}
+
+// ── App-session cache ───────────────────────────────────────────────────────
+// The Settings popup mounts its content fresh on every open, and its General
+// tab disabled the link buttons until /api/meta answered — a visible blink on
+// each open. App facts don't change while the app runs and the backup list
+// only changes through createBackup (which updates the cache), so both are
+// fetched once per session (prefetched by SettingsDialogProvider on start)
+// and handed to the page synchronously afterwards.
+
+let metaCache: AppMeta | null = null;
+let metaPromise: Promise<AppMeta> | null = null;
+let backupsCache: BackupInfo | null = null;
+let backupsPromise: Promise<BackupInfo> | null = null;
+
+/** The app facts, fetched once; a failed fetch is retried on the next call. */
+export function loadMeta(): Promise<AppMeta> {
+  if (metaCache) return Promise.resolve(metaCache);
+  metaPromise ??= fetchMeta()
+    .then((m) => (metaCache = m))
+    .catch((e) => {
+      metaPromise = null;
+      throw e;
+    });
+  return metaPromise;
+}
+
+/** What loadMeta() already has, for a synchronous first render. */
+export function cachedMeta(): AppMeta | null {
+  return metaCache;
+}
+
+/** The backup list, fetched once and kept current by createBackup(). */
+export function loadBackups(): Promise<BackupInfo> {
+  if (backupsCache) return Promise.resolve(backupsCache);
+  backupsPromise ??= fetchBackups()
+    .then((b) => (backupsCache = b))
+    .catch((e) => {
+      backupsPromise = null;
+      throw e;
+    });
+  return backupsPromise;
+}
+
+export function cachedBackups(): BackupInfo | null {
+  return backupsCache;
 }
 
 /** Where the API lives, for display: the explicit origin or "this page's". */
