@@ -93,7 +93,9 @@ database is unrecoverable).
    `schemaVersion` table. Run the existing `main/api-server.routes.test.ts`
    contract against it, then switch the Express routes to call it. Prisma
    stays only for the schema file and `db push` in dev until the libsql
-   backend is in; then it goes.
+   backend is in; then it goes. **Done 2026-10-27** (libsql backend included;
+   see CLAUDE.md → "Shared data layer"). Prisma is now schema-file + `db push`
+   only.
 2. **Settings page** (`/Settings`, Obsidian-style): General (version, check
    for updates against GitHub Releases, help, report a problem), Budget
    (surplus target, link to Income), Data (database location, backups via

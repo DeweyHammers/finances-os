@@ -11,7 +11,7 @@
  */
 import fs from "fs";
 import path from "path";
-import { prisma, getRealDatabaseUrl, databaseUrlToPath } from "../shared/prisma";
+import { getStore, getRealDatabaseUrl, databaseUrlToPath } from "../shared/db";
 import { isSandboxActive } from "./sandbox";
 
 export const GITHUB_REPO = "DeweyHammers/finances-os";
@@ -197,8 +197,8 @@ export function listBackups(): BackupInfo {
  * Snapshot the REAL database to a timestamped .bak beside it. Uses SQLite's
  * own `VACUUM INTO` (a consistent copy even while the app is writing); if the
  * engine refuses it, falls back to a plain file copy and says so in `method`.
- * Refused while a sandbox is active: `prisma` would then point at the scratch
- * copy, and a backup of that is not what the user means.
+ * Refused while a sandbox is active: the store would then point at the
+ * scratch copy, and a backup of that is not what the user means.
  */
 export async function createBackup(): Promise<
   BackupInfo & { file: string; at: string; method: "vacuum" | "copy" }
@@ -212,7 +212,7 @@ export async function createBackup(): Promise<
   let method: "vacuum" | "copy" = "vacuum";
   try {
     const target = file.replace(/\\/g, "/").replace(/'/g, "''");
-    await prisma.$executeRawUnsafe(`VACUUM INTO '${target}'`);
+    await getStore().raw(`VACUUM INTO '${target}'`);
   } catch (err) {
     console.warn("VACUUM INTO failed, copying the file instead:", err);
     fs.copyFileSync(real, file);

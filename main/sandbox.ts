@@ -11,17 +11,18 @@
  * %APPDATA%\finances-os\sandbox.db in PROD). A sandbox never outlives the
  * process: a copy left behind by a crash is deleted on the next startup
  * (`cleanupStaleSandbox`), so the app always opens on the real data. Every
- * route reaches the current file through the `prisma` Proxy in
- * shared/prisma.ts; this module only decides which file that is.
+ * route reaches the current file through `getStore()` in shared/db.ts; this
+ * module only decides which file that is.
  */
 import fs from "fs";
 import path from "path";
 import {
   databaseUrlToPath,
-  getClient,
   getRealDatabaseUrl,
+  getStore,
   switchDatabase,
-} from "../shared/prisma";
+} from "../shared/db";
+import { getModelByName } from "../shared/data";
 
 export const SANDBOX_FILENAME = "sandbox.db";
 
@@ -54,8 +55,8 @@ export function isSandboxActive(): boolean {
 }
 
 /**
- * Delete the sandbox file (and SQLite's side files) once no client holds it.
- * Windows reports EBUSY/EPERM for a short while after `$disconnect`, so retry
+ * Delete the sandbox file (and SQLite's side files) once nothing holds it.
+ * Windows reports EBUSY/EPERM for a short while after a close, so retry
  * briefly instead of failing the whole discard/keep.
  */
 async function removeSandboxFile(): Promise<void> {
@@ -77,7 +78,7 @@ export async function getSandboxStatus(): Promise<SandboxStatus> {
   if (!isSandboxActive()) {
     return { active: false, enteredAt: null, transactionsAdded: 0 };
   }
-  const count = await getClient().accountTransaction.count();
+  const count = await getStore().count(getModelByName("AccountTransaction"));
   return {
     active: true,
     enteredAt,
@@ -89,8 +90,8 @@ export async function enterSandbox(): Promise<SandboxStatus> {
   if (isSandboxActive()) throw new SandboxError("Sandbox is already active");
   const sandbox = sandboxDbPath();
   // The baseline is counted on the real file before the copy so the two agree.
-  baselineTxnCount = await getClient().accountTransaction.count();
-  // The copy runs after the real client has disconnected (see switchDatabase)
+  baselineTxnCount = await getStore().count(getModelByName("AccountTransaction"));
+  // The copy runs after the real store has closed its file (see switchDatabase)
   // so it can't catch a half-written page.
   const real = realDbPath();
   await switchDatabase(toUrl(sandbox), () => fs.copyFileSync(real, sandbox));
@@ -120,9 +121,9 @@ export async function keepSandbox(): Promise<SandboxStatus & { backupPath: strin
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const backupPath = `${real}.${stamp}.bak`;
 
-  // switchDatabase disconnects the sandbox client, then runs the copy while
-  // no client holds either file, then creates the real client (which opens
-  // the freshly overwritten file on its first query).
+  // switchDatabase closes the sandbox store, then runs the copy while nothing
+  // holds either file, then creates the real store (which opens the freshly
+  // overwritten file on its first query).
   await switchDatabase(getRealDatabaseUrl(), () => {
     fs.copyFileSync(real, backupPath);
     fs.copyFileSync(sandbox, real);

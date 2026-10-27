@@ -223,3 +223,12 @@ model BudgetMonth {
 
   @@unique([month, categoryItemId])
 }
+// Data-layer schema version (shared/data/schema.ts → SCHEMA_VERSION). One row
+// per applied version; the highest one is the database's version. The model
+// exists here so `prisma db push` keeps the table instead of dropping it; the
+// rows are written by shared/data (createDatabase / ensureSchemaVersion),
+// never by Prisma.
+model SchemaVersion {
+  version   Int      @id
+  appliedAt DateTime @default(now())
+}

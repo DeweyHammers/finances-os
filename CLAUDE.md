@@ -3,7 +3,7 @@
 ## Stack
 
 - **Nextron** (Electron + Next.js 14, `app/` router, static export)
-- **SQLite** via **Prisma** (`prisma/schema.prisma`, dev DB at `prisma/dev.db`)
+- **SQLite** through the **shared data layer** `shared/data/` (libsql backend; no Prisma client at runtime since Oct 2026). `prisma/schema.prisma` is still the schema's source of truth, dev DB at `prisma/dev.db` — see "Shared data layer"
 - **Refine.dev** (`@refinedev/core`) for data operations (`useList`, `useOne`, `useCreate`, `useUpdate`, `useDelete`)
 - **MUI v9** (`@mui/material`, `@mui/icons-material`) — all components use `slots`/`slotProps`, NOT `component`/`sx` overrides on deprecated APIs
 - **Vitest** for unit tests
@@ -16,15 +16,16 @@ npm run build        # Build distributable → dist/Finances OS Setup X.x.x.exe
 npm run test         # Run Vitest test suite
 npm run db:push      # Copy prisma/dev.db → %APPDATA%\finances-os\database.db (PROD)
 npm run db:pull      # Copy PROD → dev.db
-npx prisma db push --skip-generate --accept-data-loss   # Apply schema changes to dev.db
-npx prisma generate  # Regenerate the client after a schema change — CLOSE the dev app first
+npx prisma db push --skip-generate --accept-data-loss   # Apply schema changes to dev.db …
+npx tsx scripts/generate-schema-sql.ts                  # … then regenerate shared/data/schema.sql (+ edit MODELS in shared/data/schema.ts)
+npx prisma generate  # Only for the Prisma-client scripts (prisma/seed.ts, scripts/balance-bills.cjs); the app itself no longer loads it
 ```
 
 - **`nextron.config.js` → `startupDelay: 60000`** is required. Nextron 10 turns it into `retries = startupDelay / 500` for its renderer port check; the default 0 makes `npm run dev` fail instantly ("Failed to start renderer process with port 8888 in 0ms") and orphan `next dev` on port 8888.
 - **Every `git push` runs the full test suite first** (`.githooks/pre-push`, enabled by the `prepare` script → `git config core.hooksPath .githooks`; fresh clones get it on `npm install`). It runs with `CI=true`, so missing snapshots fail instead of being written. A failing test cancels the push. Emergency bypass: `git push --no-verify`. `.gitattributes` keeps the hook LF-only, since a CRLF `#!/bin/sh` breaks it. Typecheck isn't gated yet (12 known test-file errors).
 - **`dev` passes `--remote-debugging-port=9222`** on purpose. Nextron otherwise appends `--remote-debugging-port=5858` — the API server's port. Chromium DevTools then grabs `127.0.0.1:5858`, and since the API binds loopback only (`main/api-server.ts` → "Network exposure"), the API either fails to start or the renderer's fetches hit DevTools. VS Code's `nextron:renderer` attach config uses 9222 to match.
-- **`prisma generate` fails with `EPERM … query_engine-windows.dll.node`** while the dev Electron is running (it holds the engine DLL). Stop the app, generate, relaunch — the main process needs a restart to see new columns anyway.
-- **PROD schema changes ship via `db:push`** — there are no migrations; PROD gets new columns only by copying dev.db, and the rebuilt `.exe` carries the matching Prisma client. Always do both.
+- **After a schema change, restart the dev app** — the main process reads `shared/data/schema.ts` at startup. (`prisma generate` used to fail with `EPERM … query_engine-windows.dll.node` while the app ran because it held the engine DLL; the app no longer loads Prisma, so that is gone.)
+- **PROD schema changes ship via `db:push`** — there are no migrations yet; PROD gets new columns only by copying dev.db, and the rebuilt `.exe` carries the matching data layer (`shared/data/schema.ts` + `schema.sql`). Always do both. The `SchemaVersion` table (see "Shared data layer") is where real migrations will go.
 - **The installer ships an EMPTY database, never dev.db.** `npm run build` first runs `prebuild` → `scripts/build-template-db.mjs`, which rebuilds `prisma/template.db` from the schema with zero rows and refuses to continue otherwise; `electron-builder.yml` packages that file and `shared/prisma.ts` copies it to `%APPDATA%` on a fresh install only. Until Oct 24 2026 the build bundled `prisma/dev.db` (real bills and transactions) — an installer built before that must not be shared. Existing installs are unaffected (their `database.db` already exists).
 
 ## PROD Deployment Flow
@@ -56,13 +57,26 @@ node scripts/demo/tour.mjs                 # fills the app with FAKE data step b
 
 ## Sandbox mode (Oct 2026)
 
-"Try a sandbox" (Overview toolbar, left of Optimize) lets the user experiment on a COPY of the database and then throw it away or keep it. `main/sandbox.ts` owns it; `shared/prisma.ts` makes it possible.
+"Try a sandbox" (Overview toolbar, left of Optimize) lets the user experiment on a COPY of the database and then throw it away or keep it. `main/sandbox.ts` owns it; `shared/db.ts` makes it possible.
 
-- **`prisma` is a Proxy over a swappable client.** `switchDatabase(url, beforeConnect?)` disconnects the current client, runs the file operation while no client holds either file, then creates the next one (Prisma connects lazily on the first query). Every route and test keeps importing `prisma`; `getModel` reads the live client directly. Never compare a model by identity (`model === prisma.appSettings`) — compare the resource name.
+- **`getStore()` (shared/db.ts) is the swappable connection.** `switchDatabase(url, beforeConnect?)` closes the current store's file, runs the file operation while nothing holds either file, then creates the next store (the libsql backend opens its file lazily, on the first query). Routes call `getStore()` on every request — never cache the store in a module variable. The libsql close quirk that makes this work is described under "Shared data layer".
 - **Files.** The copy is `sandbox.db` beside the real file (`prisma/sandbox.db` in dev, `%APPDATA%\finances-os\sandbox.db` in PROD; both gitignored by `*.db`). `enter` copies real → sandbox and switches; `discard` switches back and deletes the copy; `keep` writes `database.db.<stamp>.bak` (same naming as `db-sync.cjs`), overwrites the real file with the copy, switches back, deletes the copy. A sandbox never survives a restart: `cleanupStaleSandbox()` runs before the API starts and deletes any leftover copy, so the app always opens on real data.
 - **Routes.** `GET /api/sandbox` → `{ active, enteredAt, transactionsAdded }`; `POST /api/sandbox/{enter|discard|keep}`. Wrong-state calls (enter twice, discard when inactive) are `409` via `SandboxError`. Registered BEFORE the generic `/api/:resource` routes.
 - **Renderer.** `SandboxProvider` (app/providers.tsx) fetches the status once; `SandboxBanner` is the sticky amber strip above every page while active, with confirmed Discard (shows how many transactions were recorded in the sandbox — those are what Discard loses) and Keep; `SandboxButton` is the entry point (renders nothing while a sandbox is active). The user asked for it in the Overview toolbar, not the sider — don't move it back. Every action **reloads the window** on purpose: Refine's query cache, page state and the Overview's stale-alert check all have to restart against the other file. The raw fetches live in `lib/sandbox-api.ts`; `lib/api-url.ts` holds the shared `API_URL`.
 - **Tests.** `main/api-server.routes.test.ts` → `sandbox (/api/sandbox)` covers enter/discard/keep against the temp test DB (the copy lands in the temp dir, never near dev.db).
+
+## Shared data layer (Oct 27 2026) — `shared/data/`
+
+Phase A step 1 of `plans/phone-app-and-sync.md`: every read and write goes through ONE data layer that needs nothing but `exec(sql, params) → rows` from its backend, so the desktop (Electron main) and, later, the Android app run the same code against the same rules. The Express routes in `main/api-server.ts` are thin HTTP wrappers over it; `main/api-server.routes.test.ts` is the contract that pins its behaviour (unchanged by the switch).
+
+- **Files.** `sql.ts` the `SqlExecutor` interface (+ `splitStatements`); `schema.ts` the typed model metadata (`MODELS`: columns in Prisma order, scalar type, nullability, `cuid`/`now` generated defaults; `resolveModel()` = the old case-insensitive `getModel`), `SCHEMA_VERSION`; `schema.sql` + `schema-sql.ts` the GENERATED DDL (never edit — `npx tsx scripts/generate-schema-sql.ts` after every `schema.prisma` change; `schema.test.ts` fails when either is stale or `MODELS` disagrees with the DDL); `coerce.ts` `transformBody` (moved from the API, applied inside the store) + strict value validation; `store.ts` the `DataStore`; `backends/libsql.ts` the desktop backend; `cuid.ts`, `errors.ts`.
+- **`shared/db.ts`** resolves the real database path (dev.db / `%APPDATA%` / `FINANCES_OS_TEST_DB_URL`), owns the swappable store (`getStore()`, `switchDatabase`) and exports a tiny `prisma` object (`$queryRawUnsafe`, `$executeRawUnsafe`, `$disconnect`) ONLY so the route tests run unchanged. `shared/prisma.ts` is a re-export of it.
+- **Behaviour = the old Prisma routes, deliberately.** Lists: `?field=value` equality, `?field_like=` contains (LIKE, wildcards escaped), `_sort`/`_order` (`asc|desc`, several fields), total count; `_start`/`_end`/`q` ignored. Create ignores a client `id` and the legacy `client`/`contracts` keys, generates a cuid, fills `now()`, leaves literal defaults to the DDL. Update: URL id wins; a missing row throws (`NOT_FOUND` → 500) except `AppSettings/global`, which is created on first save. Validation is Prisma-strict (`"5"` for an Int, an unknown column, a null in a NOT NULL column → `VALIDATION` → 500); `transformBody` still coerces the known numeric keys first. The rules live in the store now: Income single-primary (create/update demote the others; a patch WITHOUT `isPrimary` clears it — historic quirk kept), BudgetCategoryItem delete snapshots the name onto `AccountTransaction.categoryName` first. All in one serialised lock; the rules run in BEGIN/COMMIT.
+- **Storage is what the Prisma client wrote**, so dev.db / PROD are used in place and Prisma tools still read them: Boolean → 0/1, DateTime → Unix **milliseconds** (reads also accept the ISO text older rows hold and SQLite's `CURRENT_TIMESTAMP` text), cuid v1-shaped ids. Verified Oct 27 2026 against dev.db: all 1510 rows of every model read byte-identically through the old Prisma client and the new API, and rows the API writes read back identically through Prisma.
+- **`SchemaVersion`** (`version`, `appliedAt`; a Prisma model too, so `db push` keeps it) — `createDatabase(exec)` applies `schema.sql` to an empty file (template.db, demo.db and the test DB are built from the same statements by `scripts/empty-db.mjs`), `prepareDatabase` runs on a store's first use (empty file → full schema; Prisma-era file → add the table + stamp). Bumping `SCHEMA_VERSION` = add the migration step in `ensureSchemaVersion` + regenerate; Phase D gates sync on it.
+- **libsql close quirk (Windows).** libsql 0.5.x finalises prepared statements only when GC collects them, and the file handle stays open until then — so `close()` right before deleting/overwriting the file (Sandbox discard/keep) hit EBUSY. `backends/libsql.ts` runs a full GC (`v8.setFlagsFromString("--expose-gc")` + `vm.runInNewContext("gc")`), waits one macrotask (the finalisers run there — measured 20/20 vs 0/20 without the tick), then closes; `main/sandbox.ts` keeps its retry loop as the safety net. The backend uses `.all()` for every statement (`.run()`/`.get()` leave a statement half-stepped).
+- **What still uses Prisma:** `prisma/schema.prisma` (source of truth) + `prisma db push` for dev.db; `prisma migrate diff` inside `scripts/generate-schema-sql.ts` and `schema.test.ts`; the generated client only in `prisma/seed.ts` and `scripts/balance-bills.cjs`. The app, the hosted server, the demo server and the tests no longer load `@prisma/client`. `electron-builder.yml` still packages the query-engine DLL and `release.yml` still runs `prisma generate` — harmless dead weight to remove once a libsql-based release has been installed and trusted (`libsql` is in `dependencies`, so nextron externalises it and electron-builder ships it with its prebuilt `@libsql/win32-x64-msvc` binary; that packaging has not been exercised locally — Smart App Control blocks local builds).
+- **Next (Phase B/C):** the embedded-replica options go into `backends/libsql.ts`; the phone gets a `@capacitor-community/sqlite` backend and a Refine data provider that calls `DataStore` in-process with the same `ListQuery` objects simple-rest sends today.
 
 ## Settings page + app meta (Oct 27 2026)
 
@@ -243,7 +257,7 @@ Add `successNotification: false, errorNotification: false` to any `useList`/`use
 ## Tests
 
 ```
-npm run test          # run all (285 tests as of Oct 26 2026, incl. the local lock-ins)
+npm run test          # run all (348 tests as of Oct 27 2026, incl. the local lock-ins)
 npm run test:watch    # watch mode
 ```
 
@@ -268,7 +282,7 @@ The user's rule for cleanup work is **no change in how the app functions**. Thes
 - `OverviewPage.lockin.test.tsx`: Overview numbers + whole-page text snapshots for Sep/Oct/Nov.
 - `OverviewPage.optimize.lockin.test.tsx`: the exact BillSplit writes for four Optimize scenarios. `optimize-plan.lockin.test.ts`: planner invariants (a fresh re-plan rebuilds the fixture's rows exactly, locked weeks are never touched, runs are idempotent).
 - `BudgetPage.lockin.test.tsx`: Plan amounts, ⚠ badges / Sync Plan state, and the exact Auto-assign P3 writes after the Oct 21 paycheck.
-- `main/api-server.routes.test.ts`: real HTTP + Prisma against an EMPTY temp database built from `prisma/schema.prisma` by `scripts/empty-db.mjs` (shared with the template-db builder), via the test-only `FINANCES_OS_TEST_DB_URL` (read in `shared/prisma.ts`). It no longer copies dev.db, so it runs on a clean checkout (GitHub Actions). Never point it at dev.db.
+- `main/api-server.routes.test.ts`: real HTTP + the data layer against an EMPTY temp database built from `shared/data/schema.sql` by `scripts/empty-db.mjs` (shared with the template-db and demo-db builders), via the test-only `FINANCES_OS_TEST_DB_URL` (read in `shared/db.ts`). It never touches dev.db, so it runs on a clean checkout (GitHub Actions). It is the **behavioural contract of `shared/data/`**: it must pass unchanged after any change there.
 
 A snapshot diff means the app would show or write something different. Only re-record (`npx vitest run -u`) for a behavior change the user asked for, and say so in the commit. Run with `CI=true` to fail on missing snapshots instead of writing them.
 
