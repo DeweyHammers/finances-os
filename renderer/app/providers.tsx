@@ -51,6 +51,7 @@ import { SandboxProvider } from "../components/sandbox/SandboxContext";
 import { SandboxBanner } from "../components/sandbox/SandboxBanner";
 import { SettingsDialogProvider } from "../components/settings/SettingsDialogContext";
 import { SettingsDialog } from "../components/settings/SettingsDialog";
+import { SyncStatusProvider } from "../lib/use-connection-status";
 
 // IPC bridge address — the Electron main process spins up an in-memory REST
 // server on this port that translates HTTP calls into Prisma queries against
@@ -264,6 +265,9 @@ function App({ children }: { children: ReactNode }) {
           warnWhenUnsavedChanges: false,
         }}
       >
+        {/* One poller for the sync status (sider row + Settings); see
+            lib/use-connection-status.ts. */}
+        <SyncStatusProvider>
         <SettingsDialogProvider>
         <ThemedLayout
           Header={CustomHeader}
@@ -295,6 +299,7 @@ function App({ children }: { children: ReactNode }) {
             Overview's surplus pill open it — see components/settings. */}
         <SettingsDialog />
         </SettingsDialogProvider>
+        </SyncStatusProvider>
         {/* KBar command palette (Cmd/Ctrl+K) — the provider wraps everything
             in <Providers> below; this renderer just mounts the overlay. */}
         <RefineKbar />

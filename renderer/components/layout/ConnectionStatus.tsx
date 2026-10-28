@@ -2,54 +2,76 @@
 
 /**
  * ConnectionStatus — the sync status row: a coloured dot plus two short
- * lines, green "Connected · checked just now", red "Offline · last seen
- * 10:42", amber-pulsing while a check is in flight.
+ * lines — green "Synced · last synced 3 min ago", amber-pulsing "Syncing…",
+ * red "Offline · last synced 10:42", amber "Paused · sandbox", red "Update
+ * needed" when the cloud database is newer than this app.
  *
- * It renders NOTHING until a sync server is configured (see
- * useConnectionStatus): on a local-only install there is no server to report
+ * It renders NOTHING until a cloud database is configured (see
+ * useConnectionStatus): on a local-only install there is nothing to report
  * on, so the sider shows no row and Settings → Phone & sync says "Local
  * only" instead. Once it shows, the row sits just ABOVE Settings in the
  * sider as a plain status line — no hover highlight, not a button — so the
  * pointer never trips over it on the way to Settings (user feedback,
  * Oct 27 2026). Only the dot is interactive: hovering it explains the state,
- * clicking it re-checks.
+ * clicking it syncs now.
  *
- * Shares `useConnectionStatus` with the Settings page so the two can never
- * disagree. See plans/phone-app-and-sync.md for how this grows into the
- * synced / syncing / offline states once the shared database exists.
+ * Reads the one shared poller (SyncStatusProvider) so the sider row and the
+ * Settings page can never disagree.
  */
 import { useEffect, useState } from "react";
 import { Box, Tooltip, Typography } from "@mui/material";
-import {
-  useConnectionStatus,
-  timeAgo,
-  type ConnectionStatus as Status,
-} from "../../lib/use-connection-status";
-import { apiOrigin } from "../../lib/meta-api";
+import { useConnectionStatus, timeAgo, type ConnectionStatus as Status } from "../../lib/use-connection-status";
 import { tooltipStyleProps, TooltipBody, TooltipTitle } from "../../lib/tooltip-styles";
 
-const DOT = {
-  connected: "#3DBC83",
-  offline: "#f43f5e",
-  unknown: "#fbbf24",
-} as const;
+const GREEN = "#3DBC83";
+const RED = "#f43f5e";
+const AMBER = "#fbbf24";
 
-const LABEL = {
-  connected: "Connected",
-  offline: "Offline",
-  unknown: "Checking…",
-} as const;
+/**
+ * Dot colour, label and the second line for each state. "Last synced …"
+ * lives only in the tooltip: on the row it re-rendered once a minute and
+ * looked frozen (user feedback, Oct 28 2026); a tooltip is computed when
+ * it opens, so it is always current.
+ */
+function describe(status: Status): { color: string; label: string; detail: string; help: string } {
+  const last = ` Last synced ${timeAgo(status.lastSyncedAt)}; the app checks the cloud every minute on its own.`;
+  if (status.apiDown) {
+    return { color: RED, label: "No answer", detail: "The app's server isn't responding", help: "The app's own API did not answer. Restarting the app usually fixes this." };
+  }
+  switch (status.state) {
+    case "syncing":
+      return { color: AMBER, label: "Syncing…", detail: "Pulling changes", help: "Pulling the latest changes from your cloud database." + last };
+    case "synced":
+      return { color: GREEN, label: "Synced", detail: "Cloud database", help: "Every change is saved to your cloud database as you make it; other devices see it on their next sync." + last };
+    case "offline":
+      return {
+        color: RED,
+        label: "Offline",
+        detail: status.status?.readOnly ? "Read-only until the cloud is back" : "Can't reach the cloud",
+        help:
+          "The cloud database can't be reached. You can look at everything; changes can't be saved until it is back." + last,
+      };
+    case "paused":
+      return { color: AMBER, label: "Paused", detail: "Sandbox active", help: "Sync is paused while the sandbox is active. Keep or Discard it to resume." };
+    case "blocked":
+      return {
+        color: RED,
+        label: "Update needed",
+        detail: `Database is schema ${status.status?.schemaGate?.database ?? "?"}`,
+        help: "Your cloud database was written by a newer version of Finances OS. Update the app on this device; until then nothing is synced or changed.",
+      };
+    default:
+      return { color: AMBER, label: "Checking…", detail: "Reading the sync status", help: "Asking the app for its sync status." };
+  }
+}
 
 interface ConnectionStatusProps {
-  /** Pass a status from the parent to share one poller; otherwise self-polls. */
-  status?: Status;
   /** Wider layout for the Settings page row. */
   variant?: "sider" | "settings";
 }
 
-export const ConnectionStatus = ({ status: external, variant = "sider" }: ConnectionStatusProps) => {
-  const own = useConnectionStatus(external ? 24 * 60 * 60 * 1000 : 30_000);
-  const status = external ?? own;
+export const ConnectionStatus = ({ variant = "sider" }: ConnectionStatusProps) => {
+  const status = useConnectionStatus();
 
   // Re-render once a minute so "3 min ago" stays honest without a poll.
   const [, tick] = useState(0);
@@ -61,36 +83,38 @@ export const ConnectionStatus = ({ status: external, variant = "sider" }: Connec
   // Local only: nothing to be connected to, so nothing to show.
   if (!status.configured) return null;
 
-  const color = DOT[status.state];
-  const detail =
-    status.state === "offline"
-      ? `Last seen ${timeAgo(status.lastOkAt)}`
-      : status.state === "connected"
-        ? `Checked ${timeAgo(status.lastOkAt)}`
-        : "Reaching the server…";
+  const { color, label, detail, help } = describe(status);
+  const clickable = status.state !== "paused" && status.state !== "blocked";
 
   return (
     <Box
-      aria-label={`Sync: ${LABEL[status.state]}`}
+      aria-label={`Sync: ${label}`}
+      data-testid="sync-status"
       sx={{
         display: "flex",
         alignItems: "center",
         gap: 1.25,
-        px: variant === "sider" ? 2 : 0,
-        py: variant === "sider" ? 1 : 0,
+        px: variant === "sider" ? 1.5 : 0,
+        py: variant === "sider" ? 0.75 : 0,
         mx: variant === "sider" ? 1.5 : 0,
+        // In the sider the row is boxed in a thin border in the state's
+        // colour so it reads as a status card, not a stray line of text
+        // (user request, Oct 28 2026). Still not a button: no hover.
+        ...(variant === "sider"
+          ? { border: `1px solid ${color}55`, borderRadius: "8px", bgcolor: `${color}0d` }
+          : {}),
       }}
     >
-      {/* The dot is the only interactive part: hover for the detail, click to re-check. */}
+      {/* The dot is the only interactive part: hover for the detail, click to sync now. */}
       <Tooltip
         {...tooltipStyleProps(color)}
         title={
           <>
-            <TooltipTitle color={color}>{LABEL[status.state]}</TooltipTitle>
+            <TooltipTitle color={color}>{label}</TooltipTitle>
             <TooltipBody>
-              Server at {apiOrigin()}.
-              {status.lastError ? ` Last error: ${status.lastError}.` : ""}
-              {" "}Click to check again.
+              {help}
+              {status.lastError ? ` Last error: ${status.lastError}` : ""}
+              {clickable ? " Click to sync now." : ""}
             </TooltipBody>
           </>
         }
@@ -98,10 +122,10 @@ export const ConnectionStatus = ({ status: external, variant = "sider" }: Connec
         <Box
           role="button"
           tabIndex={0}
-          aria-label="Check the connection again"
-          onClick={() => status.refresh()}
+          aria-label={clickable ? "Sync now" : label}
+          onClick={() => clickable && status.syncNow()}
           onKeyDown={(e) => {
-            if (e.key === "Enter") status.refresh();
+            if (e.key === "Enter" && clickable) status.syncNow();
           }}
           sx={{
             width: 10,
@@ -110,9 +134,9 @@ export const ConnectionStatus = ({ status: external, variant = "sider" }: Connec
             bgcolor: color,
             boxShadow: `0 0 8px ${color}99`,
             flexShrink: 0,
-            cursor: "pointer",
+            cursor: clickable ? "pointer" : "default",
             "&:focus-visible": { outline: `2px solid ${color}80`, outlineOffset: 2 },
-            // Pulse only while a check is running.
+            // Pulse only while a check or a sync is running.
             animation: status.checking ? "fo-pulse 1s ease-in-out infinite" : "none",
             "@keyframes fo-pulse": {
               "0%, 100%": { opacity: 1 },
@@ -123,7 +147,7 @@ export const ConnectionStatus = ({ status: external, variant = "sider" }: Connec
       </Tooltip>
       <Box sx={{ minWidth: 0 }}>
         <Typography sx={{ fontSize: "0.8rem", fontWeight: 700, color: "#cbd5e1", lineHeight: 1.2 }}>
-          {LABEL[status.state]}
+          {label}
         </Typography>
         <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1.2, whiteSpace: "nowrap" }}>
           {detail}

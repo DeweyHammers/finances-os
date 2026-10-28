@@ -27,6 +27,12 @@ export interface SqlExecutor {
 /** A connection that can also be closed (needed to swap database files). */
 export interface SqlConnection extends SqlExecutor {
   close(): Promise<void>;
+  /**
+   * Pull the latest changes from the remote this connection replicates
+   * (desktop embedded replica, backends/libsql.ts). Absent on a plain local
+   * file and on a backend that talks to the remote directly.
+   */
+  sync?(): Promise<void>;
 }
 
 /**

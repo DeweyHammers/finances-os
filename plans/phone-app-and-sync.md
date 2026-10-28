@@ -69,8 +69,12 @@ database is unrecoverable).
   Refine data provider calls it directly on the phone (no HTTP).
 - **Sync modes per device**: *Local only* (default; today's behaviour) or
   *Synced* (Turso URL + token in Settings). Switching local → synced uploads
-  the local database once; synced → local keeps the last replica as the
-  local file. Export/Import database buttons exist in both modes.
+  the local database once (or, when the cloud already holds data, asks which
+  side wins); synced → local keeps the last replica as the local file.
+  Export/Import database buttons exist in both modes. The desktop replica is
+  libsql's *remote replica*: reads local, writes forwarded to the cloud — so
+  the PC is read-only while offline (chosen over libsql's experimental
+  offline-writes mode: no conflicts, ever).
 - **Status icon** (sider footer + Settings → Sync): connected / syncing /
   offline (phone) or offline-pending-sync (desktop replica), with "last
   synced …". Tapping it forces a sync.
@@ -108,10 +112,20 @@ database is unrecoverable).
 ### Phase B — Desktop sync (proves the loop with the PC alone)
 4. libsql backend with embedded replica (`url: file:`, `syncUrl`,
    `authToken`); `@prisma/adapter-libsql` / `libsql` are already installed.
+   **Done 2026-10-27** — `shared/data/backends/libsql.ts` (remote replica,
+   writes forwarded to the cloud, read-only plain open as the offline
+   fallback), `main/sync.ts` + `main/sync-settings.ts`, `/api/sync/*`.
+   See CLAUDE.md → "Sync". Decision made on the way: libsql's remote
+   replica (mature) rather than its experimental offline-writes mode, so
+   there is still exactly one source of truth; offline = read-only.
 5. Settings → Sync wiring, first-upload on switch, export/import, the icon
-   goes live. Test with dev.db against a throwaway Turso database.
-6. Guide: "Set up sync" with screenshots (create Turso account + database,
-   copy two values) in `docs/`.
+   goes live. **Done 2026-10-27** (`components/settings/SyncSection.tsx`,
+   `layout/ConnectionStatus.tsx` + `layout/SyncBanner.tsx`,
+   `lib/use-connection-status.ts`). Verified end to end against a local
+   libsql-server (Docker); the Turso run is the user's to do with a
+   throwaway database (Settings → Phone & sync).
+6. Guide: "Set up sync" in `docs/sync.html` — **text done 2026-10-27**,
+   screenshots are TODO placeholders.
 
 ### Phase C — Android app, local only
 7. Capacitor project under `android/` wrapping the renderer's static export;

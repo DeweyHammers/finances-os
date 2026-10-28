@@ -6,6 +6,7 @@ import serve from "electron-serve";
 import { createWindow } from "./helpers/create-window";
 import { startServer, API_PORT } from "./api-server";
 import { cleanupStaleSandbox } from "./sandbox";
+import { initSync } from "./sync";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -36,6 +37,17 @@ const cleanup = () => {
   // A sandbox copy left by a crash is never resumed — the app always opens
   // on the real database (see main/sandbox.ts).
   cleanupStaleSandbox();
+
+  // Sync (plans/phone-app-and-sync.md Phase B): when this device is synced,
+  // open the embedded replica of the cloud database BEFORE the API serves a
+  // single request — the renderer must never see the stale local file. Needs
+  // app.whenReady() (safeStorage decrypts the token). Local-only installs:
+  // nothing happens here.
+  try {
+    await initSync();
+  } catch (e: any) {
+    console.error("[Sync] startup failed, continuing on the local database:", e?.message ?? e);
+  }
 
   // 3. Start API server after ready
   startServer(API_PORT);

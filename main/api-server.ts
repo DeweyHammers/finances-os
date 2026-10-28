@@ -15,6 +15,21 @@ import {
   getSandboxStatus,
   keepSandbox,
 } from "./sandbox";
+import {
+  SyncError,
+  connectSync,
+  disconnectSync,
+  exportDatabase,
+  getSyncStatus,
+  importDatabase,
+  noteLocalWrite,
+  probeRemote,
+  syncNow,
+  writeBlockReasonNow,
+} from "./sync";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
 // ── Network exposure ──
 // This server fronts the whole finance database with no auth, so it must only
@@ -111,7 +126,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   );
   res.header("Access-Control-Allow-Headers", "Content-Type, x-total-count");
-  res.header("Access-Control-Expose-Headers", "x-total-count");
+  // Content-Disposition: the export download's file name (GET /api/sync/export).
+  res.header("Access-Control-Expose-Headers", "x-total-count, Content-Disposition");
   if (req.method === "OPTIONS") {
     res.sendStatus(200);
     return;
@@ -200,11 +216,132 @@ app.post("/api/sandbox/:action", async (req: Request, res: Response) => {
     res.json(await run());
   } catch (error: any) {
     // A wrong-state call (enter twice, discard when inactive) is the caller's
-    // mistake, not a server failure.
-    const status = error instanceof SandboxError ? 409 : 500;
+    // mistake, not a server failure; a cloud problem during Keep (sync on)
+    // carries its own status (502).
+    const status = error instanceof SandboxError ? 409 : error instanceof SyncError ? error.status : 500;
     console.error(`API Error POST /api/sandbox/${action}:`, error);
     res.status(status).json({ error: error.message });
   }
+});
+// ── Sync with a cloud database (main/sync.ts) ────────────────────────────────
+// Registered BEFORE /api/:resource like the others. The token travels only in
+// POST bodies (never in a URL, never back out in a status).
+function syncFailed(req: Request, res: Response, error: any) {
+  const status = error instanceof SyncError ? error.status : 500;
+  if (status >= 500) console.error(`API Error ${req.method} ${req.url}:`, error);
+  res.status(status).json({
+    error: error.message,
+    ...(error instanceof SyncError && error.code ? { code: error.code, details: error.details } : {}),
+  });
+}
+
+app.get("/api/sync", (_req: Request, res: Response) => {
+  res.json(getSyncStatus());
+});
+
+app.post("/api/sync/probe", async (req: Request, res: Response) => {
+  try {
+    res.json(await probeRemote({ url: req.body?.url, authToken: req.body?.token }));
+  } catch (error: any) {
+    syncFailed(req, res, error);
+  }
+});
+
+app.post("/api/sync/connect", async (req: Request, res: Response) => {
+  try {
+    res.json(await connectSync({ url: req.body?.url, authToken: req.body?.token, source: req.body?.source }));
+  } catch (error: any) {
+    syncFailed(req, res, error);
+  }
+});
+
+app.post("/api/sync/now", async (req: Request, res: Response) => {
+  try {
+    res.json(await syncNow());
+  } catch (error: any) {
+    syncFailed(req, res, error);
+  }
+});
+
+app.post("/api/sync/disconnect", async (req: Request, res: Response) => {
+  try {
+    res.json(await disconnectSync());
+  } catch (error: any) {
+    syncFailed(req, res, error);
+  }
+});
+
+// Export: a plain SQLite file of the current data as a download. Written to
+// a temp file first (VACUUM INTO or a data-layer dump), streamed, deleted.
+app.get("/api/sync/export", async (req: Request, res: Response) => {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "finances-os-export-")), `Finances OS ${stamp}.db`);
+  try {
+    await exportDatabase(tmp);
+  } catch (error: any) {
+    fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
+    syncFailed(req, res, error);
+    return;
+  }
+  res.download(tmp, path.basename(tmp), () => {
+    // Windows may still hold the file for a moment after the stream ends
+    // (ENOTEMPTY on the folder); retry quietly and never throw from this
+    // callback — an exception here is an uncaught error in the main process.
+    removeTempDir(path.dirname(tmp));
+  });
+});
+
+function removeTempDir(dir: string, attempt = 0): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch (e) {
+    if (attempt < 10) setTimeout(() => removeTempDir(dir, attempt + 1), 500);
+    else console.warn(`Could not remove export temp folder ${dir}:`, e);
+  }
+}
+
+// Import: the request body IS the SQLite file (application/octet-stream).
+// 512 MB is far above any budget database; the JSON parser above ignores
+// this content type, so the raw parser here sees the bytes untouched.
+app.post(
+  "/api/sync/import",
+  express.raw({ type: () => true, limit: "512mb" }),
+  async (req: Request, res: Response) => {
+    const body = req.body as Buffer | undefined;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      res.status(400).json({ error: "Send the database file as the request body." });
+      return;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "finances-os-import-"));
+    const tmp = path.join(dir, "import.db");
+    try {
+      fs.writeFileSync(tmp, body);
+      res.json(await importDatabase(tmp));
+    } catch (error: any) {
+      syncFailed(req, res, error);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+// Writes are refused while the cloud database is unreachable (a forwarded
+// write would block the process; the replica may be read-only) or newer than
+// this app (schema-version gate). Reads keep working either way. Local-only
+// installs pass straight through, without a probe.
+app.use("/api/:resource", async (req: Request, res: Response, next: NextFunction) => {
+  if (req.method === "GET" || req.method === "OPTIONS") {
+    next();
+    return;
+  }
+  const reason = await writeBlockReasonNow();
+  if (reason) {
+    // `message` too: Refine's REST provider reads that field into the error
+    // toast, while every other route (and the tests) use `error`.
+    res.status(409).json({ error: reason, message: reason, code: "WRITES_BLOCKED" });
+    return;
+  }
+  next();
 });
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -242,6 +379,7 @@ app.post("/api/:resource", async (req: Request, res: Response) => {
     // The store normalises the body, drops a client-sent id and the legacy
     // relation keys, fills defaults and applies the Income primary rule.
     const item = await getStore().create(model, req.body ?? {});
+    noteLocalWrite();
     res.json(item);
   } catch (error: any) {
     failed(req, res, error, true);
@@ -285,6 +423,7 @@ app.patch("/api/:resource/:id", async (req: Request, res: Response) => {
     // first save (a brand-new database has no settings row yet); every other
     // missing row is a 500, as under Prisma.
     const item = await getStore().update(model, id, req.body ?? {});
+    noteLocalWrite();
     res.json(item);
   } catch (error: any) {
     failed(req, res, error, true);
@@ -304,6 +443,7 @@ app.delete("/api/:resource/:id", async (req: Request, res: Response) => {
     // BudgetCategoryItem: the store snapshots the item's name onto its
     // transactions first, so the historical category stays visible.
     await getStore().remove(model, id);
+    noteLocalWrite();
     res.json({ success: true });
   } catch (error: any) {
     failed(req, res, error);

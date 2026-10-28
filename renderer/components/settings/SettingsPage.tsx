@@ -13,8 +13,9 @@
  *             is read-only and opens this tab), link to the Income page
  *  data     — where the database is, backups ("Back up now" → .bak beside it
  *             via /api/backups), the "Try a sandbox" entry point
- *  sync     — run mode, "Local only" until a sync server exists, and what
- *             sync will be (plans/phone-app-and-sync.md): no controls yet
+ *  sync     — run mode, then SyncSection.tsx: Local only / Synced, the
+ *             cloud URL + token and Connect, Sync now, Forget this device,
+ *             Export / Import (plans/phone-app-and-sync.md Phase B)
  *
  * The open tab is a prop: dialog state in the popup, the `?tab=` query on
  * the page (read by app/Settings/page.tsx). Below the `md` breakpoint the
@@ -29,7 +30,6 @@ import {
   Box,
   Button,
   Chip,
-  Divider,
   Fade,
   IconButton,
   InputAdornment,
@@ -64,11 +64,11 @@ import {
   type BackupInfo,
   type UpdateCheck,
 } from "../../lib/meta-api";
-import { useConnectionStatus } from "../../lib/use-connection-status";
 import { useSandbox } from "../sandbox/SandboxContext";
 import { SandboxButton } from "../sandbox/SandboxButton";
-import { ConnectionStatus } from "../layout/ConnectionStatus";
-import type { SettingsTab } from "./SettingsDialogContext";
+import { takeSettingsToast, type SettingsTab } from "./SettingsDialogContext";
+import { Row, Section } from "./SettingsRows";
+import { SyncSection } from "./SyncSection";
 
 // ── Tabs ────────────────────────────────────────────────────────────────────
 
@@ -76,64 +76,11 @@ const TABS: { id: SettingsTab; label: string; blurb: string; icon: React.ReactNo
   { id: "general", label: "General", blurb: "Version, updates and help.", icon: <TuneIcon /> },
   { id: "budget", label: "Budget", blurb: "The numbers the plan is built around.", icon: <SavingsIcon /> },
   { id: "data", label: "Data", blurb: "Where your data lives, backups and the sandbox.", icon: <StorageIcon /> },
-  { id: "sync", label: "Phone & sync", blurb: "This device, other devices and what sync will be.", icon: <SyncIcon /> },
+  { id: "sync", label: "Phone & sync", blurb: "Keep this PC and your other devices in step through a cloud database you own.", icon: <SyncIcon /> },
 ];
 
 // ── Layout helpers ──────────────────────────────────────────────────────────
-
-/** The card holding one tab's rows. */
-const Section = ({ title, blurb, children }: { title: string; blurb: string; children: React.ReactNode }) => (
-  <Box sx={{ minWidth: 0 }}>
-    <Typography sx={{ fontWeight: 800, color: "white", fontSize: "1.25rem", lineHeight: 1.2 }}>{title}</Typography>
-    <Typography sx={{ color: "text.secondary", fontSize: "0.85rem", mb: 2 }}>{blurb}</Typography>
-    <Box
-      sx={{
-        // Rows sit directly on the panel (Discord-style); the dividers do the
-        // separating, so no second card inside the card.
-        "& > hr:last-child": { display: "none" },
-      }}
-    >
-      {children}
-    </Box>
-  </Box>
-);
-
-interface RowProps {
-  label: string;
-  description?: React.ReactNode;
-  children?: React.ReactNode;
-}
-
-/** One settings row: text on the left, control(s) on the right; wraps on phones. */
-const Row = ({ label, description, children }: RowProps) => (
-  <>
-    <Box
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        flexWrap: "wrap",
-        gap: 2,
-        py: 2.25,
-      }}
-    >
-      <Box sx={{ flex: "1 1 260px", minWidth: 0 }}>
-        <Typography sx={{ fontWeight: 700, color: "white", fontSize: "0.95rem" }}>{label}</Typography>
-        {description && (
-          <Typography sx={{ color: "text.secondary", fontSize: "0.83rem", mt: 0.25, overflowWrap: "anywhere" }}>
-            {description}
-          </Typography>
-        )}
-      </Box>
-      {children && (
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexShrink: 0, flexWrap: "wrap" }}>
-          {children}
-        </Box>
-      )}
-    </Box>
-    <Divider sx={{ borderColor: "rgba(255,255,255,0.06)" }} />
-  </>
-);
+// Section / Row live in SettingsRows.tsx (shared with SyncSection.tsx).
 
 /** The left-hand tab list (a horizontal strip below `md`). */
 const TabNav = ({ active, onSelect }: { active: SettingsTab; onSelect: (tab: SettingsTab) => void }) => {
@@ -296,6 +243,12 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
     setToastMsg(msg);
     setToastOpen(true);
   };
+  // A sync action that reloaded the window (Import, Connect taking the
+  // cloud's data) left its result message for us to show now.
+  useEffect(() => {
+    const pending = takeSettingsToast();
+    if (pending) toast(pending);
+  }, []);
   const backUpNow = async () => {
     setBackingUp(true);
     try {
@@ -319,7 +272,6 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
   };
 
   const sandbox = useSandbox();
-  const connection = useConnectionStatus();
 
   const modeLabel = meta ? MODE_LABELS[meta.mode] : "…";
   const onThisPc = meta?.mode !== "hosted";
@@ -514,31 +466,12 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
         description={
           meta?.mode === "hosted"
             ? `Hosted server at ${apiOrigin()} — every device that opens this address shares the same data.`
-            : "On this PC, with a local database. Nothing leaves your computer."
+            : "On this PC, with a local database file."
         }
       >
         <Chip label={modeLabel} size="small" sx={{ fontWeight: 800 }} />
       </Row>
-      <Row
-        label="Connection"
-        description={
-          connection.configured
-            ? "Whether this device can reach the sync server right now. Checked every 30 seconds; click the dot to check again. The same status sits above Settings in the sidebar."
-            : "No sync server is set up, so there is nothing to connect to and nothing to report. Once sync is configured, the status appears here and above Settings in the sidebar."
-        }
-      >
-        {connection.configured ? (
-          <ConnectionStatus status={connection} variant="settings" />
-        ) : (
-          <Chip label="Local only" size="small" variant="outlined" sx={{ fontWeight: 700 }} />
-        )}
-      </Row>
-      <Row
-        label="Sync across devices"
-        description="Coming with the phone app: an Android app on the GitHub Releases page plus optional sync through a free database you own, so the phone and this PC stay in step. The options will appear here."
-      >
-        <Chip label="Not yet available" size="small" variant="outlined" sx={{ fontWeight: 700 }} />
-      </Row>
+      <SyncSection docsUrl={meta?.docsUrl} toast={toast} />
     </Section>
   );
 

@@ -11,8 +11,9 @@
  */
 import fs from "fs";
 import path from "path";
-import { getStore, getRealDatabaseUrl, databaseUrlToPath } from "../shared/db";
+import { getRealDatabaseUrl, databaseUrlToPath } from "../shared/db";
 import { isSandboxActive } from "./sandbox";
+import { backupFilePath, snapshotCurrentDatabase } from "./sync";
 
 export const GITHUB_REPO = "DeweyHammers/finances-os";
 export const REPO_URL = `https://github.com/${GITHUB_REPO}`;
@@ -201,22 +202,15 @@ export function listBackups(): BackupInfo {
  * scratch copy, and a backup of that is not what the user means.
  */
 export async function createBackup(): Promise<
-  BackupInfo & { file: string; at: string; method: "vacuum" | "copy" }
+  BackupInfo & { file: string; at: string; method: "vacuum" | "copy" | "dump" }
 > {
   if (isSandboxActive()) {
     throw new BackupError("Finish the sandbox (Keep or Discard) before backing up.");
   }
-  const real = realDbPath();
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const file = `${real}.${stamp}.bak`;
-  let method: "vacuum" | "copy" = "vacuum";
-  try {
-    const target = file.replace(/\\/g, "/").replace(/'/g, "''");
-    await getStore().raw(`VACUUM INTO '${target}'`);
-  } catch (err) {
-    console.warn("VACUUM INTO failed, copying the file instead:", err);
-    fs.copyFileSync(real, file);
-    method = "copy";
-  }
+  // A replica (sync on) can't VACUUM — its rows are dumped through the data
+  // layer instead (main/sync.ts → snapshotCurrentDatabase); the file is a
+  // plain SQLite database either way.
+  const file = backupFilePath();
+  const method = await snapshotCurrentDatabase(file);
   return { ...listBackups(), file, at: new Date().toISOString(), method };
 }

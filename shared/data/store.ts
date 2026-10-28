@@ -205,6 +205,18 @@ export class DataStore {
     return this.locked(() => getSchemaVersion(this.connection));
   }
 
+  /**
+   * Pull the remote's changes into an embedded replica. Takes the lock like
+   * every other call so no statement runs while frames are being applied.
+   * Rejects when the connection has nothing to sync with.
+   */
+  sync(): Promise<void> {
+    return this.lock.run(async () => {
+      if (!this.connection.sync) throw new Error("This database is not synced with a remote.");
+      await this.connection.sync();
+    });
+  }
+
   // ── Reads ──
 
   list(model: Model, query: ListQuery = {}): Promise<ListResult> {

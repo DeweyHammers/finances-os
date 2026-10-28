@@ -34,6 +34,47 @@ export function settingsHref(tab: SettingsTab): string {
   return `/Settings?tab=${tab}`;
 }
 
+const REOPEN_KEY = "fos.reopenSettings";
+const TOAST_KEY = "fos.settingsToast";
+const REOPEN_DELAY_MS = 600;
+
+/**
+ * Ask for Settings to reopen on `tab` after the window reload that follows,
+ * and show `message` as a toast once it is back (a toast fired right before
+ * the reload dies with the page — the user never saw "Imported 12 rows").
+ */
+export function reopenSettingsAfterReload(tab: SettingsTab, message?: string): void {
+  try {
+    sessionStorage.setItem(REOPEN_KEY, tab);
+    if (message) sessionStorage.setItem(TOAST_KEY, message);
+  } catch {
+    /* no sessionStorage (shouldn't happen in the app); the user reopens Settings by hand */
+  }
+}
+
+/** The toast left by reopenSettingsAfterReload, once (SettingsPage shows it on mount). */
+export function takeSettingsToast(): string | null {
+  try {
+    const value = sessionStorage.getItem(TOAST_KEY);
+    if (value !== null) sessionStorage.removeItem(TOAST_KEY);
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+/** Read and clear the note left by reopenSettingsAfterReload. */
+function readReopenTab(): SettingsTab | null {
+  try {
+    const value = sessionStorage.getItem(REOPEN_KEY);
+    if (value === null) return null;
+    sessionStorage.removeItem(REOPEN_KEY);
+    return SETTINGS_TABS.includes(value as SettingsTab) ? (value as SettingsTab) : null;
+  } catch {
+    return null;
+  }
+}
+
 interface SettingsDialogValue {
   /** True below the sider breakpoint: Settings is a page there, never a dialog. */
   asPage: boolean;
@@ -60,6 +101,25 @@ export function SettingsDialogProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     loadMeta().catch(() => {});
     loadBackups().catch(() => {});
+  }, []);
+
+  // A Settings action that had to reload the window (sync Connect taking the
+  // cloud's data, Import) leaves a note so Settings comes straight back on
+  // the same tab instead of dumping the user on the page behind it (user
+  // feedback, Oct 28 2026). The short delay lets the page settle first — a
+  // dialog opened in the middle of a fresh load stalls its fade-in (see
+  // the file comment).
+  useEffect(() => {
+    const tab = readReopenTab();
+    if (!tab) return;
+    const id = setTimeout(() => {
+      setTab(tab);
+      if (asPage) router.push(settingsHref(tab));
+      else setOpen(true);
+    }, REOPEN_DELAY_MS);
+    return () => clearTimeout(id);
+    // Runs once, on the first mount after the reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const openSettings = useCallback(
