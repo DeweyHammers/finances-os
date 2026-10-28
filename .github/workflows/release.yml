@@ -12,7 +12,16 @@
 #      and merge that to main.
 #   2. Tag main and push the tag:  git tag vX.Y.Z && git push origin vX.Y.Z
 #   3. This workflow runs the test suite, builds, and publishes a Release
-#      named after the tag with "Finances OS Setup X.Y.Z.exe" attached.
+#      named after the tag with "Finances-OS-Setup-X.Y.Z.exe", its .blockmap
+#      and `latest.yml` attached.
+#
+# `latest.yml` is what the installed app's "Check for updates" reads (see
+# CLAUDE.md → "Updates"): electron-updater fetches it from the latest Release
+# and downloads the installer named inside it. EVERY Release from v1.3.0 on
+# must carry it, or installed apps report "no update" for that version. The
+# file is written by electron-builder (the `publish: github` config in
+# electron-builder.yml) even though `npm run build` passes `--publish never`:
+# this workflow does the uploading, not electron-builder.
 #
 # "Run workflow" (workflow_dispatch) builds without releasing and keeps the
 # installer as a downloadable artifact for 14 days — useful to try a build
@@ -93,6 +102,7 @@ jobs:
           path: |
             dist/*.exe
             dist/*.blockmap
+            dist/latest.yml
           retention-days: 14
           if-no-files-found: error
 
@@ -102,7 +112,11 @@ jobs:
         with:
           name: Finances OS ${{ github.ref_name }}
           generate_release_notes: true
+          # The installer, its blockmap (differential downloads), the update
+          # feed, and the portable build. Names must not contain spaces (see
+          # electron-builder.yml → artifactName).
           files: |
-            dist/Finances OS Setup *.exe
-            dist/Finances OS Setup *.exe.blockmap
-            dist/Finances OS *.exe
+            dist/Finances-OS-Setup-*.exe
+            dist/Finances-OS-Setup-*.exe.blockmap
+            dist/latest.yml
+            dist/Finances-OS-*-portable.exe

@@ -8,7 +8,9 @@
  * close button); below the sider breakpoint it is the /Settings page (see
  * SettingsDialogContext for the rule).
  *
- *  general  — version + "Check for updates" (GitHub Releases), help, issues
+ *  general  — version + "Check for updates" → Download → Restart to update
+ *             (main/updates.ts; link-only outside the installed app), help,
+ *             issues
  *  budget   — surplus target (the ONLY place it is edited; the Overview pill
  *             is read-only and opens this tab), link to the Income page
  *  data     — where the database is, backups ("Back up now" → .bak beside it
@@ -33,12 +35,15 @@ import {
   Fade,
   IconButton,
   InputAdornment,
+  LinearProgress,
   Snackbar,
   TextField,
   Tooltip,
   Typography,
 } from "@mui/material";
 import SystemUpdateAltIcon from "@mui/icons-material/SystemUpdateAlt";
+import DownloadIcon from "@mui/icons-material/Download";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import BackupIcon from "@mui/icons-material/Backup";
@@ -56,13 +61,14 @@ import {
   cachedBackups,
   cachedMeta,
   createBackup,
-  fetchUpdateCheck,
+  fetchUpdateStatus,
   loadBackups,
   loadMeta,
   MODE_LABELS,
+  runUpdateAction,
   type AppMeta,
   type BackupInfo,
-  type UpdateCheck,
+  type UpdateStatus,
 } from "../../lib/meta-api";
 import { useSandbox } from "../sandbox/SandboxContext";
 import { SandboxButton } from "../sandbox/SandboxButton";
@@ -150,6 +156,22 @@ const TabNav = ({ active, onSelect }: { active: SettingsTab; onSelect: (tab: Set
   );
 };
 
+/** A status before the first answer arrives — used to show "Checking…" at once. */
+const emptyUpdateStatus: UpdateStatus = {
+  supported: false,
+  state: "idle",
+  current: "",
+  latest: null,
+  releaseDate: null,
+  releaseUrl: "#",
+  progress: null,
+  error: null,
+  checkedAt: null,
+};
+
+/** "51 MB of 123 MB" for the download row. */
+const formatBytes = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)} MB` : `${Math.round(n / 1e3)} KB`);
+
 const linkButton = {
   variant: "outlined" as const,
   size: "small" as const,
@@ -180,19 +202,47 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
     loadMeta().then(setMeta).catch((e) => setMetaError(e.message));
   }, []);
 
-  // Update check
-  const [update, setUpdate] = useState<UpdateCheck | null>(null);
-  const [updateError, setUpdateError] = useState<string | null>(null);
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const checkUpdates = async () => {
-    setCheckingUpdate(true);
-    setUpdateError(null);
+  // In-app updates (main/updates.ts). `update` is the server's status, the
+  // one thing the row renders from: Check → "Version X is available" with
+  // Download → progress → "Restart to update". Fetched once on open (a
+  // silent startup check or a download in progress shows right away — no
+  // cached first render on purpose: the sibling rows hydrate from null
+  // too), then polled every 500 ms while the server is busy.
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  // The click's own failure (a 409, the API being away) — separate from the
+  // status's `error`, which is the engine's.
+  const [updateActionError, setUpdateActionError] = useState<string | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchUpdateStatus(ctrl.signal).then(setUpdate).catch(() => {});
+    return () => ctrl.abort();
+  }, []);
+  const updatePolling = update?.state === "checking" || update?.state === "downloading" || update?.state === "installing";
+  useEffect(() => {
+    if (!updatePolling) return;
+    const ctrl = new AbortController();
+    const t = setInterval(() => {
+      fetchUpdateStatus(ctrl.signal).then(setUpdate).catch(() => {});
+    }, 500);
+    return () => {
+      clearInterval(t);
+      ctrl.abort();
+    };
+  }, [updatePolling]);
+  const runUpdate = async (action: "check" | "download" | "install") => {
+    setUpdateBusy(true);
+    setUpdateActionError(null);
+    // Show the transition at once; the server's answer replaces it.
+    if (action === "check") setUpdate((u) => ({ ...(u ?? emptyUpdateStatus), state: "checking" }));
     try {
-      setUpdate(await fetchUpdateCheck());
+      setUpdate(await runUpdateAction(action));
     } catch (e: any) {
-      setUpdateError(e.message);
+      setUpdateActionError(e.message);
+      // Re-read where the server really is after a refused call.
+      fetchUpdateStatus().then(setUpdate).catch(() => {});
     } finally {
-      setCheckingUpdate(false);
+      setUpdateBusy(false);
     }
   };
 
@@ -278,6 +328,108 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
 
   // ── Sections ──
 
+  // The second row of General: what the last check found and the next step.
+  // One row, its label/description/control chosen by the update state; it
+  // is absent until there is something to say (idle, or a status that
+  // hasn't loaded yet). The manual Release-page link is the fallback for a
+  // build that can't install itself (dev / hosted), and the way out of a
+  // failed download.
+  const updateRow = (() => {
+    if (updateActionError) {
+      return (
+        <Row label="Update failed" description={updateActionError}>
+          {update?.latest && (
+            <Button {...linkButton} href={update.releaseUrl} component="a">
+              Release page
+            </Button>
+          )}
+        </Row>
+      );
+    }
+    if (!update || update.state === "idle" || update.state === "checking") return null;
+    const contained = {
+      variant: "contained" as const,
+      size: "small" as const,
+      disableElevation: true,
+      sx: { fontWeight: 800, borderRadius: 2, whiteSpace: "nowrap" },
+    };
+    switch (update.state) {
+      case "up-to-date":
+        return <Row label="You're up to date" description={`Latest release is ${update.latest}.`} />;
+      case "available":
+        return update.supported ? (
+          <Row
+            label={`Version ${update.latest} is available`}
+            description="Download it now; the app restarts to install when you're ready. Your data stays where it is."
+          >
+            <Button {...linkButton} href={update.releaseUrl} component="a">
+              What's new
+            </Button>
+            <Button {...contained} startIcon={<DownloadIcon />} onClick={() => runUpdate("download")} disabled={updateBusy}>
+              Download
+            </Button>
+          </Row>
+        ) : (
+          <Row
+            label={`Version ${update.latest} is available`}
+            description="Download the new installer from the Release page and run it; your data stays where it is."
+          >
+            <Button {...linkButton} href={update.releaseUrl} component="a">
+              Download
+            </Button>
+          </Row>
+        );
+      case "downloading": {
+        const p = update.progress;
+        const pct = p ? Math.round(p.percent) : 0;
+        return (
+          <Row
+            label={`Downloading version ${update.latest}…`}
+            description={
+              <Box component="span" sx={{ display: "block" }}>
+                {p && p.total > 0 ? `${pct}% · ${formatBytes(p.transferred)} of ${formatBytes(p.total)}` : "Starting…"}
+                <LinearProgress
+                  variant={p && p.total > 0 ? "determinate" : "indeterminate"}
+                  value={pct}
+                  sx={{ mt: 1, borderRadius: 1, height: 6, maxWidth: 420 }}
+                />
+              </Box>
+            }
+          />
+        );
+      }
+      case "downloaded":
+      case "installing":
+        return (
+          <Row
+            label={`Version ${update.latest} is ready to install`}
+            description="The app closes, installs the update and opens again. Your data stays where it is."
+          >
+            <Button
+              {...contained}
+              startIcon={<RestartAltIcon />}
+              onClick={() => runUpdate("install")}
+              disabled={updateBusy || update.state === "installing"}
+            >
+              {update.state === "installing" ? "Restarting…" : "Restart to update"}
+            </Button>
+          </Row>
+        );
+      case "error":
+        return (
+          <Row label={update.latest ? "Update failed" : "Update check failed"} description={update.error ?? "Unknown error"}>
+            {update.latest && (
+              <Button {...linkButton} href={update.releaseUrl} component="a">
+                Release page
+              </Button>
+            )}
+          </Row>
+        );
+      default:
+        return null;
+    }
+  })();
+
   const general = (
     <Section key="general" title="General" blurb={activeTab.blurb}>
       <Row
@@ -295,37 +447,16 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
           size="small"
           disableElevation
           startIcon={<SystemUpdateAltIcon />}
-          onClick={checkUpdates}
-          disabled={checkingUpdate}
+          onClick={() => runUpdate("check")}
+          // A download or a finished download is left alone: checking again
+          // would only re-answer the same release.
+          disabled={updateBusy || updatePolling || update?.state === "downloaded"}
           sx={{ fontWeight: 800, borderRadius: 2, whiteSpace: "nowrap" }}
         >
-          {checkingUpdate ? "Checking…" : "Check for updates"}
+          {update?.state === "checking" ? "Checking…" : "Check for updates"}
         </Button>
       </Row>
-      {(update || updateError) && (
-        <Row
-          label={
-            updateError
-              ? "Update check failed"
-              : update?.updateAvailable
-                ? `Version ${update.latest} is available`
-                : "You're up to date"
-          }
-          description={
-            updateError
-              ? updateError
-              : update?.updateAvailable
-                ? "Download the new installer from the Release page and run it; your data stays where it is."
-                : `Latest release is ${update?.latest}.`
-          }
-        >
-          {update?.updateAvailable && (
-            <Button {...linkButton} href={update.url} component="a">
-              Download
-            </Button>
-          )}
-        </Row>
-      )}
+      {updateRow}
       <Row label="Help" description="The picture tour walks through every page and feature.">
         <Button {...linkButton} href={meta?.docsUrl ?? "#"} component="a" disabled={!meta}>
           Open guide
