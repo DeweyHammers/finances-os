@@ -26,7 +26,7 @@ if (path.basename(TEMPLATE_DB) !== "template.db") {
   throw new Error("refusing: output is not template.db");
 }
 
-const tables = createEmptyDatabase(TEMPLATE_DB, { root: ROOT });
+const tables = createEmptyDatabase(TEMPLATE_DB);
 
 console.log(
   `Empty template database created: ${path.relative(ROOT, TEMPLATE_DB)} (${tables} tables, 0 rows)`,

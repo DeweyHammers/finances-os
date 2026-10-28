@@ -286,21 +286,50 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
   }
 
   return (
-    <Box sx={{ p: 3, height: "100%", display: "flex", flexDirection: "column" }}>
+    <Box
+      sx={{
+        p: { xs: 2, sm: 3 },
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+      }}
+    >
       <Box
         sx={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          // Phone width: the Add Transaction button drops under the balances
+          // as a whole instead of hanging off the right edge of the screen.
+          flexWrap: "wrap",
           mb: 3,
           gap: 2,
         }}
       >
-        <Box>
-          <Typography variant="h4" sx={{ fontWeight: 900, color: "white" }}>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography
+            variant="h4"
+            sx={{
+              fontWeight: 900,
+              color: "white",
+              fontSize: { xs: "1.75rem", sm: "2.125rem" },
+              overflowWrap: "anywhere",
+            }}
+          >
             {account.name}
           </Typography>
-          <Box sx={{ display: "flex", gap: 4, mt: 1 }}>
+          {/* The three balances wrap onto a second row when they don't fit;
+              each label stays on one line. */}
+          <Box
+            sx={{
+              display: "flex",
+              flexWrap: "wrap",
+              columnGap: { xs: 3, sm: 4 },
+              rowGap: 1,
+              mt: 1,
+            }}
+          >
             <Box>
               <Typography
                 variant="caption"
@@ -330,7 +359,7 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
             <Box>
               <Typography
                 variant="caption"
-                sx={{ color: "primary.light", fontWeight: 700 }}
+                sx={{ color: "primary.light", fontWeight: 700, whiteSpace: "nowrap" }}
               >
                 WORKING BALANCE
               </Typography>
@@ -350,7 +379,7 @@ export const AccountLedger = ({ accountId }: AccountLedgerProps) => {
           variant="contained"
           startIcon={<AddIcon />}
           onClick={() => setAddOpen(true)}
-          sx={{ fontWeight: 800, borderRadius: 2, px: 3 }}
+          sx={{ fontWeight: 800, borderRadius: 2, px: 3, whiteSpace: "nowrap", flexShrink: 0 }}
         >
           Add Transaction
         </Button>

@@ -20,7 +20,9 @@ import { execSync } from "node:child_process";
 import { launch } from "./cdp.mjs";
 
 const OUT = path.join("docs", "img", "tour");
-const API = "http://127.0.0.1:5858/api";
+// `DEMO_API_PORT` matches serve.ts: run the demo API on another port (and the
+// renderer with NEXT_PUBLIC_API_URL) while the installed app still owns 5858.
+const API = `http://127.0.0.1:${process.env.DEMO_API_PORT ?? 5858}/api`;
 
 // ── Fake data ────────────────────────────────────────────────────────────
 const INCOME = { name: "Paycheck", amount: 1150, paymentCycle: "WEEKLY", payDay: 5 }; // Fridays
@@ -305,8 +307,12 @@ try {
 
   console.log("Step 11 · what if? (sandbox)");
   // Alex wonders what cancelling the gym would do to next month. Try it on a
-  // COPY of the data: "Try a sandbox" copies the database and reloads the page
-  // with the amber banner; the real data is untouched until Keep.
+  // COPY of the data: "Try a sandbox" (Settings -> Data) copies the database
+  // and reloads the page with the amber banner; the real data is untouched
+  // until Keep.
+  // The /Settings URL is the page form of Settings on every width (in-app it
+  // is a popup on desktop), so the tour can land on the Data tab directly.
+  await page.goto("/Settings?tab=data");
   await page.clickText("Try a sandbox");
   await page.sleep(1500);
   await page.settle();

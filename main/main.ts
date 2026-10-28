@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { execSync } from "child_process";
-import { app, ipcMain, protocol, session } from "electron";
+import { app, ipcMain, protocol, session, shell } from "electron";
 import serve from "electron-serve";
 import { createWindow } from "./helpers/create-window";
 import { startServer, API_PORT } from "./api-server";
@@ -78,6 +78,14 @@ const cleanup = () => {
 
   mainWindow.maximize();
   mainWindow.setBackgroundColor("#0f172a");
+
+  // Links the renderer opens with target="_blank" (Settings → Help, the
+  // Release page of an update) go to the user's browser instead of a bare
+  // Electron window. Anything that isn't http(s) is dropped.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
 
   if (isProd) {
     await mainWindow.loadURL("app://./");

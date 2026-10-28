@@ -293,11 +293,15 @@ export const ResourceList: FC<ResourceListProps> = ({
         sx={{
           width: "100%",
           maxWidth: 1600,
+          // minWidth 0: a flex item's default min-width is its content width,
+          // so the 400px search box used to push the whole card past the
+          // right edge of a phone screen.
+          minWidth: 0,
           height: "100%",
           display: "flex",
           flexDirection: "column",
           gap: 2,
-          p: 3,
+          p: { xs: 2, sm: 3 },
           bgcolor: "#1e293b",
           borderRadius: 2,
           border: "1px solid rgba(129, 140, 248, 0.2)",
@@ -310,9 +314,20 @@ export const ResourceList: FC<ResourceListProps> = ({
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
+            // Title and button wrap onto two rows when they can't share one
+            // (phone width) instead of the button's label breaking in half.
+            flexWrap: "wrap",
+            gap: 1.5,
           }}
         >
-          <Typography variant="h4" sx={{ fontWeight: 900, color: "white" }}>
+          <Typography
+            variant="h4"
+            sx={{
+              fontWeight: 900,
+              color: "white",
+              fontSize: { xs: "1.75rem", sm: "2.125rem" },
+            }}
+          >
             {title}
           </Typography>
           {/* "Create New <Singular>" — replace(/s$/) is a naive singularizer
@@ -324,10 +339,11 @@ export const ResourceList: FC<ResourceListProps> = ({
             startIcon={<AddIcon />}
             onClick={() => showCreate()}
             sx={{
-              px: 4,
+              px: { xs: 2.5, sm: 4 },
               py: 1,
               borderRadius: 2,
               fontWeight: 800,
+              whiteSpace: "nowrap",
               bgcolor: "primary.main",
               boxShadow: "0 4px 12px 0 rgba(129, 140, 248, 0.3)",
               "&:hover": {
@@ -350,13 +366,13 @@ export const ResourceList: FC<ResourceListProps> = ({
             alignItems: "flex-start",
           }}
         >
-          <Box sx={{ position: "relative" }}>
+          <Box sx={{ position: "relative", width: "100%", maxWidth: 400 }}>
             <TextField
               size="small"
               placeholder="Search by name..."
               onChange={handleSearch}
+              fullWidth
               sx={{
-                width: 400,
                 "& .MuiOutlinedInput-root": {
                   borderRadius: 2,
                   bgcolor: "rgba(255,255,255,0.03)",

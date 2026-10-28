@@ -43,3 +43,11 @@ export const SHORT_MONTHS = [
   "Nov",
   "Dec",
 ];
+
+/**
+ * MUI breakpoint key below which the sider becomes a drawer, the top bar
+ * shows the hamburger and Settings is a page instead of a popup. `md` =
+ * 900px. Lives here (not in CustomSider) so components that CustomSider
+ * itself imports can read it without an import cycle.
+ */
+export const SIDER_BREAKPOINT = "md" as const;

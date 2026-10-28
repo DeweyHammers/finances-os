@@ -52,7 +52,6 @@ import { PersonalOverview } from "./PersonalOverview";
 import { YearlyOverview } from "./YearlyOverview";
 import { CashFlowOverview } from "./CashFlowOverview";
 import { SurplusTargetPill } from "./SurplusTargetPill";
-import { SandboxButton } from "../sandbox/SandboxButton";
 import { SHORT_MONTHS } from "../../lib/constants";
 import { useRouter } from "next/navigation";
 import {
@@ -536,10 +535,13 @@ export function OverviewPage() {
       <Box
         sx={{
           display: "grid",
-          // As many 200px+ tiles per row as fit: three on a wide window, two
+          // As many 280px+ tiles per row as fit: three on a wide window, two
           // or one as it narrows. auto-fit instead of a fixed breakpoint so
-          // the tiles never squash below the width their amounts need.
-          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+          // the tiles never squash below the width their amounts need
+          // (icon + "$1,048.02 / month" needs ~280px; at 200px the unit
+          // broke into "/" and "month" on separate lines). min(…, 100%)
+          // keeps a single column narrower than 280px from overflowing.
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(280px, 100%), 1fr))",
           gap: 2,
         }}
       >
@@ -608,7 +610,10 @@ export function OverviewPage() {
               >
                 {tile.label}
               </Typography>
-              <Box sx={{ display: "flex", alignItems: "baseline", gap: 0.75 }}>
+              {/* flexWrap + nowrap: if a very large amount still can't share the
+                  line with its unit, the whole "/ month" drops under the
+                  amount as one piece instead of splitting mid-phrase. */}
+              <Box sx={{ display: "flex", alignItems: "baseline", gap: 0.75, flexWrap: "wrap" }}>
                 <Typography
                   variant="h5"
                   sx={{
@@ -616,13 +621,14 @@ export function OverviewPage() {
                     color: "white",
                     fontVariantNumeric: "tabular-nums",
                     lineHeight: 1.2,
+                    whiteSpace: "nowrap",
                   }}
                 >
                   ${tile.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </Typography>
                 <Typography
                   variant="caption"
-                  sx={{ color: "text.disabled", fontWeight: 600, fontSize: "0.7rem" }}
+                  sx={{ color: "text.disabled", fontWeight: 600, fontSize: "0.7rem", whiteSpace: "nowrap" }}
                 >
                   {tile.unit}
                 </Typography>
@@ -699,9 +705,6 @@ export function OverviewPage() {
             gap: 1.5,
           }}
         >
-          {/* "Try a sandbox" — hidden while a sandbox is active (the banner
-              above the page owns Discard / Keep then). */}
-          <SandboxButton />
           <Button
             variant="outlined"
             size="small"

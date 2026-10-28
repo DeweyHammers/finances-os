@@ -296,7 +296,11 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
               display: "block",
             }}
           >
-            {period.label}
+            {/* "PAY WEEK 4" never breaks across lines; on a narrow card only
+                the NOW tag moves down to its own line. */}
+            <Box component="span" sx={{ whiteSpace: "nowrap" }}>
+              {period.label}
+            </Box>
             {period.isCurrent && (
               <Box
                 component="span"
@@ -309,6 +313,8 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
                   borderRadius: 1,
                   fontSize: "0.6rem",
                   verticalAlign: "middle",
+                  display: "inline-block",
+                  whiteSpace: "nowrap",
                 }}
               >
                 NOW

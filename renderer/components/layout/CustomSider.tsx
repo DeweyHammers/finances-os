@@ -44,7 +44,11 @@ import SavingsIcon from "@mui/icons-material/Savings";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import AddIcon from "@mui/icons-material/Add";
+import SettingsIcon from "@mui/icons-material/Settings";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { ConnectionStatus } from "./ConnectionStatus";
+import { useSettingsDialog } from "../settings/SettingsDialogContext";
+import { SIDER_BREAKPOINT } from "../../lib/constants";
 import { useList } from "@refinedev/core";
 import { computeAccountBalance } from "../../lib/budget-utils";
 import { formatMoney } from "../../lib/cents";
@@ -57,8 +61,9 @@ export const SIDER_WIDTH = 260;
 
 /** MUI breakpoint key below which the sider becomes a drawer. `md` = 900px.
  *  Shared with MobileTopBar so the hamburger appears exactly when the column
- *  disappears — never both, never neither. */
-export const SIDER_BREAKPOINT = "md" as const;
+ *  disappears — never both, never neither. Defined in lib/constants.ts and
+ *  re-exported here for the existing importers. */
+export { SIDER_BREAKPOINT };
 
 // ── NavLeaf ──
 // Single clickable nav row. Handles the "am I the active route?" highlight and
@@ -290,7 +295,12 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
         </Typography>
       </Box>
 
-      <Collapse in={cashOpen} timeout="auto">
+      {/* flexShrink: 0 — MUI Collapse sets `min-height: 0` on its root, so as a
+          flex child of the sider column it was the ONLY item allowed to shrink
+          when the window got short. Its rows then overflowed visibly on top of
+          Payees / Expenses instead of pushing them down (the sider scrolls;
+          nothing should ever shrink). */}
+      <Collapse in={cashOpen} timeout="auto" sx={{ flexShrink: 0 }}>
         <Box>
           {accounts
             .filter((a) => !a.closed)
@@ -349,11 +359,61 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
       />
       <NavLeaf href="/Income" label="Income" icon={<SavingsIcon />} />
 
-      {/* Flex spacer pushes any future footer content to the bottom; the 16px
-          box gives a little breathing room above the viewport edge. */}
+      {/* Flex spacer pushes the footer (Settings + connection status) to the
+          bottom, like Obsidian's settings gear; the 16px box gives a little
+          breathing room above the viewport edge. */}
       <Box sx={{ flex: 1 }} />
+      <Box sx={{ pt: 2 }} />
+      {/* Sync status — renders nothing until a sync server is configured, and
+          sits ABOVE Settings so it is never in the way of that last click. */}
+      <ConnectionStatus />
+      {/* Settings is a popup over the current page, not a route. */}
+      <SettingsLeaf />
       <Box sx={{ height: 16 }} />
     </>
+  );
+};
+
+// ── SettingsLeaf ──
+// Looks like a NavLeaf but goes through the Settings context: a popup on a
+// desktop-width window, the /Settings page below the breakpoint (see
+// components/settings/SettingsDialogContext.tsx). Highlighted only while the
+// PAGE is showing: the popup covers the page, so a highlight behind it would
+// just be noise (user feedback, Oct 27 2026).
+const SettingsLeaf = () => {
+  const { asPage, openSettings } = useSettingsDialog();
+  const pathname = usePathname();
+  const active = asPage && ((pathname || "/").replace(/\/index\.html$/, "") || "/").startsWith("/Settings");
+  return (
+    <Box
+      role="button"
+      tabIndex={0}
+      aria-haspopup="dialog"
+      onClick={() => openSettings()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") openSettings();
+      }}
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 1.5,
+        px: 2,
+        py: 1.25,
+        mx: 1.5,
+        my: 0.25,
+        borderRadius: "8px",
+        cursor: "pointer",
+        bgcolor: active ? "rgba(129, 140, 248, 0.15)" : "transparent",
+        color: active ? "primary.light" : "#cbd5e1",
+        "&:hover": {
+          bgcolor: active ? "rgba(129, 140, 248, 0.20)" : "rgba(129, 140, 248, 0.08)",
+        },
+        "& svg": { color: active ? "primary.light" : "#94a3b8", fontSize: "1.2rem" },
+      }}
+    >
+      <SettingsIcon />
+      <Typography sx={{ fontSize: "0.95rem", fontWeight: 600 }}>Settings</Typography>
+    </Box>
   );
 };
 
@@ -371,6 +431,10 @@ const siderSurfaceSx = {
   flexDirection: "column",
   overflowY: "auto",
   overflowX: "hidden",
+  // The column scrolls when it is taller than the window; no row may shrink
+  // (see the Cash <Collapse> note in SiderContent). The `flex: 1` spacer
+  // keeps a 0 basis, so it still collapses to nothing.
+  "& > *": { flexShrink: 0 },
 } as const;
 
 export const CustomSider = () => {

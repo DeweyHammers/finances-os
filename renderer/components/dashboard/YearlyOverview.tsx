@@ -89,7 +89,7 @@ export const YearlyOverview: React.FC<YearlyOverviewProps> = ({
                   </Typography>
                   <Typography
                     variant="caption"
-                    sx={{ fontWeight: 800, color: "text.secondary" }}
+                    sx={{ fontWeight: 800, color: "text.secondary", whiteSpace: "nowrap" }}
                   >
                     TOTAL:{" "}
                     <span style={{ color: "white" }}>
