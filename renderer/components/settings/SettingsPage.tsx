@@ -66,7 +66,7 @@ import {
 } from "../../lib/meta-api";
 import { useSandbox } from "../sandbox/SandboxContext";
 import { SandboxButton } from "../sandbox/SandboxButton";
-import type { SettingsTab } from "./SettingsDialogContext";
+import { takeSettingsToast, type SettingsTab } from "./SettingsDialogContext";
 import { Row, Section } from "./SettingsRows";
 import { SyncSection } from "./SyncSection";
 
@@ -243,6 +243,12 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
     setToastMsg(msg);
     setToastOpen(true);
   };
+  // A sync action that reloaded the window (Import, Connect taking the
+  // cloud's data) left its result message for us to show now.
+  useEffect(() => {
+    const pending = takeSettingsToast();
+    if (pending) toast(pending);
+  }, []);
   const backUpNow = async () => {
     setBackingUp(true);
     try {

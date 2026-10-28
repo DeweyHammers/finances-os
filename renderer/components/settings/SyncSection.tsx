@@ -84,8 +84,7 @@ export const SyncSection = ({ docsUrl, toast }: SyncSectionProps) => {
       if (source === "cloud") {
         // This PC now shows the cloud's data instead of its own: every
         // Refine cache must start over, so reload (and come back here).
-        toast("Synced with the cloud's data. Reloading…");
-        reopenSettingsAfterReload("sync");
+        reopenSettingsAfterReload("sync", "Synced. This PC now shows your cloud database's data.");
         window.location.reload();
       } else {
         // The data is the same rows, now also in the cloud: nothing to reload.
@@ -150,8 +149,10 @@ export const SyncSection = ({ docsUrl, toast }: SyncSectionProps) => {
     setBusy("import");
     try {
       const r = await uploadImport(file);
-      toast(`Imported ${r.dataRows} rows${r.target === "cloud" ? " into the cloud database" : ""}. Reloading…`);
-      reopenSettingsAfterReload("sync");
+      reopenSettingsAfterReload(
+        "sync",
+        `Imported ${r.dataRows} rows from ${file.name}${r.target === "cloud" ? " into your cloud database" : ""}. A backup of the previous data was saved beside the database.`,
+      );
       window.location.reload();
     } catch (e: any) {
       toast(`Import failed: ${e?.message || e}`);
@@ -213,11 +214,6 @@ export const SyncSection = ({ docsUrl, toast }: SyncSectionProps) => {
                   </a>
                 </>
               )}
-              {connectError && (
-                <Alert severity="error" sx={{ mt: 1.5, borderRadius: 2 }}>
-                  {connectError}
-                </Alert>
-              )}
             </>
           }
         >
@@ -266,6 +262,12 @@ export const SyncSection = ({ docsUrl, toast }: SyncSectionProps) => {
             {busy === "connect" ? "Connecting…" : "Connect"}
           </Button>
         </Row>
+      )}
+      {/* Outside the Row: its description is a <p>, and an Alert is a <div>. */}
+      {!configured && connectError && (
+        <Alert severity="error" sx={{ my: 1.5, borderRadius: 2 }} onClose={() => setConnectError(null)}>
+          {connectError}
+        </Alert>
       )}
 
       {configured && (

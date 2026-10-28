@@ -35,14 +35,31 @@ export function settingsHref(tab: SettingsTab): string {
 }
 
 const REOPEN_KEY = "fos.reopenSettings";
+const TOAST_KEY = "fos.settingsToast";
 const REOPEN_DELAY_MS = 600;
 
-/** Ask for Settings to reopen on `tab` after the window reload that follows. */
-export function reopenSettingsAfterReload(tab: SettingsTab): void {
+/**
+ * Ask for Settings to reopen on `tab` after the window reload that follows,
+ * and show `message` as a toast once it is back (a toast fired right before
+ * the reload dies with the page — the user never saw "Imported 12 rows").
+ */
+export function reopenSettingsAfterReload(tab: SettingsTab, message?: string): void {
   try {
     sessionStorage.setItem(REOPEN_KEY, tab);
+    if (message) sessionStorage.setItem(TOAST_KEY, message);
   } catch {
     /* no sessionStorage (shouldn't happen in the app); the user reopens Settings by hand */
+  }
+}
+
+/** The toast left by reopenSettingsAfterReload, once (SettingsPage shows it on mount). */
+export function takeSettingsToast(): string | null {
+  try {
+    const value = sessionStorage.getItem(TOAST_KEY);
+    if (value !== null) sessionStorage.removeItem(TOAST_KEY);
+    return value;
+  } catch {
+    return null;
   }
 }
 

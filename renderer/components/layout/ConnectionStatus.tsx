@@ -27,24 +27,29 @@ const GREEN = "#3DBC83";
 const RED = "#f43f5e";
 const AMBER = "#fbbf24";
 
-/** Dot colour, label and the second line for each state. */
+/**
+ * Dot colour, label and the second line for each state. "Last synced …"
+ * lives only in the tooltip: on the row it re-rendered once a minute and
+ * looked frozen (user feedback, Oct 28 2026); a tooltip is computed when
+ * it opens, so it is always current.
+ */
 function describe(status: Status): { color: string; label: string; detail: string; help: string } {
-  const last = `Last synced ${timeAgo(status.lastSyncedAt)}`;
+  const last = ` Last synced ${timeAgo(status.lastSyncedAt)}; the app checks the cloud every minute on its own.`;
   if (status.apiDown) {
     return { color: RED, label: "No answer", detail: "The app's server isn't responding", help: "The app's own API did not answer. Restarting the app usually fixes this." };
   }
   switch (status.state) {
     case "syncing":
-      return { color: AMBER, label: "Syncing…", detail: last, help: "Pulling the latest changes from your cloud database." };
+      return { color: AMBER, label: "Syncing…", detail: "Pulling changes", help: "Pulling the latest changes from your cloud database." + last };
     case "synced":
-      return { color: GREEN, label: "Synced", detail: last, help: "Every change is saved to your cloud database as you make it; other devices see it on their next sync." };
+      return { color: GREEN, label: "Synced", detail: "Cloud database", help: "Every change is saved to your cloud database as you make it; other devices see it on their next sync." + last };
     case "offline":
       return {
         color: RED,
         label: "Offline",
-        detail: status.status?.readOnly ? "Read-only until the cloud is back" : last,
+        detail: status.status?.readOnly ? "Read-only until the cloud is back" : "Can't reach the cloud",
         help:
-          "The cloud database can't be reached. You can look at everything; changes can't be saved until it is back. The app checks again every minute.",
+          "The cloud database can't be reached. You can look at everything; changes can't be saved until it is back." + last,
       };
     case "paused":
       return { color: AMBER, label: "Paused", detail: "Sandbox active", help: "Sync is paused while the sandbox is active. Keep or Discard it to resume." };
