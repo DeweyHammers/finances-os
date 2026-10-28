@@ -52,7 +52,6 @@ import { SandboxBanner } from "../components/sandbox/SandboxBanner";
 import { SettingsDialogProvider } from "../components/settings/SettingsDialogContext";
 import { SettingsDialog } from "../components/settings/SettingsDialog";
 import { SyncStatusProvider } from "../lib/use-connection-status";
-import { SyncBanner } from "../components/layout/SyncBanner";
 
 // IPC bridge address — the Electron main process spins up an in-memory REST
 // server on this port that translates HTTP calls into Prisma queries against
@@ -294,9 +293,6 @@ function App({ children }: { children: ReactNode }) {
               sandbox is active. Inside the scrolling box so it sits above
               the page, sticky so it stays put while the page scrolls. */}
           <SandboxBanner />
-          {/* Red "changes can't be saved" strip while the cloud database is
-              unreachable or newer than this app; nothing otherwise. */}
-          <SyncBanner />
           {children}
         </ThemedLayout>
         {/* Settings popup (desktop widths); the sider's Settings item and the

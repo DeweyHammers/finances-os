@@ -14,9 +14,12 @@
  *   Both                  Export (a plain SQLite download) and Import (a file
  *                         picker; confirmed, a backup is written first).
  *
- * Connect, Forget and Import all RELOAD the window on success, like the
- * sandbox does: the API now serves different data and every Refine cache
- * must start over. The token is sent once and never shown again.
+ * Only the actions that CHANGE what the API serves reload the window (like
+ * the sandbox does): Connect taking the cloud's data, and Import. Settings
+ * reopens on this tab after the reload. Uploading this PC's data and Forget
+ * keep the same rows, so they just update the status and Settings stays
+ * open (user feedback, Oct 28 2026). The token is sent once and never shown
+ * again.
  */
 import { useRef, useState } from "react";
 import {
@@ -45,6 +48,7 @@ import { connectSync, disconnectSync, downloadExport, uploadImport, SyncApiError
 import { useSandbox } from "../sandbox/SandboxContext";
 import { ConnectionStatus } from "../layout/ConnectionStatus";
 import { Row } from "./SettingsRows";
+import { reopenSettingsAfterReload } from "./SettingsDialogContext";
 
 interface SyncSectionProps {
   /** The docs site, for the "Set up sync" guide link. */
@@ -77,8 +81,16 @@ export const SyncSection = ({ docsUrl, toast }: SyncSectionProps) => {
       const next = await connectSync(url.trim(), token.trim(), source);
       connection.apply(next);
       setToken("");
-      toast("Synced. Reloading…");
-      window.location.reload();
+      if (source === "cloud") {
+        // This PC now shows the cloud's data instead of its own: every
+        // Refine cache must start over, so reload (and come back here).
+        toast("Synced with the cloud's data. Reloading…");
+        reopenSettingsAfterReload("sync");
+        window.location.reload();
+      } else {
+        // The data is the same rows, now also in the cloud: nothing to reload.
+        toast("Synced. This PC's data is in your cloud database.");
+      }
     } catch (e: any) {
       if (e instanceof SyncApiError && e.code === "REMOTE_HAS_DATA") {
         setRemoteHasData(e.details as RemoteFacts);
@@ -107,10 +119,11 @@ export const SyncSection = ({ docsUrl, toast }: SyncSectionProps) => {
     try {
       const next = await disconnectSync();
       connection.apply(next);
-      toast("This device is local only again. Reloading…");
-      window.location.reload();
+      // Same rows, now in the local file: no reload needed, Settings stays open.
+      toast("This device is local only again. Your data stayed on this PC.");
     } catch (e: any) {
       toast(`Could not forget this device: ${e?.message || e}`);
+    } finally {
       setBusy(null);
     }
   };
@@ -138,6 +151,7 @@ export const SyncSection = ({ docsUrl, toast }: SyncSectionProps) => {
     try {
       const r = await uploadImport(file);
       toast(`Imported ${r.dataRows} rows${r.target === "cloud" ? " into the cloud database" : ""}. Reloading…`);
+      reopenSettingsAfterReload("sync");
       window.location.reload();
     } catch (e: any) {
       toast(`Import failed: ${e?.message || e}`);

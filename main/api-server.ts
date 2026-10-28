@@ -284,9 +284,21 @@ app.get("/api/sync/export", async (req: Request, res: Response) => {
     return;
   }
   res.download(tmp, path.basename(tmp), () => {
-    fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
+    // Windows may still hold the file for a moment after the stream ends
+    // (ENOTEMPTY on the folder); retry quietly and never throw from this
+    // callback — an exception here is an uncaught error in the main process.
+    removeTempDir(path.dirname(tmp));
   });
 });
+
+function removeTempDir(dir: string, attempt = 0): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch (e) {
+    if (attempt < 10) setTimeout(() => removeTempDir(dir, attempt + 1), 500);
+    else console.warn(`Could not remove export temp folder ${dir}:`, e);
+  }
+}
 
 // Import: the request body IS the SQLite file (application/octet-stream).
 // 512 MB is far above any budget database; the JSON parser above ignores

@@ -89,9 +89,15 @@ export const ConnectionStatus = ({ variant = "sider" }: ConnectionStatusProps) =
         display: "flex",
         alignItems: "center",
         gap: 1.25,
-        px: variant === "sider" ? 2 : 0,
-        py: variant === "sider" ? 1 : 0,
+        px: variant === "sider" ? 1.5 : 0,
+        py: variant === "sider" ? 0.75 : 0,
         mx: variant === "sider" ? 1.5 : 0,
+        // In the sider the row is boxed in a thin border in the state's
+        // colour so it reads as a status card, not a stray line of text
+        // (user request, Oct 28 2026). Still not a button: no hover.
+        ...(variant === "sider"
+          ? { border: `1px solid ${color}55`, borderRadius: "8px", bgcolor: `${color}0d` }
+          : {}),
       }}
     >
       {/* The dot is the only interactive part: hover for the detail, click to sync now. */}

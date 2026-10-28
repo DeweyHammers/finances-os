@@ -77,7 +77,7 @@ export const REPLICA_FILENAME = "replica.db";
 export const SYNC_INTERVAL_MS = 60_000;
 /** Pause after a local write before pulling (writes already reached the cloud). */
 export const SYNC_AFTER_WRITE_MS = 3_000;
-const REACHABILITY_TIMEOUT_MS = 4_000;
+const REACHABILITY_TIMEOUT_MS = 8_000;
 /** A probe this fresh is trusted before a write instead of probing again. */
 const WRITE_PROBE_MAX_AGE_MS = 5_000;
 const UNREACHABLE = "The cloud database can't be reached.";
@@ -185,11 +185,27 @@ const realTransport: SyncTransport = {
   async isReachable(settings) {
     // Any HTTP answer counts (libsql-server exposes /health; a 401/404 still
     // proves the host is up); only a network failure or timeout is "offline".
+    // A cold TLS round trip to Turso's edge measured 2.4 s (Oct 2026), so
+    // the timeout is generous, and a failed /health gets a second chance
+    // through a real `select 1` on the client — the probe must err on the
+    // side of "reachable", because a false "offline" refuses a save.
     try {
       await fetch(`${toHttpUrl(settings.url)}/health`, { signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS) });
       return true;
     } catch {
+      /* fall through to the query */
+    }
+    const client = createClient({ url: toHttpUrl(settings.url), authToken: settings.authToken });
+    try {
+      await Promise.race([
+        client.execute("select 1"),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), REACHABILITY_TIMEOUT_MS).unref?.()),
+      ]);
+      return true;
+    } catch {
       return false;
+    } finally {
+      client.close();
     }
   },
 };
