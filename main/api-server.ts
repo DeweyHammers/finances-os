@@ -27,6 +27,13 @@ import {
   syncNow,
   writeBlockReasonNow,
 } from "./sync";
+import {
+  UpdateError,
+  checkForUpdate,
+  downloadUpdate,
+  getUpdateStatus,
+  installUpdate,
+} from "./updates";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -184,6 +191,42 @@ app.post("/api/backups", async (_req: Request, res: Response) => {
     const status = error instanceof BackupError ? error.status : 500;
     if (status === 500) console.error("API Error POST /api/backups:", error);
     res.status(status).json({ error: error.message });
+  }
+});
+
+// ── In-app updates (main/updates.ts; the engine is wired by main/updater.ts) ─
+// Registered BEFORE /api/:resource like the others. The status is one
+// object the Settings row renders from; check answers with the resulting
+// status (errors folded in), download/install return at once and the
+// renderer polls the status. Wrong-state calls and "this build can't update
+// itself" are 409s with a `code` (UpdateError), never a server failure.
+app.get("/api/updates/status", (_req: Request, res: Response) => {
+  res.json(getUpdateStatus());
+});
+
+const updateActions = {
+  check: () => checkForUpdate(),
+  download: () => downloadUpdate(),
+  install: () => installUpdate(),
+};
+
+app.post("/api/updates/:action", async (req: Request, res: Response) => {
+  const action = req.params.action as keyof typeof updateActions;
+  const run = updateActions[action];
+  if (!run) {
+    res.status(404).json({ error: `Unknown update action ${String(action)}` });
+    return;
+  }
+  try {
+    res.json(await run());
+  } catch (error: any) {
+    if (error instanceof UpdateError) {
+      // `message` too: @refinedev/simple-rest-style toasts read it.
+      res.status(error.status).json({ error: error.message, message: error.message, code: error.code });
+      return;
+    }
+    console.error(`API Error POST /api/updates/${action}:`, error);
+    res.status(500).json({ error: error.message });
   }
 });
 

@@ -1,0 +1,59 @@
+/**
+ * updater.ts — the Electron-only half of in-app updates: hands
+ * electron-updater's `autoUpdater` to main/updates.ts as its engine.
+ *
+ * Only the PACKAGED app gets an engine. `npm run dev` has no
+ * resources/app-update.yml (electron-updater would look for a
+ * dev-app-update.yml and fail), so there the Settings row falls back to the
+ * link-only GitHub check — exactly what the hosted server does.
+ *
+ * What electron-updater does for us, configured here:
+ *  - reads `latest.yml` from the newest GitHub Release of
+ *    DeweyHammers/finances-os (provider + owner/repo come from
+ *    resources/app-update.yml, baked in by electron-builder.yml → publish);
+ *  - downloads the NSIS installer named in it to its own cache folder
+ *    (%LOCALAPPDATA%\finances-os-updater\pending), checking the sha512 and
+ *    using the .blockmap for a differential download when it can;
+ *  - `quitAndInstall(true, true)` runs that installer with /S (silent) and
+ *    relaunches the app afterwards.
+ *
+ * The app is unsigned, and electron-updater skips its publisher check when
+ * no `publisherName` is configured — so an unsigned installer is accepted
+ * (the sha512 from latest.yml is still verified).
+ */
+import { app } from "electron";
+import { autoUpdater } from "electron-updater";
+import { checkForUpdate, registerUpdateEngine } from "./updates";
+
+/**
+ * One quiet check after startup, so Settings can say "Version X is
+ * available" without a click. It is a single small HTTPS fetch (the
+ * Release's latest.yml), never a download, and a failure (offline) is
+ * swallowed — see CheckOptions.silent.
+ */
+export const STARTUP_CHECK_DELAY_MS = 20_000;
+
+export function initUpdater(): void {
+  if (!app.isPackaged) {
+    console.log("[Updates] not a packaged build — in-app updates off (link-only check)");
+    return;
+  }
+  // Every step waits for the user: no download on check, no install on
+  // quit. "Restart to update" is the only way an installer runs.
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.allowDowngrade = false;
+  // Goes to app.log in PROD (main.ts redirects stdout/stderr there).
+  autoUpdater.logger = console;
+
+  registerUpdateEngine(autoUpdater);
+
+  const t = setTimeout(() => {
+    checkForUpdate({ silent: true }).catch(() => {
+      /* silent: already folded into the status */
+    });
+  }, STARTUP_CHECK_DELAY_MS);
+  // Never keep the process alive just for this.
+  t.unref();
+}

@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "nextron --electron-options=--remote-debugging-port=9222",
     "prebuild": "node scripts/build-template-db.mjs",
-    "build": "nextron build",
+    "build": "nextron build --publish never",
     "setup-desktop-icon": "powershell.exe -ExecutionPolicy Bypass -File ./setup-desktop-icon.ps1",
     "postinstall": "electron-builder install-app-deps",
     "prepare": "git config core.hooksPath .githooks || exit 0",
@@ -43,6 +43,7 @@
     "date-fns": "^4.1.0",
     "electron-serve": "^3.0.0",
     "electron-store": "^11.0.2",
+    "electron-updater": "^6.8.11",
     "express": "^5.2.1",
     "libsql": "^0.5.29",
     "react-hook-form": "^7.72.1",
