@@ -28,6 +28,8 @@ import {
   Button,
   Collapse,
   Drawer,
+  IconButton,
+  Tooltip,
   useMediaQuery,
   useTheme,
 } from "@mui/material";
@@ -47,6 +49,7 @@ import AddIcon from "@mui/icons-material/Add";
 import SettingsIcon from "@mui/icons-material/Settings";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { ConnectionStatus } from "./ConnectionStatus";
+import { tooltipStyleProps, TooltipBody } from "../../lib/tooltip-styles";
 import { useSettingsDialog } from "../settings/SettingsDialogContext";
 import { SIDER_BREAKPOINT } from "../../lib/constants";
 import { useList } from "@refinedev/core";
@@ -228,10 +231,16 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
             color: "white",
             fontWeight: 800,
             letterSpacing: "-0.5px",
+            flex: 1,
+            minWidth: 0,
           }}
         >
           Finances OS
         </Typography>
+        {/* Settings is just the gear, up here beside the logo, so the bottom
+            of the sider belongs to the sync status alone (user request,
+            Oct 29 2026 — it used to be a full "Settings" row above it). */}
+        <SettingsGear />
       </Box>
 
       {/* ── Budget group ── */}
@@ -359,61 +368,57 @@ const SiderContent = ({ onAddAccount, onEditAccount }: SiderContentProps) => {
       />
       <NavLeaf href="/Income" label="Income" icon={<SavingsIcon />} />
 
-      {/* Flex spacer pushes the footer (Settings + connection status) to the
-          bottom, like Obsidian's settings gear; the 16px box gives a little
-          breathing room above the viewport edge. */}
+      {/* Flex spacer pushes the sync status to the very bottom of the sider
+          (user request, Oct 29 2026: the status card is the last thing in the
+          column; Settings moved up to the gear beside the logo). It renders
+          nothing until a sync server is configured. The 16px box gives a
+          little breathing room above the viewport edge. */}
       <Box sx={{ flex: 1 }} />
       <Box sx={{ pt: 2 }} />
-      {/* Sync status — renders nothing until a sync server is configured, and
-          sits ABOVE Settings so it is never in the way of that last click. */}
       <ConnectionStatus />
-      {/* Settings is a popup over the current page, not a route. */}
-      <SettingsLeaf />
       <Box sx={{ height: 16 }} />
     </>
   );
 };
 
-// ── SettingsLeaf ──
-// Looks like a NavLeaf but goes through the Settings context: a popup on a
+// ── SettingsGear ──
+// The gear beside the logo. Goes through the Settings context: a popup on a
 // desktop-width window, the /Settings page below the breakpoint (see
 // components/settings/SettingsDialogContext.tsx). Highlighted only while the
 // PAGE is showing: the popup covers the page, so a highlight behind it would
-// just be noise (user feedback, Oct 27 2026).
-const SettingsLeaf = () => {
+// just be noise (user feedback, Oct 27 2026). The label lives in the tooltip
+// and the aria-label, so the sider keeps its "Settings" affordance for screen
+// readers without the text row it had before.
+const SettingsGear = () => {
   const { asPage, openSettings } = useSettingsDialog();
   const pathname = usePathname();
   const active = asPage && ((pathname || "/").replace(/\/index\.html$/, "") || "/").startsWith("/Settings");
   return (
-    <Box
-      role="button"
-      tabIndex={0}
-      aria-haspopup="dialog"
-      onClick={() => openSettings()}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") openSettings();
-      }}
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        gap: 1.5,
-        px: 2,
-        py: 1.25,
-        mx: 1.5,
-        my: 0.25,
-        borderRadius: "8px",
-        cursor: "pointer",
-        bgcolor: active ? "rgba(129, 140, 248, 0.15)" : "transparent",
-        color: active ? "primary.light" : "#cbd5e1",
-        "&:hover": {
-          bgcolor: active ? "rgba(129, 140, 248, 0.20)" : "rgba(129, 140, 248, 0.08)",
-        },
-        "& svg": { color: active ? "primary.light" : "#94a3b8", fontSize: "1.2rem" },
-      }}
+    <Tooltip
+      {...tooltipStyleProps("#818cf8")}
+      title={<TooltipBody>Settings</TooltipBody>}
+      placement="bottom"
     >
-      <SettingsIcon />
-      <Typography sx={{ fontSize: "0.95rem", fontWeight: 600 }}>Settings</Typography>
-    </Box>
+      <IconButton
+        aria-label="Settings"
+        aria-haspopup="dialog"
+        size="small"
+        onClick={() => openSettings()}
+        sx={{
+          flexShrink: 0,
+          borderRadius: "8px",
+          color: active ? "primary.light" : "#94a3b8",
+          bgcolor: active ? "rgba(129, 140, 248, 0.15)" : "transparent",
+          "&:hover": {
+            color: active ? "primary.light" : "#cbd5e1",
+            bgcolor: active ? "rgba(129, 140, 248, 0.20)" : "rgba(129, 140, 248, 0.08)",
+          },
+          "& svg": { fontSize: "1.3rem" },
+        }}
+      >
+        <SettingsIcon />
+      </IconButton>
+    </Tooltip>
   );
 };
 
