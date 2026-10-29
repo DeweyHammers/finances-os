@@ -20,6 +20,7 @@
  */
 import { useEffect, useState } from "react";
 import { Box, Tooltip, Typography } from "@mui/material";
+import SyncIcon from "@mui/icons-material/Sync";
 import { useConnectionStatus, timeAgo, type ConnectionStatus as Status } from "../../lib/use-connection-status";
 import { tooltipStyleProps, TooltipBody, TooltipTitle } from "../../lib/tooltip-styles";
 
@@ -85,7 +86,13 @@ export const ConnectionStatus = ({ variant = "sider" }: ConnectionStatusProps) =
   // Local only: nothing to be connected to, so nothing to show.
   if (!status.configured) return null;
 
-  const { color, label, detail, help } = describe(status);
+  const described = describe(status);
+  const { color, detail, help } = described;
+  // A sync in flight (after a save, from the dot, or the server's own pull)
+  // reads "Syncing…" and spins the arrows, but keeps the state's colour: a
+  // save on a healthy connection shouldn't flash the card amber.
+  const spinning = status.syncing && !status.apiDown;
+  const label = spinning && status.state === "synced" ? "Syncing…" : described.label;
   const clickable = status.state !== "paused" && status.state !== "blocked";
 
   return (
@@ -130,22 +137,38 @@ export const ConnectionStatus = ({ variant = "sider" }: ConnectionStatusProps) =
             if (e.key === "Enter" && clickable) status.syncNow();
           }}
           sx={{
-            width: 10,
-            height: 10,
+            // The dot; while a sync runs it becomes spinning arrows (user
+            // request, Oct 29 2026). The arrows are 16px where the dot is
+            // 10px — the negative margin keeps the label from shifting.
+            width: spinning ? 16 : 10,
+            height: spinning ? 16 : 10,
+            mx: spinning ? "-3px" : 0,
             borderRadius: "50%",
-            bgcolor: color,
-            boxShadow: `0 0 8px ${color}99`,
+            bgcolor: spinning ? "transparent" : color,
+            boxShadow: spinning ? "none" : `0 0 8px ${color}99`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
             flexShrink: 0,
             cursor: clickable ? "pointer" : "default",
             "&:focus-visible": { outline: `2px solid ${color}80`, outlineOffset: 2 },
-            // Pulse only while a check or a sync is running.
-            animation: status.checking ? "fo-pulse 1s ease-in-out infinite" : "none",
+            // Pulse only while a plain status check is running.
+            animation: status.checking && !spinning ? "fo-pulse 1s ease-in-out infinite" : "none",
             "@keyframes fo-pulse": {
               "0%, 100%": { opacity: 1 },
               "50%": { opacity: 0.35 },
             },
+            // Material's Sync arrows point anticlockwise, so spin that way.
+            "@keyframes fo-spin": { to: { transform: "rotate(-360deg)" } },
           }}
-        />
+        >
+          {spinning && (
+            <SyncIcon
+              data-testid="sync-spinner"
+              sx={{ fontSize: 16, color, animation: "fo-spin 1s linear infinite" }}
+            />
+          )}
+        </Box>
       </Tooltip>
       <Box sx={{ minWidth: 0 }}>
         <Typography sx={{ fontSize: "0.8rem", fontWeight: 700, color: "#cbd5e1", lineHeight: 1.2 }}>
