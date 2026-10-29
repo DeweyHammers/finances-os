@@ -406,6 +406,10 @@ const SettingsGear = () => {
         onClick={() => openSettings()}
         sx={{
           flexShrink: 0,
+          // Optical alignment: the bold 20px title's letters sit above the
+          // centre of their 32px line box, so a mathematically centred gear
+          // looks low next to them (user report, Oct 29 2026). Nudge it up.
+          mt: "-2px",
           borderRadius: "8px",
           color: active ? "primary.light" : "#94a3b8",
           bgcolor: active ? "rgba(129, 140, 248, 0.15)" : "transparent",
