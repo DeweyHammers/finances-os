@@ -51,7 +51,7 @@ import { SandboxProvider } from "../components/sandbox/SandboxContext";
 import { SandboxBanner } from "../components/sandbox/SandboxBanner";
 import { SettingsDialogProvider } from "../components/settings/SettingsDialogContext";
 import { SettingsDialog } from "../components/settings/SettingsDialog";
-import { SyncStatusProvider } from "../lib/use-connection-status";
+import { SyncStatusProvider, withSyncWriteNotices } from "../lib/use-connection-status";
 
 // IPC bridge address — the Electron main process spins up an in-memory REST
 // server on this port that translates HTTP calls into Prisma queries against
@@ -246,7 +246,9 @@ function App({ children }: { children: ReactNode }) {
   // simple-rest data provider — issues fetch() calls to API_URL. The Electron
   // main process listens on that port and translates them to Prisma queries.
   // Memoized so Refine's internal effect deps stay stable across renders.
-  const memoizedDataProvider = useMemo(() => dataProvider(API_URL), []);
+  // Wrapped so every successful write reports to the sync indicator (the
+  // spinning arrows after a save) — see lib/use-connection-status.ts.
+  const memoizedDataProvider = useMemo(() => withSyncWriteNotices(dataProvider(API_URL)), []);
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
