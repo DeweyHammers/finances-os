@@ -4,6 +4,7 @@
   "description": "Finances OS Desktop Application",
   "version": "1.3.2",
   "author": "Richard Dewey Hammers",
+  "license": "MIT",
   "main": "app/main.js",
   "scripts": {
     "dev": "nextron --electron-options=--remote-debugging-port=9222",
