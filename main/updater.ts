@@ -31,9 +31,10 @@ import { readSmartAppControlState } from "./smart-app-control";
  * Control is on (see main/smart-app-control.ts for the why).
  */
 export const SMART_APP_CONTROL_MESSAGE =
-  "Smart App Control is on for this PC, and it won't run an installer that an app starts " +
-  "(Finances OS isn't code-signed yet). Download the installer from the Release page and run it " +
-  "from your browser; your data stays where it is.";
+  "Smart App Control is on for this PC, and it blocks installers it can't verify the publisher of " +
+  "(Finances OS isn't code-signed yet). The app can't install this update for you. Download it from " +
+  "the Release page and run it; if Smart App Control blocks that too, Windows offers no way to allow " +
+  "it short of turning the feature off. Your data stays where it is either way.";
 
 /**
  * One quiet check after startup, so Settings can say "Version X is

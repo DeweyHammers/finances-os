@@ -10,10 +10,14 @@
  * the app as if the install had begun — "nothing happens". Adding the
  * browser's "from the internet" zone mark to the file did not help: the
  * reputation lookup happens inside the browser at download time, which an
- * in-app download can't take part in. A browser-downloaded installer from
- * the Release page does run (that is how v1.3.0 was installed on the same
- * PC), so while Smart App Control is on, that is the update path, and the
- * Settings row has to say so instead of offering Download.
+ * in-app download can't take part in. A browser-downloaded installer is not
+ * reliably better either: the v1.3.1 Setup exe from the Release page was
+ * blocked with "we could not verify its publisher" (no "run anyway" on that
+ * box), although v1.3.0 had installed by hand on the same PC — Microsoft's
+ * cloud seems to clear a file only once it has seen it for a while. The
+ * Settings row therefore must not offer Download (the app would quit for
+ * nothing) and must not promise that the Release page works; the real fix
+ * is a code-signed installer.
  *
  * The state lives in the registry, readable without elevation:
  *   HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy
