@@ -9,6 +9,16 @@ next-env.d.ts
 # build
 /app
 /dist
+# Android (Phase C): the renderer's export for Capacitor (capacitor.config.ts →
+# webDir), the signed APKs, and the release keystore — which must NEVER be
+# committed (it lives in the repo's Actions secrets; see docs/android-release.md).
+/app-android
+/dist-android
+*.jks
+*.keystore
+# The sql.js wasm that scripts/android/browser-check.mjs copies in for the
+# in-browser check of the phone data path; never part of a build from a clean clone.
+/renderer/public/assets/sql-wasm.wasm
 
 # database
 /generated/prisma

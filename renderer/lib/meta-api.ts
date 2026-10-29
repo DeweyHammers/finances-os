@@ -4,8 +4,12 @@
  * sandbox-api.ts these bypass Refine because none of them is a resource.
  */
 import { API_URL } from "./api-url";
+// `apiFetch` is `fetch` everywhere a server exists and the in-process API in
+// the Android app (lib/local-api); the URLs below are the same either way.
+import { apiFetch } from "./local-api";
 
-export type AppMode = "electron" | "dev" | "hosted";
+/** "android" = the Capacitor app: no server, the data layer runs in the WebView. */
+export type AppMode = "electron" | "dev" | "hosted" | "android";
 
 export interface AppMeta {
   version: string;
@@ -82,12 +86,12 @@ async function parse<T>(res: Response): Promise<T> {
 }
 
 export async function fetchMeta(signal?: AbortSignal): Promise<AppMeta> {
-  return parse<AppMeta>(await fetch(`${API_URL}/meta`, { signal, cache: "no-store" }));
+  return parse<AppMeta>(await apiFetch(`${API_URL}/meta`, { signal, cache: "no-store" }));
 }
 
 /** Where the updater stands right now (polled while checking/downloading). */
 export async function fetchUpdateStatus(signal?: AbortSignal): Promise<UpdateStatus> {
-  return parse<UpdateStatus>(await fetch(`${API_URL}/updates/status`, { signal, cache: "no-store" }));
+  return parse<UpdateStatus>(await apiFetch(`${API_URL}/updates/status`, { signal, cache: "no-store" }));
 }
 
 /**
@@ -97,15 +101,15 @@ export async function fetchUpdateStatus(signal?: AbortSignal): Promise<UpdateSta
  * message to show.
  */
 export async function runUpdateAction(action: UpdateAction): Promise<UpdateStatus> {
-  return parse<UpdateStatus>(await fetch(`${API_URL}/updates/${action}`, { method: "POST" }));
+  return parse<UpdateStatus>(await apiFetch(`${API_URL}/updates/${action}`, { method: "POST" }));
 }
 
 export async function fetchBackups(): Promise<BackupInfo> {
-  return parse<BackupInfo>(await fetch(`${API_URL}/backups`, { cache: "no-store" }));
+  return parse<BackupInfo>(await apiFetch(`${API_URL}/backups`, { cache: "no-store" }));
 }
 
 export async function createBackup(): Promise<BackupResult> {
-  const result = parse<BackupResult>(await fetch(`${API_URL}/backups`, { method: "POST" }));
+  const result = parse<BackupResult>(await apiFetch(`${API_URL}/backups`, { method: "POST" }));
   backupsCache = await result;
   return result;
 }
@@ -168,4 +172,5 @@ export const MODE_LABELS: Record<AppMode, string> = {
   electron: "Installed app",
   dev: "Development",
   hosted: "Hosted server",
+  android: "Android app",
 };

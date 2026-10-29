@@ -5,6 +5,9 @@
  * and is never read back — the status carries the URL alone.
  */
 import { API_URL } from "./api-url";
+// `apiFetch` is `fetch` wherever a server exists and the in-process API in the
+// Android app (lib/local-api); same URLs either way.
+import { apiFetch } from "./local-api";
 
 export type SyncState = "local" | "synced" | "syncing" | "offline" | "paused" | "blocked";
 
@@ -65,23 +68,23 @@ const json = (body: unknown): RequestInit => ({
 });
 
 export async function fetchSyncStatus(signal?: AbortSignal): Promise<SyncStatus> {
-  return parse<SyncStatus>(await fetch(`${API_URL}/sync`, { signal, cache: "no-store" }));
+  return parse<SyncStatus>(await apiFetch(`${API_URL}/sync`, { signal, cache: "no-store" }));
 }
 
 export async function probeRemote(url: string, token: string): Promise<RemoteFacts> {
-  return parse<RemoteFacts>(await fetch(`${API_URL}/sync/probe`, json({ url, token })));
+  return parse<RemoteFacts>(await apiFetch(`${API_URL}/sync/probe`, json({ url, token })));
 }
 
 export async function connectSync(url: string, token: string, source?: "local" | "cloud"): Promise<SyncStatus> {
-  return parse<SyncStatus>(await fetch(`${API_URL}/sync/connect`, json({ url, token, source })));
+  return parse<SyncStatus>(await apiFetch(`${API_URL}/sync/connect`, json({ url, token, source })));
 }
 
 export async function syncNow(): Promise<SyncStatus> {
-  return parse<SyncStatus>(await fetch(`${API_URL}/sync/now`, { method: "POST" }));
+  return parse<SyncStatus>(await apiFetch(`${API_URL}/sync/now`, { method: "POST" }));
 }
 
 export async function disconnectSync(): Promise<SyncStatus & { backupPath: string | null }> {
-  return parse(await fetch(`${API_URL}/sync/disconnect`, { method: "POST" }));
+  return parse(await apiFetch(`${API_URL}/sync/disconnect`, { method: "POST" }));
 }
 
 /**
@@ -90,7 +93,7 @@ export async function disconnectSync(): Promise<SyncStatus & { backupPath: strin
  * system "Save as" dialog) and in a plain browser tab.
  */
 export async function downloadExport(): Promise<string> {
-  const res = await fetch(`${API_URL}/sync/export`, { cache: "no-store" });
+  const res = await apiFetch(`${API_URL}/sync/export`, { cache: "no-store" });
   if (!res.ok) await parse(res); // throws with the server's message
   const disposition = res.headers.get("content-disposition") ?? "";
   const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "Finances OS export.db";
@@ -108,7 +111,7 @@ export async function downloadExport(): Promise<string> {
 
 /** Import: the file's bytes are the request body. */
 export async function uploadImport(file: File): Promise<ImportResult> {
-  const res = await fetch(`${API_URL}/sync/import`, {
+  const res = await apiFetch(`${API_URL}/sync/import`, {
     method: "POST",
     headers: { "Content-Type": "application/octet-stream" },
     body: await file.arrayBuffer(),

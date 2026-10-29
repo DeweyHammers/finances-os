@@ -4,6 +4,9 @@
  * on which database file every resource reads from.
  */
 import { API_URL } from "./api-url";
+// `apiFetch` is `fetch` wherever a server exists and the in-process API in the
+// Android app (lib/local-api); same URLs either way.
+import { apiFetch } from "./local-api";
 
 export interface SandboxStatus {
   active: boolean;
@@ -24,11 +27,11 @@ async function parse<T>(res: Response): Promise<T> {
 }
 
 export async function fetchSandboxStatus(): Promise<SandboxStatus> {
-  return parse<SandboxStatus>(await fetch(`${API_URL}/sandbox`));
+  return parse<SandboxStatus>(await apiFetch(`${API_URL}/sandbox`));
 }
 
 export async function runSandboxAction(action: SandboxAction): Promise<SandboxStatus> {
   return parse<SandboxStatus>(
-    await fetch(`${API_URL}/sandbox/${action}`, { method: "POST" }),
+    await apiFetch(`${API_URL}/sandbox/${action}`, { method: "POST" }),
   );
 }

@@ -47,6 +47,7 @@ import InsightsIcon from "@mui/icons-material/Insights";
 import StorefrontIcon from "@mui/icons-material/Storefront";
 import { COLORS } from "../lib/constants";
 import { API_URL } from "../lib/api-url";
+import { isNativeApp, localHttpClient } from "../lib/local-api";
 import { SandboxProvider } from "../components/sandbox/SandboxContext";
 import { SandboxBanner } from "../components/sandbox/SandboxBanner";
 import { SettingsDialogProvider } from "../components/settings/SettingsDialogContext";
@@ -243,10 +244,17 @@ function App({ children }: { children: ReactNode }) {
     },
   ], []);
 
-  // simple-rest data provider — issues fetch() calls to API_URL. The Electron
-  // main process listens on that port and translates them to Prisma queries.
+  // simple-rest data provider — issues HTTP calls to API_URL, where the
+  // Electron main process (main/api-server.ts) answers from the data layer.
+  // In the Android app there is no server: the SAME provider gets an
+  // in-process client (lib/local-api) that hands its URLs to the data layer
+  // directly, so every page's hooks and query shapes are unchanged. This is
+  // one of the two places that read the runtime switch (lib/platform.ts).
   // Memoized so Refine's internal effect deps stay stable across renders.
-  const memoizedDataProvider = useMemo(() => dataProvider(API_URL), []);
+  const memoizedDataProvider = useMemo(
+    () => (isNativeApp() ? dataProvider(API_URL, localHttpClient as any) : dataProvider(API_URL)),
+    [],
+  );
 
   return (
     <Suspense fallback={<div>Loading...</div>}>

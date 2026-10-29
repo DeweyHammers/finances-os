@@ -170,6 +170,15 @@ const emptyUpdateStatus: UpdateStatus = {
   checkedAt: null,
 };
 
+/** Human names for `AppMeta.platform` (Node's process.platform, or Capacitor's). */
+const PLATFORM_LABELS: Record<string, string> = {
+  win32: "Windows",
+  darwin: "macOS",
+  linux: "Linux",
+  android: "Android",
+  web: "Browser",
+};
+
 /** "51 MB of 123 MB" for the download row. */
 const formatBytes = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)} MB` : `${Math.round(n / 1e3)} KB`);
 
@@ -325,7 +334,13 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
   const sandbox = useSandbox();
 
   const modeLabel = meta ? MODE_LABELS[meta.mode] : "…";
-  const onThisPc = meta?.mode !== "hosted";
+  const onThisPc = meta?.mode !== "hosted" && meta?.mode !== "android";
+  // The Android app (Phase C): local database on the phone, no server. The
+  // desktop-only features — sandbox, backups, export/import, sync — are not
+  // there yet; their rows say so instead of showing a button that can only
+  // fail. Keyed off the mode the API reports, not off the platform itself
+  // (lib/platform.ts is read in exactly two places).
+  const onPhone = meta?.mode === "android";
 
   // ── Sections ──
 
@@ -385,7 +400,11 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
         ) : (
           <Row
             label={`Version ${update.latest} is available`}
-            description="Download the new installer from the Release page and run it; your data stays where it is."
+            description={
+              onPhone
+                ? "Download the new APK from the Release page and install it over this app; your data stays on the phone."
+                : "Download the new installer from the Release page and run it; your data stays where it is."
+            }
           >
             <Button {...linkButton} href={update.releaseUrl} component="a">
               Download
@@ -451,7 +470,7 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
           metaError
             ? `Could not read app info: ${metaError}`
             : meta
-              ? `${modeLabel} · ${meta.platform === "win32" ? "Windows" : meta.platform}`
+              ? `${modeLabel} · ${PLATFORM_LABELS[meta.platform] ?? meta.platform}`
               : "Loading…"
         }
       >
@@ -544,7 +563,11 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
         description={
           meta ? (
             <>
-              {onThisPc ? "Your data lives in this file on this PC. " : "Your data lives on the server. "}
+              {onPhone
+                ? "Your data lives on this phone, in this app's private storage; nothing leaves the phone. "
+                : onThisPc
+                  ? "Your data lives in this file on this PC. "
+                  : "Your data lives on the server. "}
               <Box component="code" sx={{ fontSize: "0.78rem", color: "#cbd5e1" }}>
                 {meta.databasePath}
               </Box>
@@ -554,47 +577,55 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
           )
         }
       >
-        <Tooltip title="Copy path">
-          <span>
-            <IconButton size="small" onClick={() => meta && copy(meta.databasePath)} disabled={!meta}>
-              <ContentCopyIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </span>
-        </Tooltip>
+        {!onPhone && (
+          <Tooltip title="Copy path">
+            <span>
+              <IconButton size="small" onClick={() => meta && copy(meta.databasePath)} disabled={!meta}>
+                <ContentCopyIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+        )}
       </Row>
       <Row
         label="Backups"
         description={
-          backups
-            ? backups.count === 0
-              ? `No backups yet. Backups are saved beside the database in ${backups.directory}.`
-              : `${backups.count} backup${backups.count === 1 ? "" : "s"} · last one ${new Date(
-                  backups.lastBackupAt!,
-                ).toLocaleString()}. Saved beside the database as .bak files; the sandbox's Keep makes one too.`
-            : "Loading…"
+          onPhone
+            ? "Not on the phone yet. Backups, export and import arrive together with phone sync in a later version; until then uninstalling the app deletes its data, so keep the app installed."
+            : backups
+              ? backups.count === 0
+                ? `No backups yet. Backups are saved beside the database in ${backups.directory}.`
+                : `${backups.count} backup${backups.count === 1 ? "" : "s"} · last one ${new Date(
+                    backups.lastBackupAt!,
+                  ).toLocaleString()}. Saved beside the database as .bak files; the sandbox's Keep makes one too.`
+              : "Loading…"
         }
       >
-        <Button
-          variant="contained"
-          size="small"
-          disableElevation
-          startIcon={<BackupIcon />}
-          onClick={backUpNow}
-          disabled={backingUp || !!sandbox.status?.active}
-          sx={{ fontWeight: 800, borderRadius: 2, whiteSpace: "nowrap" }}
-        >
-          {backingUp ? "Backing up…" : "Back up now"}
-        </Button>
+        {!onPhone && (
+          <Button
+            variant="contained"
+            size="small"
+            disableElevation
+            startIcon={<BackupIcon />}
+            onClick={backUpNow}
+            disabled={backingUp || !!sandbox.status?.active}
+            sx={{ fontWeight: 800, borderRadius: 2, whiteSpace: "nowrap" }}
+          >
+            {backingUp ? "Backing up…" : "Back up now"}
+          </Button>
+        )}
       </Row>
       <Row
         label="Sandbox"
         description={
-          sandbox.status?.active
-            ? `Active since ${new Date(sandbox.status.enteredAt!).toLocaleString()} — you are working on a copy. Keep or Discard it from the banner at the top.`
-            : "Try changes on a copy of your data, then keep them or throw them away from the banner that appears at the top of every page. Your real data is untouched until you choose Keep."
+          onPhone
+            ? "The sandbox is a desktop feature: on the PC it lets you try changes on a copy of your data. It isn't on the phone yet."
+            : sandbox.status?.active
+              ? `Active since ${new Date(sandbox.status.enteredAt!).toLocaleString()} — you are working on a copy. Keep or Discard it from the banner at the top.`
+              : "Try changes on a copy of your data, then keep them or throw them away from the banner that appears at the top of every page. Your real data is untouched until you choose Keep."
         }
       >
-        {sandbox.status?.active ? (
+        {onPhone ? null : sandbox.status?.active ? (
           <Chip label="Active" size="small" sx={{ bgcolor: "rgba(251,191,36,0.15)", color: "#fbbf24", fontWeight: 800 }} />
         ) : (
           <SandboxButton />
@@ -610,12 +641,26 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
         description={
           meta?.mode === "hosted"
             ? `Hosted server at ${apiOrigin()} — every device that opens this address shares the same data.`
-            : "On this PC, with a local database file."
+            : onPhone
+              ? "On this phone, with a local database in the app's own storage."
+              : "On this PC, with a local database file."
         }
       >
         <Chip label={modeLabel} size="small" sx={{ fontWeight: 800 }} />
       </Row>
-      <SyncSection docsUrl={meta?.docsUrl} toast={toast} />
+      {onPhone ? (
+        // Phase D (plans/phone-app-and-sync.md) brings sync, export and import
+        // to the phone; until then the one honest row instead of controls
+        // that would only be refused.
+        <Row
+          label="Sync"
+          description="Keeping this phone and your PC in step through a cloud database you own is the next step on the roadmap. Until then your data stays on this phone, and export / import arrive together with it."
+        >
+          <Chip label="Local only" size="small" variant="outlined" sx={{ fontWeight: 800 }} />
+        </Row>
+      ) : (
+        <SyncSection docsUrl={meta?.docsUrl} toast={toast} />
+      )}
     </Section>
   );
 

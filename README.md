@@ -117,6 +117,20 @@ Every `git push` runs the whole suite first (`.githooks/pre-push`); a failing te
 
 The installer for each version is built by GitHub Actions (`.github/workflows/release.yml`) on a hosted Windows runner and attached to the matching [GitHub Release](https://github.com/DeweyHammers/finances-os/releases). To cut a release: bump `version` in `package.json`, merge to `main`, then tag and push (`git tag v1.2.0 && git push origin v1.2.0`). The workflow runs the test suite, builds, and publishes. "Run workflow" on the Actions tab builds any branch without releasing and keeps the installer as an artifact. The Release carries `latest.yml` beside the installer: from v1.3.0 on, Settings → General → **Check for updates** downloads and installs the next release from inside the app (click **Restart to update**); older installs download the installer from the Release page. Building on a runner also sidesteps Windows Smart App Control, which blocks electron-builder's unsigned NSIS stub on a PC where it's enforced — and, until the installer is code-signed (see below), blocks the installer itself on such a PC, whether the app or the browser downloaded it; the app detects the setting and says so in Settings → General instead of attempting the install.
 
+### Android
+
+Every Release from v1.4.0 on also carries **`Finances-OS-X.Y.Z.apk`**, the same app for an Android phone: the same pages, the same budget maths, built from the same code by the same GitHub Actions run (job `android` in `release.yml`) and signed with the project's release key.
+
+1. On the phone, open the [Release page](https://github.com/DeweyHammers/finances-os/releases) and download the `.apk`.
+2. Open the download. The first time, Android asks to allow installs from your browser (the prompt has a Settings button; the switch is under *Install unknown apps*). Play Protect may add a warning about an app it hasn't seen yet — choose *Install anyway*.
+3. Open Finances OS. It starts empty: add your income, bills and accounts as on the PC.
+
+**Your data stays on the phone**, in the app's private storage; nothing is sent anywhere. In this version the phone and the PC are two separate budgets: **sync between them comes in a later release** (the plan is a cloud database you own, the same one the desktop's Settings → Phone & sync already connects to). Until then the phone has no backups or export either, so don't uninstall the app — uninstalling deletes its data. The desktop-only features (sandbox, backups, export/import, in-app update install) say so in Settings instead of offering buttons that can't work.
+
+**Updating:** Settings → General → *Check for updates* asks GitHub for the newest release and links its page; download the new `.apk` and install it over the old one. Your data is kept (both are signed with the same key). The old app doesn't have to be removed first.
+
+For maintainers, the keystore, the repository secrets and trial builds are described in [docs/android-release.md](docs/android-release.md).
+
 ### Code signing policy
 
 Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). Windows installers and portable builds attached to a GitHub Release are signed through SignPath from the exact commit the Release is tagged on, built by this repository's GitHub Actions workflow; nothing is signed from a developer PC. The signing step is being set up (SignPath Foundation application in progress, Oct 2026) — a Release built before it lands is unsigned.

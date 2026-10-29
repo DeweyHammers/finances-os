@@ -1,3 +1,5 @@
 # Git hooks are shell scripts: keep LF endings on every platform. With
 # core.autocrlf=true a CRLF checkout breaks the #!/bin/sh line.
 .githooks/* text eol=lf
+# Same for the Gradle wrapper script the Android job runs on a Linux runner.
+android/gradlew text eol=lf

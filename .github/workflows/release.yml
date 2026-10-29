@@ -1,19 +1,20 @@
-# Release — builds the Windows installer on a GitHub-hosted Windows runner and
-# attaches it to a GitHub Release.
+# Release — builds the Windows installer on a GitHub-hosted Windows runner,
+# the Android APK on a Linux runner, and attaches both to a GitHub Release.
 #
 # Why it exists: the developer's PC runs Windows Smart App Control, which
 # blocks electron-builder from executing the fresh, unsigned NSIS stub it uses
 # to generate the uninstaller (`spawn UNKNOWN` → "An Application Control
 # policy has blocked this file"). A hosted runner has no such policy, so the
-# installer is built here instead of locally.
+# installer is built here instead of locally. The PC has no Android toolchain
+# either, so the APK comes from here too.
 #
 # How to release:
 #   1. Bump `version` in package.json (npm version X.Y.Z --no-git-tag-version)
 #      and merge that to main.
 #   2. Tag main and push the tag:  git tag vX.Y.Z && git push origin vX.Y.Z
 #   3. This workflow runs the test suite, builds, and publishes a Release
-#      named after the tag with "Finances-OS-Setup-X.Y.Z.exe", its .blockmap
-#      and `latest.yml` attached.
+#      named after the tag with "Finances-OS-Setup-X.Y.Z.exe", its .blockmap,
+#      `latest.yml`, the portable exe and "Finances-OS-X.Y.Z.apk" attached.
 #
 # `latest.yml` is what the installed app's "Check for updates" reads (see
 # CLAUDE.md → "Updates"): electron-updater fetches it from the latest Release
@@ -23,9 +24,18 @@
 # electron-builder.yml) even though `npm run build` passes `--publish never`:
 # this workflow does the uploading, not electron-builder.
 #
+# The APK is signed with a keystore kept ONLY in this repository's Actions
+# secrets (ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS,
+# ANDROID_KEY_PASSWORD — see docs/android-release.md for creating them). A
+# tag build fails with a clear message when they are missing: Android refuses
+# to install an update signed with a different key, so every Release must be
+# signed with the same one.
+#
 # "Run workflow" (workflow_dispatch) builds without releasing and keeps the
-# installer as a downloadable artifact for 14 days — useful to try a build
-# from any branch.
+# installer and the APK as downloadable artifacts for 14 days — useful to try
+# a build from any branch. Without the signing secrets the trial APK is a
+# DEBUG build (signed with the runner's throw-away debug key): it installs,
+# but a later release APK won't install over it without uninstalling first.
 name: Release
 
 on:
@@ -114,9 +124,151 @@ jobs:
           generate_release_notes: true
           # The installer, its blockmap (differential downloads), the update
           # feed, and the portable build. Names must not contain spaces (see
-          # electron-builder.yml → artifactName).
+          # electron-builder.yml → artifactName). The APK is attached by the
+          # `attach-apk` job once both builds are green.
           files: |
             dist/Finances-OS-Setup-*.exe
             dist/Finances-OS-Setup-*.exe.blockmap
             dist/latest.yml
             dist/Finances-OS-*-portable.exe
+
+  # ── Android (Phase C of plans/phone-app-and-sync.md) ──────────────────────
+  # The same renderer, exported for Capacitor (scripts/android/build-web.mjs)
+  # and built into an APK by Gradle. Runs in parallel with the Windows build;
+  # the tests already gate the Release through that job.
+  android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # The electron package's postinstall would download a 100 MB Electron
+      # zip this job never runs.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # Capacitor 8 / Android Gradle plugin 8.13 want a JDK 21.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0 platform-tools"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Tag must match package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::Tag v$tag does not match package.json version $pkg. Bump the version first."
+            exit 1
+          fi
+          echo "Releasing $pkg"
+
+      # A Release APK must be signed with the project's one keystore (see the
+      # header comment). A trial build without the secrets falls back to a
+      # debug build and says so.
+      - name: Check signing secrets
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=()
+          [ -n "$KEYSTORE_BASE64" ] || missing+=(ANDROID_KEYSTORE_BASE64)
+          [ -n "$KEYSTORE_PASSWORD" ] || missing+=(ANDROID_KEYSTORE_PASSWORD)
+          [ -n "$KEY_ALIAS" ] || missing+=(ANDROID_KEY_ALIAS)
+          [ -n "$KEY_PASSWORD" ] || missing+=(ANDROID_KEY_PASSWORD)
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Signing with the release keystore."
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "::error::Cannot sign the release APK: repository secret(s) ${missing[*]} are missing. Create the keystore and add the four secrets as described in docs/android-release.md, then re-run the tag."
+            exit 1
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Secret(s) ${missing[*]} are missing, so this trial build is a DEBUG APK signed with a throw-away key. It installs, but a release APK won't install over it (uninstall first). See docs/android-release.md."
+          fi
+
+      - name: Export the renderer for Capacitor
+        run: npm run android:web
+
+      - name: Write the keystore
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x android/gradlew
+          npm run android:apk -- --release --skip-web
+
+      - name: Build debug APK (trial build without signing secrets)
+        if: steps.signing.outputs.signed != 'true'
+        run: |
+          chmod +x android/gradlew
+          npm run android:apk -- --skip-web
+
+      - name: Remove the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: List build output
+        run: ls -l dist-android
+
+      - name: Keep APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: finances-os-android
+          path: dist-android/*.apk
+          retention-days: 14
+          if-no-files-found: error
+
+  # Attach the APK to the Release the Windows job created. A separate job so
+  # the two builds run side by side and the Release is never created twice.
+  attach-apk:
+    name: Attach APK to Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: finances-os-android
+          path: dist-android
+
+      - name: Add APK to the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Finances OS ${{ github.ref_name }}
+          fail_on_unmatched_files: true
+          files: dist-android/Finances-OS-*.apk

@@ -14,13 +14,13 @@ import path from "path";
 import { getRealDatabaseUrl, databaseUrlToPath } from "../shared/db";
 import { isSandboxActive } from "./sandbox";
 import { backupFilePath, snapshotCurrentDatabase } from "./sync";
+import { DOCS_URL, ISSUES_URL, RELEASES_URL, REPO_URL, compareVersions, fetchLatestRelease } from "../shared/app-links";
 
-export const GITHUB_REPO = "DeweyHammers/finances-os";
-export const REPO_URL = `https://github.com/${GITHUB_REPO}`;
-export const RELEASES_URL = `${REPO_URL}/releases`;
-export const ISSUES_URL = `${REPO_URL}/issues`;
-/** The picture tour (docs/ → GitHub Pages). */
-export const DOCS_URL = "https://deweyhammers.github.io/finances-os/";
+// The addresses, the version compare and the GitHub lookup live in
+// shared/app-links.ts since Phase C: the Android app has no server and asks
+// GitHub from the WebView with the same code. Re-exported so main/updates.ts
+// and the tests keep their imports.
+export { GITHUB_REPO, REPO_URL, RELEASES_URL, ISSUES_URL, DOCS_URL, compareVersions } from "../shared/app-links";
 
 /**
  * How the server is running:
@@ -93,57 +93,24 @@ export interface UpdateCheck {
   checkedAt: string;
 }
 
-/** Numeric dotted compare ("1.2.0" vs "1.10.0"); a leading "v" is ignored. */
-export function compareVersions(a: string, b: string): number {
-  const parse = (v: string) =>
-    v.replace(/^v/i, "").split(".").map((n) => parseInt(n, 10) || 0);
-  const pa = parse(a);
-  const pb = parse(b);
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d !== 0) return d < 0 ? -1 : 1;
-  }
-  return 0;
-}
-
 /**
- * Asks GitHub for the latest Release of this repo. Network failures throw —
- * the route turns them into a 502 the Settings page can show. `fetchImpl`
- * exists for the tests; the 6 s timeout keeps a dead network from hanging
- * the button.
+ * Asks GitHub for the latest Release of this repo (shared/app-links.ts →
+ * fetchLatestRelease). Network failures throw — the route turns them into a
+ * 502 the Settings page can show. `fetchImpl` exists for the tests; the 6 s
+ * timeout keeps a dead network from hanging the button.
  */
 export async function checkForUpdates(
   fetchImpl: typeof fetch = fetch,
 ): Promise<UpdateCheck> {
   const current = readVersion();
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 6000);
-  try {
-    const res = await fetchImpl(
-      `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-      {
-        headers: {
-          Accept: "application/vnd.github+json",
-          "User-Agent": `finances-os/${current}`,
-        },
-        signal: ctrl.signal,
-      },
-    );
-    if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-    const json = (await res.json()) as { tag_name?: string; html_url?: string };
-    const latest = String(json.tag_name ?? "").replace(/^v/i, "");
-    if (!latest) throw new Error("No release found");
-    return {
-      current,
-      latest,
-      url: json.html_url ?? RELEASES_URL,
-      updateAvailable: compareVersions(latest, current) > 0,
-      checkedAt: new Date().toISOString(),
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+  const release = await fetchLatestRelease(fetchImpl, current);
+  return {
+    current,
+    latest: release.latest,
+    url: release.url,
+    updateAvailable: compareVersions(release.latest, current) > 0,
+    checkedAt: new Date().toISOString(),
+  };
 }
 
 // ── Backups ─────────────────────────────────────────────────────────────────
