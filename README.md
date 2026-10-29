@@ -115,7 +115,15 @@ Every `git push` runs the whole suite first (`.githooks/pre-push`); a failing te
 
 ### Production Mode (Recommended)
 
-The installer for each version is built by GitHub Actions (`.github/workflows/release.yml`) on a hosted Windows runner and attached to the matching [GitHub Release](https://github.com/DeweyHammers/finances-os/releases). To cut a release: bump `version` in `package.json`, merge to `main`, then tag and push (`git tag v1.2.0 && git push origin v1.2.0`). The workflow runs the test suite, builds, and publishes. "Run workflow" on the Actions tab builds any branch without releasing and keeps the installer as an artifact. The Release carries `latest.yml` beside the installer: from v1.3.0 on, Settings → General → **Check for updates** downloads and installs the next release from inside the app (click **Restart to update**); older installs download the installer from the Release page. Building on a runner also sidesteps Windows Smart App Control, which blocks electron-builder's unsigned NSIS stub on a PC where it's enforced.
+The installer for each version is built by GitHub Actions (`.github/workflows/release.yml`) on a hosted Windows runner and attached to the matching [GitHub Release](https://github.com/DeweyHammers/finances-os/releases). To cut a release: bump `version` in `package.json`, merge to `main`, then tag and push (`git tag v1.2.0 && git push origin v1.2.0`). The workflow runs the test suite, builds, and publishes. "Run workflow" on the Actions tab builds any branch without releasing and keeps the installer as an artifact. The Release carries `latest.yml` beside the installer: from v1.3.0 on, Settings → General → **Check for updates** downloads and installs the next release from inside the app (click **Restart to update**); older installs download the installer from the Release page. Building on a runner also sidesteps Windows Smart App Control, which blocks electron-builder's unsigned NSIS stub on a PC where it's enforced — and, until the installer is code-signed (see below), blocks the installer itself on such a PC, whether the app or the browser downloaded it; the app detects the setting and says so in Settings → General instead of attempting the install.
+
+### Code signing policy
+
+Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). Windows installers and portable builds attached to a GitHub Release are signed through SignPath from the exact commit the Release is tagged on, built by this repository's GitHub Actions workflow; nothing is signed from a developer PC. The signing step is being set up (SignPath Foundation application in progress, Oct 2026) — a Release built before it lands is unsigned.
+
+- **Privacy:** the app sends no data anywhere. Everything stays in a SQLite file on your device, or — only if you turn sync on — in a database you own. There is no telemetry, no account, no crash reporting.
+- **Maintainer:** Richard Dewey Hammers ([@DeweyHammers](https://github.com/DeweyHammers)); the only person with signing and release rights.
+- **Code of conduct:** contributions follow the [SignPath Foundation Code of Conduct](https://signpath.org/terms).
 
 To build locally instead:
 
@@ -166,3 +174,7 @@ npx prisma generate     # regenerate node_modules\.prisma\client (stop dev serve
 - `/prisma` — Database schema and seed.
 - `/resources` — App icons and platform assets.
 - `/_archived` — Snapshots of removed/superseded features (e.g. the original EDD/Upwork build, the bi-weekly cycle model) preserved for reference or revert.
+
+## 📄 License
+
+[MIT](LICENSE) © 2026 Richard Dewey Hammers. Use it, change it, share it; no warranty.
