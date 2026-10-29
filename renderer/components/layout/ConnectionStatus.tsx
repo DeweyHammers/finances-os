@@ -28,12 +28,14 @@ const RED = "#f43f5e";
 const AMBER = "#fbbf24";
 
 /**
- * Dot colour, label and the second line for each state. "Last synced …"
+ * Dot colour, label and the second line for each state. "Synced" has no
+ * second line on purpose — the word is the whole message (user request,
+ * Oct 29 2026). "Last synced …"
  * lives only in the tooltip: on the row it re-rendered once a minute and
  * looked frozen (user feedback, Oct 28 2026); a tooltip is computed when
  * it opens, so it is always current.
  */
-function describe(status: Status): { color: string; label: string; detail: string; help: string } {
+function describe(status: Status): { color: string; label: string; detail?: string; help: string } {
   const last = ` Last synced ${timeAgo(status.lastSyncedAt)}; the app checks the cloud every minute on its own.`;
   if (status.apiDown) {
     return { color: RED, label: "No answer", detail: "The app's server isn't responding", help: "The app's own API did not answer. Restarting the app usually fixes this." };
@@ -42,7 +44,7 @@ function describe(status: Status): { color: string; label: string; detail: strin
     case "syncing":
       return { color: AMBER, label: "Syncing…", detail: "Pulling changes", help: "Pulling the latest changes from your cloud database." + last };
     case "synced":
-      return { color: GREEN, label: "Synced", detail: "Cloud database", help: "Every change is saved to your cloud database as you make it; other devices see it on their next sync." + last };
+      return { color: GREEN, label: "Synced", help: "Every change is saved to your cloud database as you make it; other devices see it on their next sync." + last };
     case "offline":
       return {
         color: RED,
@@ -149,9 +151,12 @@ export const ConnectionStatus = ({ variant = "sider" }: ConnectionStatusProps) =
         <Typography sx={{ fontSize: "0.8rem", fontWeight: 700, color: "#cbd5e1", lineHeight: 1.2 }}>
           {label}
         </Typography>
-        <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1.2, whiteSpace: "nowrap" }}>
-          {detail}
-        </Typography>
+        {/* Second line only when the state has something to add; "Synced" stands alone. */}
+        {detail && (
+          <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1.2, whiteSpace: "nowrap" }}>
+            {detail}
+          </Typography>
+        )}
       </Box>
     </Box>
   );
