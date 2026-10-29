@@ -159,6 +159,7 @@ const TabNav = ({ active, onSelect }: { active: SettingsTab; onSelect: (tab: Set
 /** A status before the first answer arrives — used to show "Checking…" at once. */
 const emptyUpdateStatus: UpdateStatus = {
   supported: false,
+  installBlocked: null,
   state: "idle",
   current: "",
   latest: null,
@@ -357,6 +358,18 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
       case "up-to-date":
         return <Row label="You're up to date" description={`Latest release is ${update.latest}.`} />;
       case "available":
+        // The installed app, but this PC refuses app-started installers
+        // (Smart App Control, Oct 29 2026): say why, link the Release page,
+        // and never offer a Download that would end in the app quitting.
+        if (update.installBlocked) {
+          return (
+            <Row label={`Version ${update.latest} is available`} description={update.installBlocked.message}>
+              <Button {...linkButton} href={update.releaseUrl} component="a">
+                Release page
+              </Button>
+            </Row>
+          );
+        }
         return update.supported ? (
           <Row
             label={`Version ${update.latest} is available`}

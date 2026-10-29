@@ -43,9 +43,24 @@ export interface UpdateProgress {
   bytesPerSecond: number;
 }
 
+/**
+ * Why this PC can't run the in-app installer even though an engine is wired.
+ * Today only Smart App Control (see main/smart-app-control.ts): it refuses an
+ * unsigned installer started by the app, and electron-updater quits the app
+ * anyway — so the Settings row has to offer the Release page instead of
+ * Download. Set once at startup by main/updater.ts.
+ */
+export interface InstallBlock {
+  code: "SMART_APP_CONTROL";
+  /** What the Settings row shows in place of the Download button. */
+  message: string;
+}
+
 export interface UpdateStatus {
   /** True when an engine is wired, i.e. the app can download + install itself. */
   supported: boolean;
+  /** Non-null when `supported` but this PC would refuse the install (see InstallBlock). */
+  installBlocked: InstallBlock | null;
   state: UpdateState;
   /** Running version (package.json). */
   current: string;
@@ -83,7 +98,7 @@ export class UpdateError extends Error {
   constructor(
     message: string,
     public readonly status = 409,
-    public readonly code: "UPDATER_UNAVAILABLE" | "WRONG_STATE" = "WRONG_STATE",
+    public readonly code: "UPDATER_UNAVAILABLE" | "WRONG_STATE" | "INSTALL_BLOCKED" = "WRONG_STATE",
   ) {
     super(message);
     this.name = "UpdateError";
@@ -93,6 +108,7 @@ export class UpdateError extends Error {
 // ── State ───────────────────────────────────────────────────────────────────
 
 let engine: UpdateEngine | null = null;
+let installBlock: InstallBlock | null = null;
 let state: UpdateState = "idle";
 let latest: string | null = null;
 let releaseDate: string | null = null;
@@ -135,9 +151,19 @@ export function registerUpdateEngine(next: UpdateEngine | null): void {
   });
 }
 
+/**
+ * Record (or clear) why this PC can't run the installer. Download and
+ * install are refused (409 INSTALL_BLOCKED) while set; a check still works,
+ * so the row can say "Version X is available" with the Release page link.
+ */
+export function setInstallBlock(block: InstallBlock | null): void {
+  installBlock = block;
+}
+
 export function getUpdateStatus(): UpdateStatus {
   return {
     supported: engine !== null,
+    installBlocked: engine !== null ? installBlock : null,
     state,
     current: readVersion(),
     latest,
@@ -236,6 +262,7 @@ export function downloadUpdate(): UpdateStatus {
       "UPDATER_UNAVAILABLE",
     );
   }
+  if (installBlock) throw new UpdateError(installBlock.message, 409, "INSTALL_BLOCKED");
   if (state === "downloading" || state === "downloaded") return getUpdateStatus();
   if (state !== "available") {
     throw new UpdateError("Check for updates first — there is nothing to download.");
@@ -262,6 +289,7 @@ export function installUpdate(): UpdateStatus {
   if (!engine) {
     throw new UpdateError("This build can't update itself.", 409, "UPDATER_UNAVAILABLE");
   }
+  if (installBlock) throw new UpdateError(installBlock.message, 409, "INSTALL_BLOCKED");
   if (state === "installing") return getUpdateStatus();
   if (state !== "downloaded") {
     throw new UpdateError("Download the update first — there is nothing to install.");
@@ -294,6 +322,7 @@ export async function awaitPendingUpdateWorkForTests(): Promise<void> {
 /** Back to a fresh process: no engine, nothing checked. */
 export function resetUpdatesForTests(): void {
   engine = null;
+  installBlock = null;
   state = "idle";
   latest = null;
   releaseDate = null;

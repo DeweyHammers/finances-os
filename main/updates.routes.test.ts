@@ -83,6 +83,24 @@ describe("in-app updates (/api/updates)", () => {
     expect((await api().post("/api/updates/nonsense")).status).toBe(404);
   });
 
+  it("status carries the install block and download is 409 INSTALL_BLOCKED with the message", async () => {
+    updates.registerUpdateEngine({
+      async checkForUpdates() {
+        return { isUpdateAvailable: true, updateInfo: { version: "9.9.9" } };
+      },
+      downloadUpdate: () => Promise.resolve(),
+      quitAndInstall() {},
+      on() {},
+    });
+    updates.setInstallBlock({ code: "SMART_APP_CONTROL", message: "Smart App Control is on for this PC." });
+    const chk = await api().post("/api/updates/check");
+    expect(chk.status).toBe(200);
+    expect(chk.body).toMatchObject({ supported: true, state: "available", installBlocked: { code: "SMART_APP_CONTROL" } });
+    const dl = await api().post("/api/updates/download");
+    expect(dl.status).toBe(409);
+    expect(dl.body).toMatchObject({ code: "INSTALL_BLOCKED", message: "Smart App Control is on for this PC." });
+  });
+
   it("walks check → download → progress → downloaded → install with an engine", async () => {
     const engine = fakeEngine("99.0.0");
     updates.registerUpdateEngine(engine);

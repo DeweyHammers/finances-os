@@ -15,6 +15,7 @@ import {
   installUpdate,
   registerUpdateEngine,
   resetUpdatesForTests,
+  setInstallBlock,
   type UpdateEngine,
   type UpdateProgress,
 } from "./updates";
@@ -199,6 +200,31 @@ describe("with an engine (installed app)", () => {
   it("a silent check that succeeds keeps its result", async () => {
     registerUpdateEngine(fakeEngine({ latest: "99.0.0" }));
     expect(await checkForUpdate({ silent: true })).toMatchObject({ state: "available", latest: "99.0.0" });
+  });
+
+  it("an install block (Smart App Control) keeps the check and refuses download / install", async () => {
+    const engine = fakeEngine({ latest: "9.9.9" });
+    registerUpdateEngine(engine);
+    setInstallBlock({ code: "SMART_APP_CONTROL", message: "Smart App Control is on for this PC." });
+    // The row still learns that a release exists…
+    const s = await checkForUpdate();
+    expect(s).toMatchObject({ supported: true, state: "available", latest: "9.9.9" });
+    expect(s.installBlocked).toEqual({ code: "SMART_APP_CONTROL", message: "Smart App Control is on for this PC." });
+    // …but nothing is downloaded or installed: the app would quit for nothing.
+    expect(() => downloadUpdate()).toThrowError(expect.objectContaining({ status: 409, code: "INSTALL_BLOCKED" }));
+    expect(() => installUpdate()).toThrowError(expect.objectContaining({ status: 409, code: "INSTALL_BLOCKED" }));
+    expect(engine.calls.download).toBe(0);
+    expect(engine.calls.install).toEqual([]);
+    expect(getUpdateStatus().state).toBe("available");
+    // Clearing the block restores the normal path.
+    setInstallBlock(null);
+    expect(getUpdateStatus().installBlocked).toBeNull();
+    expect(downloadUpdate().state).toBe("downloading");
+  });
+
+  it("an install block is not reported without an engine (dev / hosted: unsupported already)", () => {
+    setInstallBlock({ code: "SMART_APP_CONTROL", message: "x" });
+    expect(getUpdateStatus()).toMatchObject({ supported: false, installBlocked: null });
   });
 
   it("falls back to a version compare when the engine gives no isUpdateAvailable", async () => {
