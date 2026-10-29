@@ -13,7 +13,19 @@ merges. It is deliberately a separate PR: the infrastructure PR is large and
 another chat is changing `main` in parallel, so keeping the UI work out of it
 keeps the merge conflict small and the review honest.
 
-## Decisions to take first (user)
+## Status
+
+**Approved 2026-10-29, ON HOLD** until the user's other in-flight changes
+reach `main`; PR 20 then needs a merge of `main` before anything else. The
+user's brief for the design: *use your best judgment to make it look clean on
+a phone — the way Discord's mobile app looks different from its desktop app
+instead of being the desktop app shrunk*. So the phone shell is designed as
+its own app from the phone's conventions (bottom tabs, lists, sheets, one
+primary action per screen, thumb-reach controls), not as a responsive
+variant of the desktop pages; shared maths and data only. The three
+decisions below are settled as recommended.
+
+## Decisions to take first (user) — settled
 
 1. **One renderer, two shells** (recommended) vs a second app. Recommended:
    keep ONE Next.js renderer, ONE data layer, the same hooks and `lib/`
