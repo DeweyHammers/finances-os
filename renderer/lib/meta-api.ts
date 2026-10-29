@@ -37,9 +37,17 @@ export interface UpdateProgress {
   bytesPerSecond: number;
 }
 
+/** Why the installed app can't run the installer on this PC (Smart App Control). */
+export interface InstallBlock {
+  code: "SMART_APP_CONTROL";
+  message: string;
+}
+
 export interface UpdateStatus {
   /** The installed app can download + install; dev/hosted can only link. */
   supported: boolean;
+  /** Set when `supported` but this PC refuses the install: show the Release page instead. */
+  installBlocked: InstallBlock | null;
   state: UpdateState;
   current: string;
   latest: string | null;
