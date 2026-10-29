@@ -262,6 +262,15 @@ function App({ children }: { children: ReactNode }) {
           // Refine will read/write list filter/sort/pagination state into the
           // URL — handy for deep-linking a filtered view.
           syncWithLocation: true,
+          // Optimistic: an update or delete changes what the page shows AT
+          // ONCE and the server is told in the background; Refine rolls the
+          // cache back and shows the error toast if the server refuses. With
+          // sync on, every write is forwarded to the cloud before the API
+          // answers (a round trip, 1–3 s), and in the default pessimistic
+          // mode a deleted transaction sat in the ledger until then (user
+          // report, Oct 29 2026). Creates are unaffected: Refine has no
+          // optimistic create (the row needs its server id).
+          mutationMode: "optimistic",
           // Off: our forms handle their own dirty state; the built-in modal
           // interrupts the Nextron nav flow.
           warnWhenUnsavedChanges: false,
