@@ -323,6 +323,25 @@ function replicaFilesPresent(): boolean {
 }
 
 /**
+ * `replica.db-mode` says which libsql mode wrote the copy. The remote
+ * replica (until Oct 29 2026) left the same `-info` metadata file behind,
+ * with frame numbers from its own replication protocol; a copy without this
+ * marker is therefore backed up and fetched again rather than trusted. The
+ * old mode never held unpushed changes, so nothing can be lost.
+ */
+const REPLICA_MODE = "offline-writes";
+function replicaModePath(): string {
+  return `${replicaDbPath()}-mode`;
+}
+function replicaWrittenByThisMode(): boolean {
+  try {
+    return fs.readFileSync(replicaModePath(), "utf8").trim() === REPLICA_MODE;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * WAL frames the local copy holds beyond what the cloud has, from libsql's
  * own bookkeeping: `replica.db-info` records the last pushed frame, the WAL
  * file holds every frame since the last generation change. An estimate
@@ -504,7 +523,17 @@ async function activateReplica(beforeConnect?: () => void): Promise<void> {
   if (!settings) throw new SyncError("Sync is not set up on this device.");
   const target = replicaTarget(settings);
   setPrimaryDatabase(target);
-  const fresh = !replicaFilesPresent();
+  let fresh = !replicaFilesPresent();
+
+  if (!fresh && !replicaWrittenByThisMode()) {
+    // A copy left by the remote-replica mode (or by a crash before the
+    // marker was written): keep its rows as a .bak and fetch it again.
+    console.log("[Sync] the local copy was not written by this sync mode; fetching it again");
+    await getStore().close();
+    await backupReplicaFile();
+    await removeReplicaFiles();
+    fresh = true;
+  }
 
   if (fresh && !(await reachableNow(settings))) {
     await fallBackReadOnly(beforeConnect);
@@ -518,41 +547,42 @@ async function activateReplica(beforeConnect?: () => void): Promise<void> {
     const reason = errorMessage(e);
     console.error("[Sync] could not open the local copy:", reason);
     await getStore().close();
-    if (!fresh && /InvalidLocalState/.test(reason)) {
-      // One of the two files is missing (deleted by hand, a crash mid-write):
-      // libsql refuses the pair. Keep whatever the copy holds as a .bak,
-      // then start over from the cloud.
-      await backupReplicaFile();
+    if (fresh) {
+      // The bootstrap itself failed (the cloud went away, a server error).
       await removeReplicaFiles();
-      if (await reachableNow(settings)) {
-        await switchDatabase(target);
-        try {
-          await getCurrentConnection().open();
-        } catch (e2) {
-          await getStore().close();
-          state.lastError = errorMessage(e2);
-          await fallBackReadOnly();
-          return;
-        }
-      } else {
-        await fallBackReadOnly();
-        return;
-      }
-    } else if (fresh) {
-      await removeReplicaFiles();
+      state.lastError = reason;
       await fallBackReadOnly();
       return;
-    } else {
-      // The files are there but libsql won't open them: show them read-only
-      // (a plain open works on the same file) rather than nothing.
-      state.readOnly = true;
-      state.offline = true;
-      state.lastError = `Could not open the local copy of your cloud database: ${reason}`;
-      await switchDatabase({ url: target.url, readOnly: true });
+    }
+    // The files are there but libsql won't open them — one of the pair
+    // missing (InvalidLocalState), a damaged `-info` file, a copy from
+    // another libsql version. With both files present libsql used no
+    // network, so this is always a local-state problem: keep whatever the
+    // copy holds as a .bak, then start over from the cloud.
+    await backupReplicaFile();
+    await removeReplicaFiles();
+    if (!(await reachableNow(settings))) {
+      await fallBackReadOnly();
       return;
     }
+    await switchDatabase(target);
+    try {
+      await getCurrentConnection().open();
+    } catch (e2) {
+      await getStore().close();
+      await removeReplicaFiles();
+      state.lastError = errorMessage(e2);
+      await fallBackReadOnly();
+      return;
+    }
+    fresh = true;
   }
 
+  try {
+    fs.writeFileSync(replicaModePath(), `${REPLICA_MODE}\n`, "utf8");
+  } catch (e) {
+    console.warn("[Sync] could not write the mode marker:", errorMessage(e));
+  }
   state.readOnly = false;
   state.pendingChanges = Math.max(state.pendingChanges, unpushedFramesEstimate());
   try {

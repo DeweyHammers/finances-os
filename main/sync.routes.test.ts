@@ -554,6 +554,35 @@ describe("while synced", () => {
     expect(await billNames()).toEqual(["Next generation", "Pushed after", "Seed"]);
   });
 
+  it("a copy left by the old remote-replica mode (no mode marker) is backed up and fetched again", async () => {
+    await api().post("/api/Bill").send({ name: "Pushed before", amount: 1, dueDate: 1 });
+    await api().post("/api/sync/now");
+    await sync.__resetSyncForTests({ keepFiles: true });
+    expect(fs.readFileSync(`${replicaDb}-mode`, "utf8").trim()).toBe("offline-writes");
+    fs.rmSync(`${replicaDb}-mode`);
+    const status = await sync.initSync();
+    expect(status).toMatchObject({ configured: true, state: "synced", readOnly: false, pendingChanges: 0 });
+    const baks = fs.readdirSync(tmpDir).filter((f) => f.endsWith(".bak"));
+    expect(baks).toHaveLength(1);
+    const bak = libsql.openLibsql(path.join(tmpDir, baks[0]));
+    expect((await bak.exec('SELECT name FROM "Bill" ORDER BY name')).map((r) => r.name)).toEqual(["Pushed before", "Seed"]);
+    await bak.close();
+    expect(fs.existsSync(`${replicaDb}-mode`)).toBe(true);
+    expect(await apiBillNames()).toEqual(["Pushed before", "Seed"]);
+    expect((await api().post("/api/Bill").send({ name: "After", amount: 1, dueDate: 1 })).status).toBe(200);
+    expect((await api().post("/api/sync/now")).body.state).toBe("synced");
+    expect(await billNames()).toEqual(["After", "Pushed before", "Seed"]);
+  });
+
+  it("a damaged metadata file beside the copy is backed up and the copy fetched again", async () => {
+    await sync.__resetSyncForTests({ keepFiles: true });
+    fs.writeFileSync(`${replicaDb}-info`, '{"hash":1,"version":0,"durable_frame_num":999,"generation":1}');
+    const status = await sync.initSync();
+    expect(status).toMatchObject({ configured: true, state: "synced", readOnly: false });
+    expect(fs.readdirSync(tmpDir).filter((f) => f.endsWith(".bak"))).toHaveLength(1);
+    expect(await apiBillNames()).toEqual(["Seed"]);
+  });
+
   it("no local copy and no cloud at startup: the pre-sync file is shown read-only until the cloud is back", async () => {
     await api().post("/api/Bill").send({ name: "Only in the copy", amount: 1, dueDate: 1 });
     await api().post("/api/sync/now");
