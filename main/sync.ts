@@ -1,41 +1,59 @@
 /**
- * sync.ts — Phase B of plans/phone-app-and-sync.md: the desktop keeps an
- * embedded replica of a cloud libsql/Turso database the user owns.
+ * sync.ts — Phase B of plans/phone-app-and-sync.md: the desktop keeps a
+ * local copy of a cloud libsql/Turso database the user owns and syncs it in
+ * the background. LOCAL-FIRST since Oct 29 2026.
  *
  *   Local only (default)   the API is on the real local file, as always.
- *   Synced                 the API is on replica.db beside it, opened with
- *                          the cloud's URL + token (shared/data/backends/
- *                          libsql.ts): reads are local, writes go to the
- *                          cloud and show up locally at once, `sync()` pulls
- *                          what other devices wrote. One source of truth, no
- *                          merge logic.
+ *   Synced                 the API is on replica.db beside it, opened as a
+ *                          libsql SYNCED DATABASE (offline writes; shared/
+ *                          data/backends/libsql.ts): every read and write is
+ *                          a plain local operation, exactly as fast as the
+ *                          local-only app; `sync()` pushes the writes to the
+ *                          cloud and pulls what other devices pushed. It
+ *                          runs 3 s after a write, every minute, on "Sync
+ *                          now", at startup and at connect.
+ *
+ * Until Oct 29 2026 the replica was libsql's REMOTE replica: every write was
+ * forwarded to the cloud before the API answered (1–3 s per save, more after
+ * a quiet spell because a reachability probe ran first), and the device was
+ * read-only while the cloud was unreachable. The user reversed that after a
+ * day of use: local-database speed first, sync in the background.
+ *
+ * What the new model costs: two devices can now change the same database
+ * while apart. libsql does not merge — a push that doesn't continue the
+ * cloud's frame log is refused — so the status gets a `conflict` state and
+ * the user chooses: "use the cloud's copy" (this device's unpushed changes
+ * go into a .bak and the local copy is fetched again) or "keep this
+ * device's changes" (the cloud's rows go into a .bak, then the cloud is
+ * replaced with this device's rows). Nothing is merged or guessed, nothing
+ * is lost silently.
+ *
+ * Offline: the app keeps working read-write on the local copy; the status
+ * says `offline` with the number of changes waiting; the next successful
+ * sync pushes them. A write can never hang on the network any more. The one
+ * exception is a device whose local copy is MISSING while the cloud can't
+ * be reached (nothing to open): the pre-sync local file is shown read-only
+ * until the cloud is back.
  *
  * Switching local → synced uploads the local database once (or, when the
  * cloud already holds data, the user chooses which side wins); switching
- * back ("Forget this device") writes the replica's data into the local file
- * so nothing is lost and no token stays behind. Export / Import work in both
- * modes through the data layer's dump/load (shared/data/transfer.ts).
- *
- * Offline: libsql connects to the cloud when it OPENS a replica, so when the
- * cloud is unreachable the replica file is opened plain and READ-ONLY — the
- * user still sees their data, every write is refused with a clear message
- * (`writeBlockReason`, enforced by main/api-server.ts), and each sync tick
- * tries the real replica again. Every open/sync that would block the main
- * process is preceded by an asynchronous reachability check, so a dead
- * network costs a 4 s probe, never a long stall.
+ * back ("Forget this device") writes the local copy's data into the local
+ * file so nothing is lost and no token stays behind. Export / Import work in
+ * both modes through the data layer's dump/load (shared/data/transfer.ts).
  *
  * Schema-version gate: a database stamped by a NEWER app (SchemaVersion >
  * this build's SCHEMA_VERSION) is neither synced nor written; the status
  * says "update the app on this device".
  *
- * Sandbox: entering one dumps the replica into the plain sandbox file and
- * pauses sync; Discard reopens the replica; Keep pushes the sandbox's rows to
- * the cloud and then reopens the replica (main/sandbox.ts calls in here).
+ * Sandbox: entering one dumps the local copy into the plain sandbox file and
+ * pauses sync; Discard reopens the copy; Keep pushes the sandbox's rows to
+ * the cloud and fetches the copy again (main/sandbox.ts calls in here).
  *
  * No Electron imports (sync-settings.ts isolates safeStorage), so this runs
- * in the app, the demo server and the tests alike. The tests swap the
- * transport (`__setSyncTransportForTests`) and the connection opener in
- * shared/db.ts for plain files, so they never touch the network.
+ * in the app, the demo server and the tests alike. The tests run the REAL
+ * libsql client against a protocol-faithful mock of the cloud
+ * (tests/helpers/libsql-sync-server.ts); only Turso Cloud serves the
+ * offline-writes protocol, the open-source libsql-server does not.
  */
 import fs from "fs";
 import path from "path";
@@ -51,7 +69,7 @@ import {
   switchDatabase,
   type DatabaseTarget,
 } from "../shared/db";
-import { collectGarbage, openLibsql } from "../shared/data/backends/libsql";
+import { collectGarbage, isSyncConflictError, openLibsql } from "../shared/data/backends/libsql";
 import {
   SCHEMA_VERSION,
   countDataRows,
@@ -73,20 +91,33 @@ import { clearSyncSettings, loadSyncSettings, saveSyncSettings, type SyncSetting
 import { isSandboxActive } from "./sandbox";
 
 export const REPLICA_FILENAME = "replica.db";
-/** How often the replica pulls the cloud's changes while idle. */
+/** How often the local copy syncs while idle. */
 export const SYNC_INTERVAL_MS = 60_000;
-/** Pause after a local write before pulling (writes already reached the cloud). */
+/** Pause after a local write before the push (more writes usually follow). */
 export const SYNC_AFTER_WRITE_MS = 3_000;
+/**
+ * A sync that takes longer than this is given up (the store's lock is held
+ * meanwhile, so a black-holed host must not hold it forever). libsql has no
+ * timeout of its own; a host that refuses the connection fails in ~1 ms.
+ */
+export const SYNC_TIMEOUT_MS = 30_000;
 const REACHABILITY_TIMEOUT_MS = 8_000;
-/** A probe this fresh is trusted before a write instead of probing again. */
-const WRITE_PROBE_MAX_AGE_MS = 5_000;
 const UNREACHABLE = "The cloud database can't be reached.";
 /** Statements per cloud batch (= per transaction) when pushing a whole database. */
 const BATCH_SIZE = 200;
+/** libsql's WAL frame = 24-byte header + 4096-byte page; the WAL file starts with a 32-byte header. */
+const WAL_FRAME_BYTES = 4120;
+const WAL_HEADER_BYTES = 32;
 
 // ── Public types ────────────────────────────────────────────────────────────
 
-export type SyncState = "local" | "synced" | "syncing" | "offline" | "paused" | "blocked";
+export type SyncState = "local" | "synced" | "syncing" | "offline" | "paused" | "blocked" | "conflict";
+
+export interface SyncConflict {
+  /** libsql's error, for the log; the UI has its own words. */
+  message: string;
+  since: string;
+}
 
 export interface SyncStatus {
   /** A cloud database is set up on this device. False = local only. */
@@ -100,10 +131,22 @@ export interface SyncStatus {
   pausedBy: "sandbox" | null;
   /** Set when the database's schema is newer than this app's. */
   schemaGate: { app: number; database: number } | null;
-  /** The cloud was unreachable when the replica was opened: data is read-only until it is back. */
+  /**
+   * The local copy is missing and the cloud can't be reached to fetch it:
+   * the data from before sync was set up is shown read-only until it is.
+   */
   readOnly: boolean;
-  /** Why writes are refused right now, null when they are allowed. */
+  /** Why writes are refused right now (schema gate, the read-only corner), null when they are allowed. */
   writesBlocked: string | null;
+  /**
+   * Changes saved on this device that have not reached the cloud yet: the
+   * writes since the last push in this run, or — right after a start — the
+   * WAL frames the previous run left unpushed. 0 once a push succeeds.
+   */
+  pendingChanges: number;
+  pendingPush: boolean;
+  /** The cloud moved on while this device had unpushed changes; the user must choose. */
+  conflict: SyncConflict | null;
   replicaPath: string | null;
   appSchemaVersion: number;
 }
@@ -130,7 +173,7 @@ export class SyncError extends Error {
   }
 }
 
-// ── Transport (the only part that touches the network) ─────────────────────
+// ── Transport (the only part that touches the network directly) ─────────────
 
 export interface RemoteDatabase extends SqlExecutor {
   /** Run statements in order inside one transaction. */
@@ -139,7 +182,7 @@ export interface RemoteDatabase extends SqlExecutor {
 }
 
 export interface SyncTransport {
-  /** A direct connection to the cloud database (probe, first upload, pushes). */
+  /** A direct connection to the cloud database (probe, first upload, pushes of whole databases). */
   openRemote(settings: SyncSettings): RemoteDatabase;
   /** Can the cloud be reached right now? Must never block the process. */
   isReachable(settings: SyncSettings): Promise<boolean>;
@@ -150,7 +193,7 @@ export function toHttpUrl(url: string): string {
   return url.trim().replace(/^libsql:\/\//i, "https://").replace(/\/+$/, "");
 }
 
-/** The URL forms Turso hands out, plus http for a local libsql-server. */
+/** The URL forms Turso hands out, plus http for a local server. */
 export function isValidSyncUrl(url: string): boolean {
   return /^(libsql|https?):\/\/[^\s/?#]+(\/[^\s]*)?$/i.test(url.trim());
 }
@@ -183,12 +226,10 @@ const realTransport: SyncTransport = {
     };
   },
   async isReachable(settings) {
-    // Any HTTP answer counts (libsql-server exposes /health; a 401/404 still
-    // proves the host is up); only a network failure or timeout is "offline".
-    // A cold TLS round trip to Turso's edge measured 2.4 s (Oct 2026), so
-    // the timeout is generous, and a failed /health gets a second chance
-    // through a real `select 1` on the client — the probe must err on the
-    // side of "reachable", because a false "offline" refuses a save.
+    // Any HTTP answer counts (a 401/404 still proves the host is up); only a
+    // network failure or timeout is "offline". A cold TLS round trip to
+    // Turso's edge measured 2.4 s (Oct 2026), so the timeout is generous,
+    // and a failed /health gets a second chance through a real `select 1`.
     try {
       await fetch(`${toHttpUrl(settings.url)}/health`, { signal: AbortSignal.timeout(REACHABILITY_TIMEOUT_MS) });
       return true;
@@ -216,6 +257,12 @@ export function __setSyncTransportForTests(t: SyncTransport | null): void {
   transport = t ?? realTransport;
 }
 
+let syncTimeoutMs = SYNC_TIMEOUT_MS;
+
+export function __setSyncTimeoutForTests(ms: number | null): void {
+  syncTimeoutMs = ms ?? SYNC_TIMEOUT_MS;
+}
+
 // ── State ───────────────────────────────────────────────────────────────────
 
 interface State {
@@ -226,9 +273,13 @@ interface State {
   pausedBy: "sandbox" | null;
   schemaGate: { app: number; database: number } | null;
   readOnly: boolean;
+  /** The last sync could not reach the cloud (or failed on the way). */
+  offline: boolean;
+  conflict: SyncConflict | null;
+  pendingChanges: number;
 }
 
-const state: State = {
+const INITIAL: State = {
   settings: null,
   syncing: false,
   lastSyncedAt: null,
@@ -236,29 +287,25 @@ const state: State = {
   pausedBy: null,
   schemaGate: null,
   readOnly: false,
+  offline: false,
+  conflict: null,
+  pendingChanges: 0,
 };
+
+const state: State = { ...INITIAL };
 
 let timer: NodeJS.Timeout | null = null;
 let afterWriteTimer: NodeJS.Timeout | null = null;
-let lastProbe: { at: number; reachable: boolean } | null = null;
 
 /**
- * Is the cloud reachable? Every blocking libsql call (open, sync, and —
- * through the write gate — a forwarded write) is preceded by this, because a
- * libsql call against a dead host blocks the whole process until TCP gives
- * up (measured Oct 2026: a write sat 5+ minutes while the server was
- * paused). `maxAgeMs` lets writes reuse a probe taken moments ago.
+ * Is the cloud reachable? Used before the direct-to-cloud work (first
+ * upload, Keep, Import, "keep this device's changes") and before a bootstrap,
+ * never before a write: writes are local now.
  */
-async function reachableNow(settings: SyncSettings, maxAgeMs = 0): Promise<boolean> {
-  if (lastProbe && Date.now() - lastProbe.at < maxAgeMs) return lastProbe.reachable;
+async function reachableNow(settings: SyncSettings): Promise<boolean> {
   const reachable = await transport.isReachable(settings);
-  lastProbe = { at: Date.now(), reachable };
   if (reachable && state.lastError === UNREACHABLE) state.lastError = null;
   return reachable;
-}
-
-export function __forgetReachabilityForTests(): void {
-  lastProbe = null;
 }
 
 function realDbPath(): string {
@@ -270,6 +317,29 @@ export function replicaDbPath(): string {
   return path.join(path.dirname(realDbPath()), REPLICA_FILENAME);
 }
 
+/** Both files libsql needs to open the copy without the network. */
+function replicaFilesPresent(): boolean {
+  return fs.existsSync(replicaDbPath()) && fs.existsSync(`${replicaDbPath()}-info`);
+}
+
+/**
+ * WAL frames the local copy holds beyond what the cloud has, from libsql's
+ * own bookkeeping: `replica.db-info` records the last pushed frame, the WAL
+ * file holds every frame since the last generation change. An estimate
+ * (a rolled-back transaction leaves frames behind until overwritten) that is
+ * only used to seed `pendingChanges` after a start; the first push resets it.
+ */
+function unpushedFramesEstimate(): number {
+  try {
+    const info = JSON.parse(fs.readFileSync(`${replicaDbPath()}-info`, "utf8")) as { durable_frame_num?: number };
+    const walBytes = fs.existsSync(`${replicaDbPath()}-wal`) ? fs.statSync(`${replicaDbPath()}-wal`).size : 0;
+    const frames = Math.max(0, Math.floor((walBytes - WAL_HEADER_BYTES) / WAL_FRAME_BYTES));
+    return Math.max(0, frames - Number(info.durable_frame_num ?? 0));
+  } catch {
+    return 0;
+  }
+}
+
 /** The store as a plain executor (dump/load read through it, statement by statement). */
 function storeExecutor(): SqlExecutor {
   return { exec: (sql, params = []) => getStore().raw(sql, params) };
@@ -278,7 +348,7 @@ function storeExecutor(): SqlExecutor {
 function replicaTarget(settings: SyncSettings): DatabaseTarget {
   return {
     url: pathToDatabaseUrl(replicaDbPath()),
-    sync: { syncUrl: toHttpUrl(settings.url), authToken: settings.authToken },
+    sync: { syncUrl: toHttpUrl(settings.url), authToken: settings.authToken, offline: true },
   };
 }
 
@@ -292,9 +362,9 @@ function errorMessage(e: unknown): string {
 }
 
 /**
- * Delete the replica and libsql's side files (`replica.db-wal`,
- * `-client_wal_index`, …). Windows reports EBUSY/EPERM for a short while
- * after a close, so retry briefly (same as main/sandbox.ts).
+ * Delete the local copy and libsql's side files (`replica.db-wal`, `-shm`,
+ * `-info`, …). Windows reports EBUSY/EPERM for a short while after a close,
+ * so retry briefly (same as main/sandbox.ts).
  */
 async function removeReplicaFiles(): Promise<void> {
   const dir = path.dirname(replicaDbPath());
@@ -310,9 +380,8 @@ async function removeReplicaFiles(): Promise<void> {
         break;
       } catch (e) {
         if (attempt === 19) throw e;
-        // The replicator's handle goes when its JS wrapper is finalised,
-        // which takes a GC plus a tick plus a few ms (measured Oct 2026: held
-        // right after close(), free one GC round later).
+        // The native handle goes when its JS wrapper is finalised, which
+        // takes a GC plus a tick plus a few ms (measured Oct 2026).
         collectGarbage();
         await new Promise((r) => setImmediate(r));
         await new Promise((r) => setTimeout(r, 100));
@@ -325,35 +394,16 @@ export function isSyncConfigured(): boolean {
   return state.settings !== null;
 }
 
-/** Why a write must be refused right now (main/api-server.ts), or null. */
+/**
+ * Why a write must be refused right now (main/api-server.ts), or null.
+ * Synchronous and cheap: writes are local, so the only reasons left are the
+ * schema gate and the read-only corner (no local copy, cloud unreachable).
+ */
 export function writeBlockReason(): string | null {
   if (!state.settings) return null;
   if (state.schemaGate) return schemaVersionGate(state.schemaGate.database);
   if (state.readOnly && !state.pausedBy) {
-    return "Offline: the cloud database can't be reached, so changes can't be saved right now. Your data is shown read-only until it is back.";
-  }
-  // The last probe (a sync, a write) found the cloud unreachable: the next
-  // write would be refused too, so the status says so up front (the banner
-  // and the indicator read this). Cleared by the next successful probe.
-  if (!state.pausedBy && lastProbe && !lastProbe.reachable) {
-    return "Offline: the cloud database can't be reached, so changes can't be saved right now. Try again when you're back online.";
-  }
-  return null;
-}
-
-/**
- * The write gate main/api-server.ts awaits before every mutating resource
- * route: the static reasons above, plus — on an open replica — a reachability
- * probe (cached 5 s), because a forwarded write to a dead host would block
- * the process. Local-only installs resolve to null without any probe.
- */
-export async function writeBlockReasonNow(): Promise<string | null> {
-  const fixed = writeBlockReason();
-  if (fixed) return fixed;
-  if (!state.settings || state.pausedBy || state.readOnly) return null;
-  if (!(await reachableNow(state.settings, WRITE_PROBE_MAX_AGE_MS))) {
-    state.lastError = UNREACHABLE;
-    return "Offline: the cloud database can't be reached, so this change can't be saved right now. Try again when you're back online.";
+    return "This PC has no local copy of your cloud database yet and the cloud can't be reached to fetch it. The data from before sync was set up is shown read-only until it is back.";
   }
   return null;
 }
@@ -364,8 +414,9 @@ export function getSyncStatus(): SyncStatus {
   if (configured) {
     if (state.pausedBy) syncState = "paused";
     else if (state.schemaGate) syncState = "blocked";
+    else if (state.conflict) syncState = "conflict";
     else if (state.syncing) syncState = "syncing";
-    else if (state.readOnly || state.lastError) syncState = "offline";
+    else if (state.readOnly || state.offline) syncState = "offline";
     else syncState = "synced";
   }
   return {
@@ -379,88 +430,182 @@ export function getSyncStatus(): SyncStatus {
     schemaGate: state.schemaGate,
     readOnly: state.readOnly,
     writesBlocked: writeBlockReason(),
+    pendingChanges: configured ? state.pendingChanges : 0,
+    pendingPush: configured && state.pendingChanges > 0,
+    conflict: state.conflict,
     replicaPath: configured ? replicaDbPath() : null,
     appSchemaVersion: SCHEMA_VERSION,
   };
 }
 
-// ── Replica lifecycle ───────────────────────────────────────────────────────
+// ── The sync itself ─────────────────────────────────────────────────────────
 
-/** Read the replica's schema stamp and raise the gate if it is newer than ours. */
+/** Read the copy's schema stamp and raise the gate if it is newer than ours. */
 async function checkSchemaGate(): Promise<void> {
   const version = await getSchemaVersion(storeExecutor());
   state.schemaGate = version > SCHEMA_VERSION ? { app: SCHEMA_VERSION, database: version } : null;
 }
 
-/** Pull the cloud's frames into the open replica (the store's lock keeps statements out meanwhile). */
-async function pullFromCloud(): Promise<void> {
+/**
+ * One sync: push this device's frames, pull the others'. Records the outcome
+ * in the status — offline (libsql reports 0 frames when the cloud can't be
+ * reached), conflict (the cloud moved on while this device had unpushed
+ * changes), or synced — and rethrows failures for callers that answer HTTP.
+ */
+async function runSync(): Promise<void> {
+  if (!state.settings) throw new SyncError("Sync is not set up on this device.");
   state.syncing = true;
   try {
-    await getStore().sync();
-    state.lastSyncedAt = new Date().toISOString();
+    const { framesSynced } = await getStore().sync({ timeoutMs: syncTimeoutMs });
+    if (framesSynced === 0) {
+      state.offline = true;
+      state.lastError = UNREACHABLE;
+      return;
+    }
+    state.offline = false;
     state.lastError = null;
+    state.lastSyncedAt = new Date().toISOString();
+    state.pendingChanges = 0;
+    state.conflict = null;
     await checkSchemaGate();
   } catch (e) {
-    state.lastError = errorMessage(e);
+    if (isSyncConflictError(e)) {
+      state.conflict ??= { message: errorMessage(e), since: new Date().toISOString() };
+      state.lastError = "The cloud database changed while this PC had unsaved changes for it. Choose which side to keep in Settings → Phone & sync.";
+    } else {
+      state.offline = true;
+      state.lastError = errorMessage(e);
+    }
     throw e;
   } finally {
     state.syncing = false;
   }
 }
 
+/** Point the API at the pre-sync local file, read-only, until the cloud can be reached. */
+async function fallBackReadOnly(beforeConnect?: () => void): Promise<void> {
+  state.readOnly = true;
+  state.offline = true;
+  state.lastError = `${UNREACHABLE} There is no local copy of it on this PC yet, so the data from before sync was set up is shown read-only.`;
+  await switchDatabase({ url: getRealDatabaseUrl(), readOnly: true }, beforeConnect);
+}
+
 /**
- * Put the API on the replica: the real thing when the cloud answers, the
- * read-only fallback when it doesn't. `beforeConnect` runs once, after the
- * current store has closed (same contract as switchDatabase). Never throws
- * for a network problem — the status carries it; throws only when there is
- * nothing at all to open.
+ * Put the API on the local copy. With the copy's files present this needs no
+ * network (libsql opens them as they are); without them libsql bootstraps the
+ * copy from the cloud, which needs it. Ends with one sync (push whatever the
+ * previous run left, pull the cloud's news), whose outcome is in the status.
+ * `beforeConnect` runs once, after the current store has closed (same
+ * contract as switchDatabase). Never throws for a network problem — the
+ * status carries it.
  */
 async function activateReplica(beforeConnect?: () => void): Promise<void> {
   const settings = state.settings;
   if (!settings) throw new SyncError("Sync is not set up on this device.");
   const target = replicaTarget(settings);
   setPrimaryDatabase(target);
-  const replicaExists = fs.existsSync(replicaDbPath());
+  const fresh = !replicaFilesPresent();
 
-  if (await reachableNow(settings)) {
-    await switchDatabase(target, beforeConnect);
-    beforeConnect = undefined;
-    try {
-      // libsql connects here; a fresh file is bootstrapped from the cloud.
-      await getCurrentConnection().open();
-      await pullFromCloud();
-      state.readOnly = false;
-      return;
-    } catch (e) {
-      state.lastError = errorMessage(e);
-      console.error("[Sync] could not open the replica:", state.lastError);
-      await getStore().close();
-    }
-  } else {
-    state.lastError = UNREACHABLE;
+  if (fresh && !(await reachableNow(settings))) {
+    await fallBackReadOnly(beforeConnect);
+    return;
   }
 
-  // Fallback: the last replica, read-only. With no replica yet, the local
-  // file from before sync was set up (also read-only, so it never diverges).
-  state.readOnly = true;
-  if (replicaExists || fs.existsSync(replicaDbPath())) {
-    await switchDatabase({ url: target.url, readOnly: true }, beforeConnect);
-  } else {
-    await switchDatabase({ url: getRealDatabaseUrl(), readOnly: true }, beforeConnect);
-    state.lastError += " There is no local copy of it yet, so the data from before sync was set up is shown.";
+  await switchDatabase(target, beforeConnect);
+  try {
+    await getCurrentConnection().open();
+  } catch (e) {
+    const reason = errorMessage(e);
+    console.error("[Sync] could not open the local copy:", reason);
+    await getStore().close();
+    if (!fresh && /InvalidLocalState/.test(reason)) {
+      // One of the two files is missing (deleted by hand, a crash mid-write):
+      // libsql refuses the pair. Keep whatever the copy holds as a .bak,
+      // then start over from the cloud.
+      await backupReplicaFile();
+      await removeReplicaFiles();
+      if (await reachableNow(settings)) {
+        await switchDatabase(target);
+        try {
+          await getCurrentConnection().open();
+        } catch (e2) {
+          await getStore().close();
+          state.lastError = errorMessage(e2);
+          await fallBackReadOnly();
+          return;
+        }
+      } else {
+        await fallBackReadOnly();
+        return;
+      }
+    } else if (fresh) {
+      await removeReplicaFiles();
+      await fallBackReadOnly();
+      return;
+    } else {
+      // The files are there but libsql won't open them: show them read-only
+      // (a plain open works on the same file) rather than nothing.
+      state.readOnly = true;
+      state.offline = true;
+      state.lastError = `Could not open the local copy of your cloud database: ${reason}`;
+      await switchDatabase({ url: target.url, readOnly: true });
+      return;
+    }
+  }
+
+  state.readOnly = false;
+  state.pendingChanges = Math.max(state.pendingChanges, unpushedFramesEstimate());
+  try {
+    await runSync();
+  } catch (e) {
+    console.warn("[Sync] first sync after open failed:", errorMessage(e));
+  }
+  if (fresh && (state.offline || state.conflict)) {
+    // A copy bootstrapped a moment ago that can't complete its first pull
+    // may hold the cloud's base snapshot without the tables; using it would
+    // create them locally and clash with the cloud. Start over next time.
+    await getStore().close();
+    await removeReplicaFiles();
+    state.conflict = null;
+    await fallBackReadOnly();
   }
 }
 
-/** One idle-time sync attempt: reconnect if the last open fell back, pull otherwise. */
+/** Copy the closed local copy's rows into a fresh `.bak` (best effort). */
+async function backupReplicaFile(): Promise<string | null> {
+  if (!fs.existsSync(replicaDbPath())) return null;
+  try {
+    const replica = openLibsql(replicaDbPath(), { readOnly: true });
+    try {
+      const backupPath = backupFilePath();
+      await writePlainCopy(backupPath, await dumpDatabase(replica));
+      return backupPath;
+    } finally {
+      await replica.close();
+    }
+  } catch (e) {
+    console.warn("[Sync] could not back up the local copy:", errorMessage(e));
+    return null;
+  }
+}
+
+/** Throw the local copy away and fetch it again from the cloud (the cloud is the truth now). */
+async function rebootstrapReplica(): Promise<void> {
+  await getStore().close();
+  await removeReplicaFiles();
+  state.conflict = null;
+  state.pendingChanges = 0;
+  await activateReplica();
+}
+
+/** One idle-time sync attempt. */
 async function tick(): Promise<void> {
-  if (!state.settings || state.pausedBy || state.schemaGate || state.syncing) return;
+  if (!state.settings || state.pausedBy || state.schemaGate || state.conflict || state.syncing) return;
   try {
     if (state.readOnly) {
       if (await reachableNow(state.settings)) await activateReplica();
-    } else if (await reachableNow(state.settings)) {
-      await pullFromCloud();
     } else {
-      state.lastError = UNREACHABLE;
+      await runSync();
     }
   } catch (e) {
     // Already recorded in the status; the next tick tries again.
@@ -481,9 +626,10 @@ function stopTimer(): void {
   afterWriteTimer = null;
 }
 
-/** A route wrote something: pull shortly after, so "last synced" stays honest. */
+/** A route wrote something: count it as pending and push shortly (more writes usually follow). */
 export function noteLocalWrite(): void {
   if (!state.settings || state.pausedBy) return;
+  state.pendingChanges += 1;
   if (afterWriteTimer) clearTimeout(afterWriteTimer);
   afterWriteTimer = setTimeout(() => {
     afterWriteTimer = null;
@@ -493,9 +639,9 @@ export function noteLocalWrite(): void {
 }
 
 /**
- * Startup: read the saved settings and, when synced, open the replica before
- * the API starts serving. Called once by main.ts (after app.whenReady, which
- * safeStorage needs) and by the tests.
+ * Startup: read the saved settings and, when synced, open the local copy
+ * before the API starts serving. Called once by main.ts (after
+ * app.whenReady, which safeStorage needs) and by the tests.
  */
 export async function initSync(): Promise<SyncStatus> {
   try {
@@ -508,30 +654,26 @@ export async function initSync(): Promise<SyncStatus> {
   if (state.settings) {
     await activateReplica();
     startTimer();
-    console.log(`[Sync] synced with ${state.settings.url} (${state.readOnly ? "read-only, cloud unreachable" : "replica open"})`);
+    console.log(`[Sync] synced with ${state.settings.url} (${getSyncStatus().state}, ${state.pendingChanges} pending)`);
   }
   return getSyncStatus();
 }
 
-/** Back to the pristine local-only state (tests only). */
-export async function __resetSyncForTests(): Promise<void> {
+/**
+ * Back to the pristine local-only in-memory state (tests only). `keepFiles`
+ * leaves sync.json and the local copy on disk, to play a restart.
+ */
+export async function __resetSyncForTests(options: { keepFiles?: boolean } = {}): Promise<void> {
   stopTimer();
-  lastProbe = null;
-  if (state.settings) {
+  if (state.settings || getCurrentTarget().url !== getRealDatabaseUrl()) {
     await switchDatabase(getRealDatabaseUrl());
     setPrimaryDatabase(getRealDatabaseUrl());
   }
-  await removeReplicaFiles();
-  clearSyncSettings();
-  Object.assign(state, {
-    settings: null,
-    syncing: false,
-    lastSyncedAt: null,
-    lastError: null,
-    pausedBy: null,
-    schemaGate: null,
-    readOnly: false,
-  } satisfies State);
+  if (!options.keepFiles) {
+    await removeReplicaFiles();
+    clearSyncSettings();
+  }
+  Object.assign(state, INITIAL);
 }
 
 // ── Cloud side ──────────────────────────────────────────────────────────────
@@ -636,22 +778,18 @@ export async function connectSync(
   }
 
   // The local file is left exactly as it was — it is the "before sync" copy.
-  state.settings = settings;
-  state.lastError = null;
-  state.schemaGate = null;
+  Object.assign(state, INITIAL, { settings });
   await removeReplicaFiles();
   await activateReplica();
-  if (state.readOnly || state.lastError) {
-    // The cloud answered a moment ago but the replica could not be opened:
+  if (state.readOnly || state.offline || state.conflict) {
+    // The cloud answered a moment ago but the copy could not be fetched:
     // undo everything, the device stays local only.
     const reason = state.lastError ?? "unknown error";
     await switchDatabase(getRealDatabaseUrl());
     setPrimaryDatabase(getRealDatabaseUrl());
     await removeReplicaFiles();
-    state.settings = null;
-    state.readOnly = false;
-    state.lastError = null;
-    throw new SyncError(`Could not open the replica: ${reason}`, 502);
+    Object.assign(state, INITIAL);
+    throw new SyncError(`Could not fetch the local copy of the cloud database: ${reason}`, 502);
   }
   saveSyncSettings(settings);
   startTimer();
@@ -659,30 +797,73 @@ export async function connectSync(
   return getSyncStatus();
 }
 
-/** "Sync now": reconnect if needed, then pull. Cloud problems come back as a 502 and in the status. */
+/** "Sync now": push + pull. Cloud problems come back as a 502 and in the status; a conflict as 409. */
 export async function syncNow(): Promise<SyncStatus> {
   if (!state.settings) throw new SyncError("Sync is not set up on this device.");
   if (state.pausedBy) throw new SyncError("Sync is paused while the sandbox is active.");
   if (state.schemaGate) throw new SyncError(schemaVersionGate(state.schemaGate.database)!, 409, "SCHEMA_NEWER");
+  if (state.conflict) throw new SyncError(state.lastError ?? "Sync conflict.", 409, "SYNC_CONFLICT", state.conflict);
   if (state.syncing) return getSyncStatus();
-  if (!(await reachableNow(state.settings))) {
-    state.lastError = UNREACHABLE;
-    throw new SyncError(state.lastError, 502);
-  }
   try {
-    if (state.readOnly) await activateReplica();
-    else await pullFromCloud();
+    if (state.readOnly) {
+      if (!(await reachableNow(state.settings))) throw new SyncError(UNREACHABLE, 502);
+      await activateReplica();
+      if (state.readOnly) throw new SyncError(`Sync failed: ${state.lastError ?? "could not fetch the local copy"}`, 502);
+    } else {
+      await runSync();
+    }
   } catch (e) {
+    if (e instanceof SyncError) throw e;
+    if (state.conflict) throw new SyncError(state.lastError ?? "Sync conflict.", 409, "SYNC_CONFLICT", state.conflict);
     throw new SyncError(`Sync failed: ${errorMessage(e)}`, 502);
   }
-  if (state.readOnly) throw new SyncError(`Sync failed: ${state.lastError ?? "could not open the replica"}`, 502);
+  if (state.offline) throw new SyncError(UNREACHABLE, 502);
   return getSyncStatus();
 }
 
 /**
- * "Forget this device": back to local only. The replica's data becomes the
- * local file (a timestamped .bak of the old local file is written first),
- * the replica files are deleted and the token is gone.
+ * Settle a conflict. "cloud": this device's rows (unpushed changes included)
+ * go into a .bak, then the local copy is fetched again from the cloud.
+ * "local": the cloud's rows go into a .bak, then the cloud is replaced with
+ * this device's rows and the local copy is fetched again (so the two agree
+ * frame for frame). Needs the cloud either way.
+ */
+export async function resolveConflict(keep: "cloud" | "local"): Promise<SyncStatus & { backupPath: string }> {
+  if (!state.settings) throw new SyncError("Sync is not set up on this device.");
+  if (state.pausedBy) throw new SyncError("Finish the sandbox (Keep or Discard) first.");
+  if (!state.conflict) throw new SyncError("There is no sync conflict to settle.", 409, "NO_CONFLICT");
+  if (keep !== "cloud" && keep !== "local") throw new SyncError('Say which side to keep: "cloud" or "local".', 400);
+  if (!(await reachableNow(state.settings))) {
+    throw new SyncError("Settling the conflict needs the cloud database, which can't be reached right now.", 502);
+  }
+  const backupPath = backupFilePath();
+  if (keep === "cloud") {
+    await writePlainCopy(backupPath, await dumpDatabase(storeExecutor()));
+    await rebootstrapReplica();
+  } else {
+    const remote = transport.openRemote(state.settings);
+    try {
+      await writePlainCopy(backupPath, await dumpDatabase(remote));
+      await replaceRemote(remote, await dumpDatabase(storeExecutor()));
+    } catch (e) {
+      throw new SyncError(`Pushing this device's data to the cloud failed: ${errorMessage(e)}`, 502);
+    } finally {
+      remote.close();
+    }
+    await rebootstrapReplica();
+  }
+  if (state.conflict || state.readOnly) {
+    throw new SyncError(`Could not fetch the local copy after settling: ${state.lastError ?? "unknown error"}`, 502);
+  }
+  console.log(`[Sync] conflict settled, kept the ${keep} side; backup at ${backupPath}`);
+  return { ...getSyncStatus(), backupPath };
+}
+
+/**
+ * "Forget this device": back to local only. The local copy's data — unpushed
+ * changes included — becomes the local file (a timestamped .bak of the old
+ * local file is written first), the copy's files are deleted and the token
+ * is gone.
  */
 export async function disconnectSync(): Promise<SyncStatus & { backupPath: string | null }> {
   if (!state.settings) throw new SyncError("Sync is not set up on this device.");
@@ -706,14 +887,7 @@ export async function disconnectSync(): Promise<SyncStatus & { backupPath: strin
   setPrimaryDatabase(getRealDatabaseUrl());
   await removeReplicaFiles();
   clearSyncSettings();
-  Object.assign(state, {
-    settings: null,
-    syncing: false,
-    lastSyncedAt: null,
-    lastError: null,
-    schemaGate: null,
-    readOnly: false,
-  });
+  Object.assign(state, INITIAL);
   console.log("[Sync] disconnected — back to the local database");
   return { ...getSyncStatus(), backupPath };
 }
@@ -732,9 +906,9 @@ async function writePlainCopy(targetPath: string, dump: DatabaseDump): Promise<v
 }
 
 /**
- * Sandbox enter while synced: the replica's rows go into the plain sandbox
- * file (its WAL may hold frames a file copy would miss), the API moves to
- * that file and sync pauses.
+ * Sandbox enter while synced: the local copy's rows go into the plain
+ * sandbox file (its WAL may hold frames a file copy would miss), the API
+ * moves to that file and sync pauses. Works offline.
  */
 export async function pauseSyncForSandbox(sandboxPath: string): Promise<void> {
   if (!state.settings) throw new SyncError("Sync is not set up on this device.");
@@ -743,25 +917,25 @@ export async function pauseSyncForSandbox(sandboxPath: string): Promise<void> {
   state.pausedBy = "sandbox";
 }
 
-/** Sandbox discard while synced: back on the replica. */
+/** Sandbox discard while synced: back on the local copy (no network needed). */
 export async function resumeSyncAfterSandbox(): Promise<void> {
   if (!state.settings) throw new SyncError("Sync is not set up on this device.");
-  await activateReplica();
   state.pausedBy = null;
+  await activateReplica();
 }
 
 /**
- * Sandbox keep while synced: a .bak of the cloud's current rows (read from
- * the closed replica file), then the sandbox's rows replace the cloud's, then
- * back on the replica, which pulls them. Needs the cloud: when it is
- * unreachable the sandbox stays active and the caller gets a 502 to retry.
+ * Sandbox keep while synced: a .bak of this device's rows (read from the
+ * closed copy — unpushed changes included), then the sandbox's rows replace
+ * the cloud's, then the local copy is fetched again so it agrees with the
+ * cloud frame for frame. Needs the cloud: when it is unreachable the sandbox
+ * stays active and the caller gets a 502 to retry.
  */
 export async function keepSandboxToSync(sandboxPath: string, backupPath: string): Promise<void> {
   if (!state.settings) throw new SyncError("Sync is not set up on this device.");
   if (!(await reachableNow(state.settings))) {
     throw new SyncError("Keep needs the cloud database, which can't be reached right now. Try again when you're online.", 502);
   }
-  // Backup of what the cloud holds now, from the replica file (closed while the sandbox is on).
   if (fs.existsSync(replicaDbPath())) {
     const replica = openLibsql(replicaDbPath(), { readOnly: true });
     try {
@@ -779,8 +953,8 @@ export async function keepSandboxToSync(sandboxPath: string, backupPath: string)
   } finally {
     remote.close();
   }
-  await activateReplica();
   state.pausedBy = null;
+  await rebootstrapReplica();
 }
 
 // ── Snapshots, export, import ───────────────────────────────────────────────
@@ -793,9 +967,9 @@ export function backupFilePath(): string {
 
 /**
  * A consistent plain-SQLite copy of whatever the API is on right now. A
- * plain local file gets SQLite's `VACUUM INTO` (byte-faithful), a replica
+ * plain local file gets SQLite's `VACUUM INTO` (byte-faithful), a synced copy
  * gets a dump through the data layer (its WAL and libsql side files make a
- * file copy unreliable, and VACUUM would be forwarded to the cloud).
+ * file copy unreliable).
  */
 export async function snapshotCurrentDatabase(targetPath: string): Promise<"vacuum" | "copy" | "dump"> {
   const target = getCurrentTarget();
@@ -824,14 +998,14 @@ export interface ImportResult {
   dataRows: number;
   schemaVersion: number;
   backupPath: string;
-  /** Where the rows went: the local file, or the cloud (and from there the replica). */
+  /** Where the rows went: the local file, or the cloud (and from there the local copy). */
   target: "local" | "cloud";
 }
 
 /**
  * Import: the rows of a SQLite file (an export, a .bak, a database.db)
  * replace the current data. Local only → into the real file; synced → pushed
- * to the cloud and pulled back into the replica. A .bak of the current data
+ * to the cloud and the local copy fetched again. A .bak of the current data
  * is written first. The file is validated (SQLite header, schema version not
  * newer than this app's) before anything is touched.
  */
@@ -877,8 +1051,7 @@ export async function importDatabase(filePath: string): Promise<ImportResult> {
     } finally {
       remote.close();
     }
-    if (state.readOnly) await activateReplica();
-    else await pullFromCloud();
+    await rebootstrapReplica();
     return { dataRows: countDataRows(dump), schemaVersion: dump.schemaVersion, backupPath, target: "cloud" };
   }
 

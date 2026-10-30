@@ -14,9 +14,11 @@
  * route reaches the current file through `getStore()` in shared/db.ts; this
  * module only decides which file that is.
  *
- * With sync on (main/sync.ts) the "real" database is the replica of the
- * cloud: enter dumps its rows into the sandbox file and pauses sync, discard
- * reopens the replica, keep pushes the sandbox's rows to the cloud first.
+ * With sync on (main/sync.ts) the "real" database is the local copy of the
+ * cloud database: enter dumps its rows (unpushed changes included) into the
+ * sandbox file and pauses sync, discard reopens the copy (no network
+ * needed), keep pushes the sandbox's rows to the cloud and fetches the copy
+ * again (needs the cloud).
  */
 import fs from "fs";
 import path from "path";
