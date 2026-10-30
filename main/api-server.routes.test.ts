@@ -339,16 +339,6 @@ describe("app meta + backups (/api/meta, /api/backups)", () => {
     expect(res.body.version).toBe(pkg.version);
     expect(res.body.mode).toBe("dev"); // no Electron, no FINANCES_OS_MODE here
     expect(res.body.databasePath.replace(/\\/g, "/")).toBe(tmpDb.replace(/\\/g, "/"));
-    expect(res.body.releasesUrl).toContain("github.com");
-  });
-
-  it("is not shadowed by the generic resource routes", async () => {
-    // /api/meta/updates must reach the update route, not GET /api/:resource/:id.
-    // It talks to GitHub, so only the shape of a failure/success is asserted.
-    const res = await api().get("/api/meta/updates");
-    expect([200, 502]).toContain(res.status);
-    if (res.status === 200) expect(res.body).toHaveProperty("updateAvailable");
-    else expect(res.body.error).toContain("GitHub");
   });
 
   it("creates a timestamped .bak beside the database and lists it", async () => {

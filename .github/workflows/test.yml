@@ -1,0 +1,43 @@
+# Test — runs the Vitest suite on every push and pull request, so `main` stays
+# green for anyone who clones the repo.
+#
+# This is the whole of GitHub Actions for this project since Oct 30 2026: there
+# are no GitHub Releases, installers or in-app updates any more (the app is an
+# alpha used on the author's PC, deployed there with `npm run deploy:prod` —
+# see scripts/deploy-prod.mjs and CLAUDE.md → "PROD Deployment Flow").
+#
+# CI=true is set by GitHub Actions, so a missing snapshot fails instead of
+# being written. The lock-in tests on real data are gitignored and simply
+# aren't here.
+name: Test
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Vitest
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # scripts/empty-db.mjs (the test database) uses node:sqlite (Node ≥ 22.13).
+          node-version: 24
+          cache: npm
+
+      # `postinstall` runs electron-builder install-app-deps.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test

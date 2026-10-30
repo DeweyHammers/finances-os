@@ -52,3 +52,8 @@ _archived
 # files. Both live beside the database (prisma/ in dev) and never belong in git.
 /prisma/sync.json
 /prisma/replica.db*
+
+# The demo app's own folder (scripts/demo/): demo.db plus, during the tour's
+# sync step, its sync.json and the local copy of the mock cloud — kept apart
+# from prisma/ so a tour run can never leave dev.db pointed at the mock.
+/prisma/demo/

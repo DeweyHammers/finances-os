@@ -2,7 +2,7 @@
   "private": true,
   "name": "finances-os",
   "description": "Finances OS Desktop Application",
-  "version": "1.4.0",
+  "version": "0.4.0",
   "author": "Richard Dewey Hammers",
   "license": "MIT",
   "main": "app/main.js",
@@ -18,7 +18,8 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "db:push": "node scripts/db-sync.cjs push",
-    "db:pull": "node scripts/db-sync.cjs pull"
+    "db:pull": "node scripts/db-sync.cjs pull",
+    "deploy:prod": "node scripts/deploy-prod.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -44,7 +45,6 @@
     "date-fns": "^4.1.0",
     "electron-serve": "^3.0.0",
     "electron-store": "^11.0.2",
-    "electron-updater": "^6.8.11",
     "express": "^5.2.1",
     "libsql": "^0.5.29",
     "react-hook-form": "^7.72.1",

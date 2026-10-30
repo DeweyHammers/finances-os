@@ -1,6 +1,6 @@
 // empty-check.mjs — smoke test: open every page of a brand-new, EMPTY app.
 //
-// Run against a fresh prisma/demo.db (create-db.mjs) with serve.ts + the
+// Run against a fresh prisma/demo/demo.db (create-db.mjs) with serve.ts + the
 // renderer running. Each route is screenshotted to scripts/demo/out/empty/
 // and any crash, console error or failed API call is reported. Exit code 1
 // if anything went wrong, so it can be scripted.
