@@ -44,4 +44,14 @@ jobs:
         run: npm ci
 
       - name: Test
+        id: test
+        run: npm test
+        continue-on-error: true
+
+      # One retry, for the runner only: the suite has died there with a Vitest
+      # worker exiting mid-file (native libsql under load) while the same commit
+      # passed on its twin run and locally every time. A real failure fails
+      # twice and still turns the check red.
+      - name: Test (retry once)
+        if: steps.test.outcome == 'failure'
         run: npm test
