@@ -11,8 +11,12 @@
 # aren't here.
 name: Test
 
+# Once per commit: pull requests, and pushes to main. (push + pull_request on a
+# PR branch ran the suite twice per commit on two runners; one of the pair
+# timed out in its hooks on Oct 30 2026 while the other passed.)
 on:
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
