@@ -27,7 +27,8 @@ jobs:
   test:
     name: Vitest
     runs-on: windows-latest
-    timeout-minutes: 20
+    # Install (~2 min) + the four test steps' own limits below.
+    timeout-minutes: 40
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -43,15 +44,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Test
+      # The suite runs in two parts, each with its own time limit and one retry,
+      # because of what the hosted runner did on Oct 30 2026: one run had a
+      # Vitest worker die mid-file (native libsql under load), another sat for
+      # 18 minutes with the JS thread blocked inside a native libsql sync call
+      # in main/sync.routes.test.ts — a hang Vitest's own timeouts can't break,
+      # which ate the whole job's budget before the retry could start. The
+      # same commits passed on their twin runs and locally every time. A step
+      # that hangs is cancelled by its timeout and counts as a failure, so the
+      # retry still runs; a real failure fails twice and turns the check red.
+      - name: Test (everything but the sync tests)
         id: test
-        run: npm test
+        run: npx vitest run --exclude main/sync.routes.test.ts
         continue-on-error: true
+        timeout-minutes: 12
 
-      # One retry, for the runner only: the suite has died there with a Vitest
-      # worker exiting mid-file (native libsql under load) while the same commit
-      # passed on its twin run and locally every time. A real failure fails
-      # twice and still turns the check red.
-      - name: Test (retry once)
+      - name: Test (everything but the sync tests) — retry once
         if: steps.test.outcome == 'failure'
-        run: npm test
+        run: npx vitest run --exclude main/sync.routes.test.ts
+        timeout-minutes: 12
+
+      - name: Sync tests
+        id: sync
+        run: npx vitest run main/sync.routes.test.ts
+        continue-on-error: true
+        timeout-minutes: 6
+
+      - name: Sync tests — retry once
+        if: steps.sync.outcome == 'failure'
+        run: npx vitest run main/sync.routes.test.ts
+        timeout-minutes: 6

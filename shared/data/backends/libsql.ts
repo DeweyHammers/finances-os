@@ -218,16 +218,26 @@ export function openLibsql(filePath: string, options: LibsqlOpenOptions = {}): L
       // The native handle lives in `db.db` on the JS wrapper (libsql/index.js).
       const nativeHandle = (handle as unknown as { db: unknown }).db;
       const run = async (): Promise<SyncResult> => {
-        const native: Promise<unknown> = asyncSync && nativeHandle
-          ? asyncSync.call(nativeHandle)
-          : Promise.resolve(handle.sync() as unknown);
-        syncInFlight = native;
-        try {
-          const result = (await native) as { frames_synced?: number } | undefined;
-          return { framesSynced: Number(result?.frames_synced ?? 0) };
-        } finally {
-          if (syncInFlight === native) syncInFlight = null;
+        // ONE native sync at a time. A sync that timed out below is still on
+        // the wire and holds libsql's native sync lock; a second native call
+        // meanwhile would wait for that lock INSIDE the call, i.e. block the
+        // JS thread — no timer, no Vitest timeout, nothing can fire until the
+        // first one settles (the Oct 30 2026 CI run hung 18 min that way, in
+        // sync.routes.test.ts right after a re-bootstrap on the slow runner).
+        // So join the one in flight instead; close() below does the same.
+        // Its result is slightly stale for a write made since it started —
+        // the next tick syncs again, as it would anyway.
+        let native = syncInFlight;
+        if (!native) {
+          native = asyncSync && nativeHandle ? asyncSync.call(nativeHandle) : Promise.resolve(handle.sync() as unknown);
+          syncInFlight = native;
+          const clear = () => {
+            if (syncInFlight === native) syncInFlight = null;
+          };
+          native.then(clear, clear);
         }
+        const result = (await native) as { frames_synced?: number } | undefined;
+        return { framesSynced: Number(result?.frames_synced ?? 0) };
       };
       if (!syncOptions.timeoutMs) return run();
       // A host that accepts the connection and never answers would hold the
