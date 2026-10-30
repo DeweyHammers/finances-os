@@ -131,6 +131,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Unstick the cloud first (a test that failed mid-way may have left it
+  // hanging or unreachable), so the clean-up below can't wait on it.
+  await cloud.set("hang", false);
+  await cloud.set("reachable", true);
   if (other) await other.close();
   other = null;
   if ((await api().get("/api/sandbox")).body.active) await api().post("/api/sandbox/discard");

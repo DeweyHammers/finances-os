@@ -156,6 +156,8 @@ export function isSyncConflictError(error: unknown): boolean {
 
 export function openLibsql(filePath: string, options: LibsqlOpenOptions = {}): LibsqlConnection {
   let db: Database.Database | null = null;
+  /** The native sync still running (a timed-out one keeps going); close() waits for it. */
+  let syncInFlight: Promise<unknown> | null = null;
   const replica = !!options.sync;
   const offline = !!options.sync?.offline;
   const readOnly = !!options.readOnly;
@@ -216,8 +218,16 @@ export function openLibsql(filePath: string, options: LibsqlOpenOptions = {}): L
       // The native handle lives in `db.db` on the JS wrapper (libsql/index.js).
       const nativeHandle = (handle as unknown as { db: unknown }).db;
       const run = async (): Promise<SyncResult> => {
-        const result = asyncSync && nativeHandle ? await asyncSync.call(nativeHandle) : (handle.sync() as any);
-        return { framesSynced: Number(result?.frames_synced ?? 0) };
+        const native: Promise<unknown> = asyncSync && nativeHandle
+          ? asyncSync.call(nativeHandle)
+          : Promise.resolve(handle.sync() as unknown);
+        syncInFlight = native;
+        try {
+          const result = (await native) as { frames_synced?: number } | undefined;
+          return { framesSynced: Number(result?.frames_synced ?? 0) };
+        } finally {
+          if (syncInFlight === native) syncInFlight = null;
+        }
       };
       if (!syncOptions.timeoutMs) return run();
       // A host that accepts the connection and never answers would hold the
@@ -239,6 +249,11 @@ export function openLibsql(filePath: string, options: LibsqlOpenOptions = {}): L
     },
     async close(): Promise<void> {
       if (!db) return;
+      // libsql's close takes the same native lock a running sync holds, so
+      // closing while a (timed-out) sync is still on the wire would block
+      // the whole JS thread until the network gives up. Wait for it here
+      // instead: the close is async, the process stays responsive.
+      if (syncInFlight) await syncInFlight.catch(() => {});
       // The finalisers freed by the GC run on the NEXT macrotask (measured:
       // gc → close alone still leaves the handle open 20/20 times, gc → tick
       // → close releases it 20/20), hence the setImmediate between the two.
