@@ -36,7 +36,7 @@ npx prisma generate  # Only for the Prisma-client scripts (prisma/seed.ts, scrip
 
 **NEVER run `npm run db:push` without explicit user instruction.** DEV is for experimentation; PROD changes are deliberate.
 
-**Manual PROD deploy while installers are blocked (used Oct 29 2026, 1.3.0 → 1.3.2).** Smart App Control on the dev PC refuses the unsigned NSIS installer (see "Updates"), so the installed app was updated in place by swapping ONLY the JavaScript bundle — no new executable or DLL is loaded, so nothing trips Code Integrity:
+**Manual PROD deploy while installers are blocked (used Oct 29 2026, 1.3.0 → 1.3.2, and again that evening for the local-first sync bundle ahead of v1.4.0).** Smart App Control on the dev PC refuses the unsigned NSIS installer (see "Updates"), so the installed app was updated in place by swapping ONLY the JavaScript bundle — no new executable or DLL is loaded, so nothing trips Code Integrity:
 1. `npm ci` first if `npm ls` complains (a stale node_modules built an asar WITHOUT electron-updater once; the app would have crashed on launch).
 2. `node scripts/build-template-db.mjs && npx nextron build --no-pack && ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES=true npx electron-builder --dir --publish never` → `dist/win-unpacked/` (no NSIS step, so it survives Smart App Control).
 3. Check before copying: `npx asar list dist/win-unpacked/resources/app.asar | grep -c electron-updater` > 0; `package.json` inside the asar has the right version; `app.asar.unpacked` native files are sha256-identical to the installed ones (only `prisma/template.db` may differ). If a native dependency or Electron changed since the installed build, STOP — this path can't ship new binaries.
