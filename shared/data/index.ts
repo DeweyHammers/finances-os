@@ -9,7 +9,7 @@ export { MODELS, SCHEMA_VERSION, resolveModel, getModelByName } from "./schema";
 export type { Column, Model, ScalarType } from "./schema";
 export { SCHEMA_SQL } from "./schema-sql";
 export { splitStatements, quoteIdent } from "./sql";
-export type { Row, SqlConnection, SqlExecutor, SqlValue } from "./sql";
+export type { Row, SqlConnection, SqlExecutor, SqlValue, SyncOptions, SyncResult } from "./sql";
 export { transformBody, toStorage, fromStorage } from "./coerce";
 export { DataError } from "./errors";
 export {

@@ -6,7 +6,12 @@
  */
 import { API_URL } from "./api-url";
 
-export type SyncState = "local" | "synced" | "syncing" | "offline" | "paused" | "blocked";
+export type SyncState = "local" | "synced" | "syncing" | "offline" | "paused" | "blocked" | "conflict";
+
+export interface SyncConflict {
+  message: string;
+  since: string;
+}
 
 export interface SyncStatus {
   configured: boolean;
@@ -17,8 +22,14 @@ export interface SyncStatus {
   syncing: boolean;
   pausedBy: "sandbox" | null;
   schemaGate: { app: number; database: number } | null;
+  /** No local copy yet and the cloud can't be reached: the pre-sync data is shown read-only. */
   readOnly: boolean;
   writesBlocked: string | null;
+  /** Changes saved on this PC that have not reached the cloud yet. */
+  pendingChanges: number;
+  pendingPush: boolean;
+  /** The cloud changed while this PC had unpushed changes; the user chooses a side. */
+  conflict: SyncConflict | null;
   replicaPath: string | null;
   appSchemaVersion: number;
 }
@@ -82,6 +93,15 @@ export async function syncNow(): Promise<SyncStatus> {
 
 export async function disconnectSync(): Promise<SyncStatus & { backupPath: string | null }> {
   return parse(await fetch(`${API_URL}/sync/disconnect`, { method: "POST" }));
+}
+
+/**
+ * Settle a sync conflict: "cloud" fetches the cloud's copy again (this PC's
+ * unpushed changes go into a .bak first), "local" replaces the cloud with
+ * this PC's data (the cloud's rows go into a .bak first).
+ */
+export async function resolveConflict(keep: "cloud" | "local"): Promise<SyncStatus & { backupPath: string }> {
+  return parse(await fetch(`${API_URL}/sync/resolve`, json({ keep })));
 }
 
 /**

@@ -2,9 +2,12 @@
 
 /**
  * ConnectionStatus — the sync status row: a coloured dot plus two short
- * lines — green "Synced · last synced 3 min ago", amber-pulsing "Syncing…",
- * red "Offline · last synced 10:42", amber "Paused · sandbox", red "Update
- * needed" when the cloud database is newer than this app.
+ * lines — green "Synced", amber-pulsing "Syncing…", amber "Offline · 3
+ * changes waiting" (the app keeps working on the local copy; the changes go
+ * up when the cloud is back), amber "Paused · sandbox", red "Update needed"
+ * when the cloud database is newer than this app, red "Needs your choice"
+ * when the cloud changed while this PC had unpushed changes (settled in
+ * Settings → Phone & sync).
  *
  * It renders NOTHING until a cloud database is configured (see
  * useConnectionStatus): on a local-only install there is nothing to report
@@ -41,18 +44,51 @@ function describe(status: Status): { color: string; label: string; detail?: stri
   if (status.apiDown) {
     return { color: RED, label: "No answer", detail: "The app's server isn't responding", help: "The app's own API did not answer. Restarting the app usually fixes this." };
   }
+  const pending = status.status?.pendingChanges ?? 0;
+  const waiting = pending === 1 ? "1 change waiting" : `${pending} changes waiting`;
   switch (status.state) {
     case "syncing":
-      return { color: AMBER, label: "Syncing…", detail: "Pulling changes", help: "Pulling the latest changes from your cloud database." + last };
+      return {
+        color: AMBER,
+        label: "Syncing…",
+        detail: "Sending and receiving changes",
+        help: "Sending this PC's changes to your cloud database and fetching the latest from it." + last,
+      };
     case "synced":
-      return { color: GREEN, label: "Synced", help: "Every change is saved to your cloud database as you make it; other devices see it on their next sync." + last };
+      return {
+        color: GREEN,
+        label: "Synced",
+        help:
+          "Changes are saved on this PC at once and sent to your cloud database within a few seconds; other devices see them on their next sync." +
+          last,
+      };
     case "offline":
+      if (status.status?.readOnly) {
+        return {
+          color: RED,
+          label: "Offline",
+          detail: "Read-only until the cloud is back",
+          help:
+            "This PC has no local copy of your cloud database yet and the cloud can't be reached to fetch it. The data from before sync was set up is shown read-only until it is back." +
+            last,
+        };
+      }
+      return {
+        color: AMBER,
+        label: "Offline",
+        detail: pending > 0 ? waiting : "Can't reach the cloud",
+        help:
+          "The cloud database can't be reached. Keep working: everything is saved on this PC and sent to the cloud as soon as it is back." +
+          (pending > 0 ? ` ${waiting}.` : "") +
+          last,
+      };
+    case "conflict":
       return {
         color: RED,
-        label: "Offline",
-        detail: status.status?.readOnly ? "Read-only until the cloud is back" : "Can't reach the cloud",
+        label: "Needs your choice",
+        detail: pending > 0 ? `${waiting} · cloud changed too` : "The cloud changed too",
         help:
-          "The cloud database can't be reached. You can look at everything; changes can't be saved until it is back." + last,
+          "Your cloud database was changed from another device while this PC had changes that had not reached it yet. Nothing is merged or lost: open Settings → Phone & sync and choose which side to keep. Until then this PC keeps working on its own copy.",
       };
     case "paused":
       return { color: AMBER, label: "Paused", detail: "Sandbox active", help: "Sync is paused while the sandbox is active. Keep or Discard it to resume." };
@@ -93,7 +129,7 @@ export const ConnectionStatus = ({ variant = "sider" }: ConnectionStatusProps) =
   // save on a healthy connection shouldn't flash the card amber.
   const spinning = status.syncing && !status.apiDown;
   const label = spinning && status.state === "synced" ? "Syncing…" : described.label;
-  const clickable = status.state !== "paused" && status.state !== "blocked";
+  const clickable = status.state !== "paused" && status.state !== "blocked" && status.state !== "conflict";
 
   return (
     <Box

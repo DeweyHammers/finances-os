@@ -1,8 +1,8 @@
 /**
  * backends/libsql.ts — the desktop backend: a local SQLite file through the
  * `libsql` package (better-sqlite3-compatible, synchronous, no query engine),
- * either on its own or as an EMBEDDED REPLICA of a remote libsql/Turso
- * database (Phase B of plans/phone-app-and-sync.md).
+ * either on its own or as a SYNCED DATABASE of a remote libsql/Turso database
+ * (Phase B of plans/phone-app-and-sync.md, local-first since Oct 29 2026).
  *
  * The file is opened lazily on the first statement (or eagerly via `open()`)
  * and released by `close()`; Sandbox mode relies on that to copy / overwrite /
@@ -12,29 +12,48 @@
  * waits up to 5 s on a locked file instead of failing when another process
  * (a backup, a viewer) has it open.
  *
- * Replica mode (`sync` option) is libsql's remote replica: reads run on the
- * local file, every write is forwarded to the remote and — with read-your-
- * writes — is visible locally at once; `sync()` pulls what other devices
- * wrote. Chosen over libsql's experimental offline-writes mode on purpose:
- * one source of truth, nothing to merge, nothing to lose when two devices
- * disagree. The cost is that writes need the cloud: when it is unreachable
- * the open itself fails (libsql connects on open), and main/sync.ts then
- * opens the same file plain and READ-ONLY so the user still sees their data.
+ * Synced mode (`sync` option with `offline: true`) is libsql's offline-writes
+ * / "synced database" mode (`new Database(path, { syncUrl, authToken,
+ * offline: true })`, libsql 0.9.30 → src/sync.rs): every read AND write is a
+ * plain local WAL operation — as fast as the local-only app — and `sync()`
+ * pushes the WAL frames written since the last push, then pulls the frames
+ * other devices pushed. It replaced libsql's remote replica (writes forwarded
+ * to the cloud, 1–3 s per save) on Oct 29 2026. What libsql does, verified
+ * against a protocol-faithful mock (tests/helpers/libsql-sync-server.ts):
+ *   - OPEN needs the network only when the file (and its `-info` metadata
+ *     file beside it) does not exist yet: it bootstraps from the cloud's
+ *     `/export`. With both files present it opens with no network at all.
+ *   - A write never touches the network, even while a sync is stuck.
+ *   - `sync()` resolves with `framesSynced: 0` when the cloud can't be
+ *     reached (libsql folds a network failure into "nothing synced"); it
+ *     REJECTS with `InvalidPushFrameConflict` / `InvalidPushFrameNoHigh` when
+ *     the cloud moved on while this file had unpushed frames — that is the
+ *     conflict main/sync.ts turns into its `conflict` state.
+ *   - `PRAGMA busy_timeout` works here (a remote replica rejected it);
+ *     `foreign_keys` too. The local WAL is only checkpointed when the cloud
+ *     starts a new generation (libsql disables ordinary checkpoints), so it
+ *     grows between generations.
+ * `offline: false` still opens the old remote replica (nothing uses it).
  */
 import Database from "libsql";
 import v8 from "v8";
 import vm from "vm";
-import type { Row, SqlConnection, SqlValue } from "../sql";
+import type { Row, SqlConnection, SqlValue, SyncOptions, SyncResult } from "../sql";
 
-/** How to reach the remote this file is a replica of. */
+/** How to reach the remote this file is synced with. */
 export interface LibsqlSyncOptions {
   /** `libsql://…turso.io` or `https://…` (what Turso shows as the database URL). */
   syncUrl: string;
   authToken: string;
+  /**
+   * true = synced database (local writes, pushed by `sync()`; the mode the
+   * app uses). false = remote replica (writes forwarded to the cloud).
+   */
+  offline?: boolean;
 }
 
 export interface LibsqlOpenOptions {
-  /** Open as an embedded replica of this remote. */
+  /** Open as a synced database / replica of this remote. */
   sync?: LibsqlSyncOptions;
   /** Refuse every write on this connection (`PRAGMA query_only`). */
   readOnly?: boolean;
@@ -43,19 +62,22 @@ export interface LibsqlOpenOptions {
 export interface LibsqlConnection extends SqlConnection {
   /** Filesystem path of the database file. */
   readonly path: string;
-  /** Opened with `sync` options: reads local, writes forwarded to the remote. */
+  /** Opened with `sync` options. */
   readonly replica: boolean;
+  /** Opened with `sync.offline`: writes are local, `sync()` pushes them. */
+  readonly offline: boolean;
   readonly readOnly: boolean;
   /** True while the file is open. */
   isOpen(): boolean;
   /**
-   * Open now instead of on the first statement. For a replica this is the
-   * moment libsql connects to the remote (and pulls the first frames), so it
-   * is where "the cloud is unreachable" surfaces.
+   * Open now instead of on the first statement. For a synced database with
+   * no local file yet this is the moment libsql bootstraps it from the
+   * cloud, so it is where "the cloud is unreachable" surfaces; with the
+   * file present it needs no network.
    */
   open(): Promise<void>;
-  /** Pull the remote's latest frames. Rejects on a plain (non-replica) file. */
-  sync(): Promise<void>;
+  /** Push local frames, pull the remote's. Rejects on a plain (non-synced) file. */
+  sync(options?: SyncOptions): Promise<SyncResult>;
 }
 
 /**
@@ -100,12 +122,11 @@ export function collectGarbage(): boolean {
  * any to boolean", verified Oct 2026). The native addon is the same module for
  * both APIs, though, and its `databaseSyncAsync` runs on the tokio runtime,
  * so we open with the synchronous API and borrow that one function for the
- * sync. If the addon ever changes shape, `null` comes back and the blocking
- * `db.sync()` is used instead — main/sync.ts checks the remote is reachable
- * (asynchronously) before any blocking call, so a dead network never stalls
- * the app for long either way.
+ * sync. It resolves with libsql's `Replicated` object (`frames_synced`,
+ * `frame_no`). If the addon ever changes shape, `null` comes back and the
+ * blocking `db.sync()` (same result object) is used instead.
  */
-type NativeSync = (this: unknown) => Promise<unknown>;
+type NativeSync = (this: unknown) => Promise<{ frames_synced?: number } | undefined>;
 let nativeSync: NativeSync | null | undefined;
 function loadNativeAsyncSync(): NativeSync | null {
   if (nativeSync !== undefined) return nativeSync;
@@ -127,28 +148,39 @@ function loadNativeAsyncSync(): NativeSync | null {
   return nativeSync;
 }
 
+/** True for the errors libsql raises when a push is refused because the cloud moved on. */
+export function isSyncConflictError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /InvalidPushFrameConflict|InvalidPushFrameNoHigh|returned a conflict|higher frame_no/i.test(message);
+}
+
 export function openLibsql(filePath: string, options: LibsqlOpenOptions = {}): LibsqlConnection {
   let db: Database.Database | null = null;
   const replica = !!options.sync;
+  const offline = !!options.sync?.offline;
   const readOnly = !!options.readOnly;
 
   const ensure = (): Database.Database => {
     if (!db) {
-      // `authToken` is accepted by libsql's constructor (index.js) though the
-      // bundled better-sqlite3-style typings only list `syncUrl`.
+      // `authToken` / `offline` are read by libsql's constructor (index.js)
+      // though the bundled better-sqlite3-style typings only list `syncUrl`.
       const next = options.sync
-        ? new Database(filePath, { syncUrl: options.sync.syncUrl, authToken: options.sync.authToken } as any)
+        ? new Database(filePath, {
+            syncUrl: options.sync.syncUrl,
+            authToken: options.sync.authToken,
+            offline,
+          } as any)
         : new Database(filePath);
       try {
         next.exec("PRAGMA foreign_keys = ON");
-        // A replica connection accepts only the PRAGMAs libsql knows how to
-        // classify: foreign_keys yes, busy_timeout no (Sqlite3UnsupportedStatement,
-        // verified against libsql-server Oct 2026). The replica file is this
-        // process's alone, so the wait isn't needed there anyway.
-        if (!replica) next.exec("PRAGMA busy_timeout = 5000");
+        // A remote-replica connection accepts only the PRAGMAs libsql knows
+        // how to classify: foreign_keys yes, busy_timeout no
+        // (Sqlite3UnsupportedStatement). A synced database is a plain local
+        // connection and takes it (verified Oct 29 2026).
+        if (!replica || offline) next.exec("PRAGMA busy_timeout = 5000");
         // query_only makes SQLite itself reject INSERT/UPDATE/DELETE/DDL on this
-        // connection, so a read-only fallback can never diverge from the cloud.
-        // (Also unsupported on a replica; read-only is only ever a plain open.)
+        // connection — the read-only fallback for a database that must not
+        // diverge (also unsupported on a remote replica).
         if (readOnly) next.exec("PRAGMA query_only = 1");
       } catch (e) {
         // Never leak a half-configured handle: it would keep the file open
@@ -164,6 +196,7 @@ export function openLibsql(filePath: string, options: LibsqlOpenOptions = {}): L
   return {
     path: filePath,
     replica,
+    offline,
     readOnly,
     isOpen: () => db !== null,
     async open(): Promise<void> {
@@ -176,14 +209,33 @@ export function openLibsql(filePath: string, options: LibsqlOpenOptions = {}): L
       const rows = ensure().prepare(sql).all(...params) as Row[];
       return rows;
     },
-    async sync(): Promise<void> {
-      if (!replica) throw new Error(`${filePath} is not a replica; nothing to sync`);
+    async sync(syncOptions: SyncOptions = {}): Promise<SyncResult> {
+      if (!replica) throw new Error(`${filePath} is not synced with a remote; nothing to sync`);
       const handle = ensure();
       const asyncSync = loadNativeAsyncSync();
       // The native handle lives in `db.db` on the JS wrapper (libsql/index.js).
       const nativeHandle = (handle as unknown as { db: unknown }).db;
-      if (asyncSync && nativeHandle) await asyncSync.call(nativeHandle);
-      else handle.sync();
+      const run = async (): Promise<SyncResult> => {
+        const result = asyncSync && nativeHandle ? await asyncSync.call(nativeHandle) : (handle.sync() as any);
+        return { framesSynced: Number(result?.frames_synced ?? 0) };
+      };
+      if (!syncOptions.timeoutMs) return run();
+      // A host that accepts the connection and never answers would hold the
+      // caller (and the store's lock) forever; libsql has no timeout of its
+      // own. The native call keeps running after the rejection and settles
+      // on its own later — harmless, nothing waits for it any more.
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        return await Promise.race([
+          run(),
+          new Promise<SyncResult>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`Sync timed out after ${syncOptions.timeoutMs} ms`)), syncOptions.timeoutMs);
+            timer.unref?.();
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     },
     async close(): Promise<void> {
       if (!db) return;
@@ -195,10 +247,9 @@ export function openLibsql(filePath: string, options: LibsqlOpenOptions = {}): L
       db.close();
       db = null;
       // `close()` drops the connection, but the native Database object — and
-      // for a replica its replicator, which holds the file too — lives until
-      // the JS wrapper is collected. One more GC + tick with the reference
-      // gone releases the file at once (measured Oct 2026 against
-      // libsql-server: EPERM before, deletable after).
+      // for a synced database its sync context, which holds the file too —
+      // lives until the JS wrapper is collected. One more GC + tick with the
+      // reference gone releases the file at once (measured Oct 2026).
       collectGarbage();
       await new Promise<void>((resolve) => setImmediate(resolve));
     },

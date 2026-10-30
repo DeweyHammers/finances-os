@@ -68,8 +68,8 @@
 <main>
   <div class="intro">
     <h2>How it works</h2>
-    <p>Finances OS is local by default: everything lives in one database file on your PC. Sync is optional. When you turn it on, your data moves into a small cloud database in <strong>your own</strong> free <a href="https://turso.tech">Turso</a> account, and the app keeps a copy of it on the PC. Every change you make is saved to the cloud as you make it; when the PC is offline you can still look at everything, and changes wait until the cloud is back.</p>
-    <p>There is one source of truth, so nothing ever needs merging. Nobody but you holds your data, and you can leave at any time: <strong>Export</strong> gives you a plain SQLite file, and <strong>Forget this device</strong> turns the PC back into a local-only install with the data it had.</p>
+    <p>Finances OS is local by default: everything lives in one database file on your PC. Sync is optional. When you turn it on, your data moves into a small cloud database in <strong>your own</strong> free <a href="https://turso.tech">Turso</a> account, and the app keeps a copy of it on the PC. Every change you make is saved on the PC at once and sent to the cloud a few seconds later; when the PC is offline you keep working as usual, and the changes are sent as soon as the cloud is back.</p>
+    <p>Nothing is ever merged behind your back: in the rare case that another device changed the cloud while this PC still had changes to send, the app stops and asks you which side to keep (the other side is saved as a backup first). Nobody but you holds your data, and you can leave at any time: <strong>Export</strong> gives you a plain SQLite file, and <strong>Forget this device</strong> turns the PC back into a local-only install with the data it had.</p>
   </div>
 
   <section class="step" id="create" style="--c: var(--sky)">
@@ -99,20 +99,21 @@
     <ol>
       <li>In the app open <strong>Settings</strong> (bottom of the sidebar) → <strong>Phone &amp; sync</strong>.</li>
       <li>Paste the URL into <strong>Database URL</strong> and the token into <strong>Token</strong>, then click <strong>Connect</strong>.</li>
-      <li>The app uploads this PC's data into the cloud database (a few seconds), switches to it and reloads. A green <strong>Synced</strong> dot appears above Settings in the sidebar.</li>
+      <li>The app uploads this PC's data into the cloud database (a few seconds) and keeps a local copy of it. A green <strong>Synced</strong> dot appears at the bottom of the sidebar.</li>
     </ol>
     <div class="shot"><strong>Screenshot: TODO</strong> — Settings → Phone &amp; sync with the fields filled, and the sidebar showing “Synced · Last synced just now”.</div>
     <p>If the cloud database <em>already</em> holds data — because you connected another PC first — the app asks which side should win: <strong>use the cloud data on this PC</strong> (the usual choice for a second device) or <strong>replace the cloud with this PC's data</strong>. Nothing is overwritten silently, and the previous local file stays on disk as a backup either way.</p>
   </section>
 
   <section class="step" id="status" style="--c: var(--amber)">
-    <div class="step-head"><div class="num">04</div><div><h2>Reading the status</h2><p class="where">Sidebar, above Settings</p></div></div>
+    <div class="step-head"><div class="num">04</div><div><h2>Reading the status</h2><p class="where">Sidebar, bottom</p></div></div>
     <table>
       <tr><th>Dot</th><th>Meaning</th></tr>
-      <tr><td>🟢 Synced</td><td>Everything is saved to the cloud; “last synced” is when the app last pulled other devices' changes (every minute, after every change you make, and when you click the dot).</td></tr>
-      <tr><td>🟡 Syncing…</td><td>Pulling right now.</td></tr>
-      <tr><td>🔴 Offline</td><td>The cloud can't be reached. You can look at everything; saving is refused with a clear message until it is back. Click the dot to check again.</td></tr>
+      <tr><td>🟢 Synced</td><td>Every change is saved on this PC at once and sent to the cloud a few seconds later; the app also fetches other devices' changes every minute and when you click the dot. “Last synced” (in the dot's tooltip) is the last time that happened.</td></tr>
+      <tr><td>🟡 Syncing…</td><td>Sending and receiving changes right now (the dot turns into spinning arrows after every save).</td></tr>
+      <tr><td>🟡 Offline · N changes waiting</td><td>The cloud can't be reached. Keep working: everything is saved on this PC, and the waiting changes are sent as soon as the cloud is back. Click the dot to try again.</td></tr>
       <tr><td>🟡 Paused</td><td>A sandbox is active. Keep or Discard it and sync resumes (Keep pushes the kept data to the cloud).</td></tr>
+      <tr><td>🔴 Needs your choice</td><td>Another device changed the cloud while this PC still had changes to send, so the two can't be combined automatically. Open Settings → Phone &amp; sync and choose <strong>Use the cloud's copy</strong> (this PC takes the cloud's data; its own unsent changes go into a backup) or <strong>Keep this PC's changes</strong> (the cloud takes this PC's data; what it held goes into a backup). Until you choose, this PC keeps working on its own copy.</td></tr>
       <tr><td>🔴 Update needed</td><td>The cloud database was written by a newer version of Finances OS on another device. Update the app on this device; until then nothing is changed or synced here.</td></tr>
     </table>
     <div class="shot"><strong>Screenshot: TODO</strong> — the sidebar status in its Synced and Offline states.</div>
@@ -123,7 +124,7 @@
     <ul>
       <li><strong>Export</strong> downloads a plain SQLite file of all your data, synced or not. Keep one somewhere safe now and then; it opens in any SQLite tool.</li>
       <li><strong>Import…</strong> replaces your data with an exported file (or one of the app's <code>.bak</code> backups). With sync on it goes to the cloud, so every device gets it. A backup of the current data is saved first.</li>
-      <li><strong>Forget this device</strong> stops syncing on this PC and removes the token from it. The data stays on the PC as a normal local database; the cloud database and your other devices are untouched. Delete the Turso database from its dashboard if you want it gone entirely.</li>
+      <li><strong>Forget this device</strong> stops syncing on this PC and removes the token from it. The data stays on the PC as a normal local database (changes that never reached the cloud included — the app tells you if there are any); the cloud database and your other devices are untouched. Delete the Turso database from its dashboard if you want it gone entirely.</li>
     </ul>
     <div class="why"><strong>Your data, your way out:</strong> Turso's free tier is theirs to change; the export is yours to keep. The app will always be able to run local-only from an export.</div>
   </section>

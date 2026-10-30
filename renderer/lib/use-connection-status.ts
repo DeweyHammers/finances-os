@@ -14,17 +14,20 @@
  * A local-only install (`configured: false`) shows nothing: there is nothing
  * to be connected TO, so no "Connected" and no red light either (user
  * decision, Oct 27 2026). Once a cloud database is set up the states are
- * synced / syncing / offline / paused (sandbox) / blocked (the database is
- * newer than this app). The last known state is kept while a check is in
- * flight so the dot never flickers between colours on every poll.
+ * synced / syncing / offline (read-write, with the changes waiting to be
+ * pushed) / paused (sandbox) / blocked (the database is newer than this
+ * app) / conflict (the cloud changed while this PC had unpushed changes —
+ * settled in Settings → Phone & sync). The last known state is kept while a
+ * check is in flight so the dot never flickers between colours on every poll.
  *
  * Saves show up in the icon (user request, Oct 29 2026). Every write the
  * renderer makes goes through Refine's data provider, which app/providers.tsx
  * wraps with `withSyncWriteNotices`: after a create / update / delete
  * resolves it calls `notifyLocalWrite()`. The poller then shows `syncing`
  * (spinning arrows in the dot) and, once the writes go quiet for
- * WRITE_SETTLE_MS, asks the server to sync now so the pull that confirms the
- * save happens at once instead of on the server's own 3 s timer. Bursts
+ * WRITE_SETTLE_MS, asks the server to sync now — since Oct 29 2026 that is
+ * the PUSH of the save to the cloud (writes are local first), ahead of the
+ * server's own 3 s timer. Bursts
  * (Optimize writes hundreds of rows) collapse into one sync; a write that
  * lands during the sync queues exactly one more. The arrows stay at least
  * MIN_SPIN_MS so a fast sync is still visible as a flick.

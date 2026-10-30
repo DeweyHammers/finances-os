@@ -24,15 +24,31 @@ export interface SqlExecutor {
   exec(sql: string, params?: SqlValue[]): Promise<Row[]>;
 }
 
+/** What one `sync()` did (backends/libsql.ts → libsql's `Replicated`). */
+export interface SyncResult {
+  /**
+   * Frames pushed to, or pulled from, the remote. libsql reports 0 when the
+   * remote could not be reached at all (it treats that as "nothing synced"
+   * rather than an error), so 0 means OFFLINE to the caller.
+   */
+  framesSynced: number;
+}
+
+export interface SyncOptions {
+  /** Give up (reject) after this long; the backend's own call may keep running. */
+  timeoutMs?: number;
+}
+
 /** A connection that can also be closed (needed to swap database files). */
 export interface SqlConnection extends SqlExecutor {
   close(): Promise<void>;
   /**
-   * Pull the latest changes from the remote this connection replicates
-   * (desktop embedded replica, backends/libsql.ts). Absent on a plain local
-   * file and on a backend that talks to the remote directly.
+   * Exchange changes with the remote this connection replicates (desktop
+   * synced database, backends/libsql.ts): push the local writes, pull the
+   * others'. Absent on a plain local file and on a backend that talks to
+   * the remote directly.
    */
-  sync?(): Promise<void>;
+  sync?(options?: SyncOptions): Promise<SyncResult>;
 }
 
 /**

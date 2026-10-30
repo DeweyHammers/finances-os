@@ -25,7 +25,8 @@ import {
   noteLocalWrite,
   probeRemote,
   syncNow,
-  writeBlockReasonNow,
+  resolveConflict,
+  writeBlockReason,
 } from "./sync";
 import {
   UpdateError,
@@ -306,6 +307,14 @@ app.post("/api/sync/now", async (req: Request, res: Response) => {
   }
 });
 
+app.post("/api/sync/resolve", async (req: Request, res: Response) => {
+  try {
+    res.json(await resolveConflict(req.body?.keep));
+  } catch (error) {
+    syncFailed(req, res, error);
+  }
+});
+
 app.post("/api/sync/disconnect", async (req: Request, res: Response) => {
   try {
     res.json(await disconnectSync());
@@ -368,16 +377,17 @@ app.post(
   },
 );
 
-// Writes are refused while the cloud database is unreachable (a forwarded
-// write would block the process; the replica may be read-only) or newer than
-// this app (schema-version gate). Reads keep working either way. Local-only
-// installs pass straight through, without a probe.
-app.use("/api/:resource", async (req: Request, res: Response, next: NextFunction) => {
+// Writes are local even while synced (local-first since Oct 29 2026), so
+// they are refused only when the cloud database is newer than this app
+// (schema-version gate) or when a synced device has no local copy yet and
+// the cloud can't be reached to fetch one. Reads keep working either way.
+// A synchronous check: no probe, no network on the write path.
+app.use("/api/:resource", (req: Request, res: Response, next: NextFunction) => {
   if (req.method === "GET" || req.method === "OPTIONS") {
     next();
     return;
   }
-  const reason = await writeBlockReasonNow();
+  const reason = writeBlockReason();
   if (reason) {
     // `message` too: Refine's REST provider reads that field into the error
     // toast, while every other route (and the tests) use `error`.

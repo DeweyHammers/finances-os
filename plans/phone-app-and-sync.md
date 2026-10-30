@@ -71,13 +71,18 @@ database is unrecoverable).
   *Synced* (Turso URL + token in Settings). Switching local → synced uploads
   the local database once (or, when the cloud already holds data, asks which
   side wins); synced → local keeps the last replica as the local file.
-  Export/Import database buttons exist in both modes. The desktop replica is
-  libsql's *remote replica*: reads local, writes forwarded to the cloud — so
-  the PC is read-only while offline (chosen over libsql's experimental
-  offline-writes mode: no conflicts, ever).
-- **Status icon** (sider footer + Settings → Sync): connected / syncing /
-  offline (phone) or offline-pending-sync (desktop replica), with "last
-  synced …". Tapping it forces a sync.
+  Export/Import database buttons exist in both modes. The desktop copy is
+  libsql's *synced database* (offline writes): every read and write is
+  local, `sync()` pushes and pulls in the background, offline = read-write
+  with the changes waiting. (Phase B first shipped the *remote replica* —
+  writes forwarded to the cloud, offline = read-only — for "no conflicts,
+  ever"; reversed 2026-10-29 because every save took seconds. A conflict —
+  the cloud changed while this device had unpushed changes — is never
+  merged: the user picks a side in Settings, the other side goes to a .bak.)
+- **Status icon** (sider footer + Settings → Sync): synced / syncing /
+  offline with the number of changes waiting / paused (sandbox) / update
+  needed / needs your choice (conflict), with "last synced …". Tapping it
+  forces a sync.
 - **Versions**: the database carries `schemaVersion`; an app older than the
   database refuses to sync (shows "update the app on this device") instead
   of writing a shape it doesn't know. Migrations run from the data layer,
@@ -118,6 +123,12 @@ database is unrecoverable).
    See CLAUDE.md → "Sync". Decision made on the way: libsql's remote
    replica (mature) rather than its experimental offline-writes mode, so
    there is still exactly one source of truth; offline = read-only.
+   **Reversed 2026-10-29** after a day of use (every save took 1–3 s): the
+   desktop is now a libsql *synced database* — local reads and writes,
+   push + pull in the background, offline = read-write, an explicit
+   `conflict` state settled by the user. The protocol is Turso-only (not in
+   the open-source libsql-server), so the tests run the real client against
+   a protocol mock (`tests/helpers/libsql-sync-server.ts`).
 5. Settings → Sync wiring, first-upload on switch, export/import, the icon
    goes live. **Done 2026-10-27** (`components/settings/SyncSection.tsx`,
    `layout/ConnectionStatus.tsx` + `layout/SyncBanner.tsx`,

@@ -25,7 +25,16 @@ import { fromStorage, toStorage, transformBody } from "./coerce";
 import { DataError } from "./errors";
 import { SCHEMA_SQL } from "./schema-sql";
 import { MODELS, SCHEMA_VERSION, getModelByName, resolveModel, type Column, type Model } from "./schema";
-import { quoteIdent, splitStatements, type Row, type SqlConnection, type SqlExecutor, type SqlValue } from "./sql";
+import {
+  quoteIdent,
+  splitStatements,
+  type Row,
+  type SqlConnection,
+  type SqlExecutor,
+  type SqlValue,
+  type SyncOptions,
+  type SyncResult,
+} from "./sql";
 
 /** `exec` as a bare function — what the store's internals pass around. */
 type Exec = (sql: string, params?: SqlValue[]) => Promise<Row[]>;
@@ -206,14 +215,16 @@ export class DataStore {
   }
 
   /**
-   * Pull the remote's changes into an embedded replica. Takes the lock like
-   * every other call so no statement runs while frames are being applied.
-   * Rejects when the connection has nothing to sync with.
+   * Push this file's writes to the remote and pull the others' (a synced
+   * database, backends/libsql.ts). Takes the lock like every other call so
+   * no statement runs while frames are being applied — a statement that
+   * arrives meanwhile waits for the sync, which is why callers bound it
+   * with `timeoutMs`. Rejects when the connection has nothing to sync with.
    */
-  sync(): Promise<void> {
+  sync(options?: SyncOptions): Promise<SyncResult> {
     return this.lock.run(async () => {
       if (!this.connection.sync) throw new Error("This database is not synced with a remote.");
-      await this.connection.sync();
+      return this.connection.sync(options);
     });
   }
 
