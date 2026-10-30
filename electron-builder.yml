@@ -15,19 +15,9 @@ asarUnpack:
 extraResources:
   - from: node_modules/.prisma/client/query_engine-windows.dll.node
     to: prisma/query_engine-windows.dll.node
-# In-app updates (CLAUDE.md → "Updates"). The GitHub provider makes
-# electron-builder write `dist/latest.yml` (version + installer name + sha512
-# + blockmap) and bake `resources/app-update.yml` (owner/repo) into the app,
-# which electron-updater reads at runtime to find new Releases. Nothing is
-# uploaded by electron-builder itself: `npm run build` passes `--publish never`
-# and the release workflow attaches latest.yml to the Release alongside the
-# installer. Without `--publish never`, electron-builder would try to publish
-# on its own whenever GitHub Actions runs on a tag (and fail for lack of a
-# token).
-publish:
-  provider: github
-  owner: DeweyHammers
-  repo: finances-os
+# No `publish` block on purpose (Oct 30 2026): there are no GitHub Releases
+# and no in-app updater any more. `npm run build` still passes
+# `--publish never` so electron-builder never tries to publish on its own.
 win:
   icon: resources/icon.ico
   target:
@@ -40,9 +30,8 @@ nsis:
   shortcutName: Finances OS
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  # No spaces in the file name: GitHub stores an asset "A B.exe" as "A.B.exe"
-  # while electron-updater asks for "A-B.exe", so a name with spaces never
-  # downloads. (Was "Finances OS Setup X.Y.Z.exe" up to v1.2.0.)
+  # No spaces in the file name (kept from the GitHub Release days, where an
+  # asset name with spaces was mangled by GitHub).
   artifactName: Finances-OS-Setup-${version}.${ext}
 portable:
   artifactName: Finances-OS-${version}-portable.${ext}

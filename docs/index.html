@@ -211,7 +211,7 @@
   <div class="feature">
     <div class="icon-tile" style="--c: var(--sky)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="m16 6 2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg></div>
     <h3>Private by design</h3>
-    <p>Runs on your computer with a local database. No account, no cloud, no bank logins.</p>
+    <p>Runs on your computer with a local database. No account, no bank logins, and no cloud unless you turn on sync with a database you own.</p>
   </div>
 </section>
 
@@ -219,7 +219,6 @@
   <nav class="toc" aria-label="Tour steps">
     <h4>The tour</h4>
     <ol>
-      <li><a href="#install">Download &amp; install</a></li>
       <li><a href="#start">A fresh start</a></li>
       <li><a href="#income">Add your income</a></li>
       <li><a href="#bills">Add your bills</a></li>
@@ -232,6 +231,7 @@
       <li><a href="#spend">Track your spending</a></li>
       <li><a href="#sandbox">What if? Try a sandbox</a></li>
       <li><a href="#stats">Look back</a></li>
+      <li><a href="#sync">Sync across devices</a></li>
     </ol>
   </nav>
 
@@ -239,7 +239,7 @@
     <div class="intro">
       <h2>Meet Alex</h2>
       <p>This tour starts from a completely empty install and follows one made-up person, Alex, through their first month with Finances OS. Every name and number below is fictional.</p>
-      <p>Alex installs the app on <strong>Thursday, October 1st</strong>. Payday is every Friday.</p>
+      <p>Alex starts the app for the first time on <strong>Thursday, October 1st</strong>. Payday is every Friday.</p>
       <div class="persona">
         <span class="chip">💵 $1,150 every Friday</span>
         <span class="chip">🧾 8 monthly bills · $2,104</span>
@@ -251,15 +251,8 @@
     </div>
 
     <!-- 1 -->
-    <section class="step" id="install" style="--c: var(--sky)">
-      <div class="step-head"><div class="num">01</div><div><h2>Download &amp; install</h2><p class="where">GitHub → Releases</p></div></div>
-      <p>Finances OS is a Windows app. Download the latest <strong>Finances-OS-Setup-x.y.z.exe</strong> from the <a href="https://github.com/DeweyHammers/finances-os/releases/latest">Releases page</a> and run it; the installer lets you pick a folder and adds a desktop shortcut. Because the app isn't signed with a paid certificate, Windows SmartScreen may show a blue “Windows protected your PC” box the first time: click <strong>More info</strong>, then <strong>Run anyway</strong>. Later versions update from inside the app: Settings → General → <strong>Check for updates</strong>, then <strong>Download</strong> and <strong>Restart to update</strong>.</p>
-      <div class="why"><strong>Why it matters:</strong> there's nothing else to set up. No account to create and no bank to connect; everything the app knows lives in a database file on your own PC.</div>
-    </section>
-
-    <!-- 2 -->
     <section class="step" id="start" style="--c: var(--indigo)">
-      <div class="step-head"><div class="num">02</div><div><h2>A fresh start</h2><p class="where">First launch</p></div></div>
+      <div class="step-head"><div class="num">01</div><div><h2>A fresh start</h2><p class="where">First launch</p></div></div>
       <p>A brand-new install has no data at all. Instead of blank tables, every page tells you what it's for and what to do first.</p>
       <div class="why"><strong>Why it matters:</strong> you never have to guess where to begin. The Overview points you to your income, since everything else is planned around your paydays.</div>
       <div class="pair">
@@ -268,9 +261,9 @@
       </div>
     </section>
 
-    <!-- 3 -->
+    <!-- 2 -->
     <section class="step" id="income" style="--c: var(--green)">
-      <div class="step-head"><div class="num">03</div><div><h2>Add your income</h2><p class="where">Income → Add Your First Income</p></div></div>
+      <div class="step-head"><div class="num">02</div><div><h2>Add your income</h2><p class="where">Income → Add Your First Income</p></div></div>
       <p>Enter what you take home each paycheck, how often you're paid, and on which day. Alex gets <strong>$1,150 weekly on Fridays</strong>.</p>
       <div class="why"><strong>Why it matters:</strong> your paydays build the pay-week grid. October has five Fridays, so Alex's October has five pay weeks, and every bill gets assigned to the paycheck that should cover it.</div>
       <div class="pair">
@@ -279,9 +272,9 @@
       </div>
     </section>
 
-    <!-- 4 -->
+    <!-- 3 -->
     <section class="step" id="bills" style="--c: var(--rose)">
-      <div class="step-head"><div class="num">04</div><div><h2>Add your bills</h2><p class="where">Bills → Create New Bill</p></div></div>
+      <div class="step-head"><div class="num">03</div><div><h2>Add your bills</h2><p class="where">Bills → Create New Bill</p></div></div>
       <p>Add each monthly bill with its amount and the day it's due. Alex has eight, from $1,400 rent on the 1st down to a $16 streaming plan on the 27th.</p>
       <div class="why"><strong>Why it matters:</strong> due dates are what let the app work out which paycheck pays for what. Tick “Never split” for a bill that must be paid in one go from a single paycheck.</div>
       <div class="pair">
@@ -290,9 +283,9 @@
       </div>
     </section>
 
-    <!-- 5 -->
+    <!-- 4 -->
     <section class="step" id="personal" style="--c: var(--indigo)">
-      <div class="step-head"><div class="num">05</div><div><h2>Everyday spending</h2><p class="where">Personal → Create New Personal</p></div></div>
+      <div class="step-head"><div class="num">04</div><div><h2>Everyday spending</h2><p class="where">Personal → Create New Personal</p></div></div>
       <p>Personal expenses are the money you spend (or set aside) as you go. <strong>Every Pay Week</strong> gives a fresh allowance from each paycheck: groceries, gas, fun money, and Alex's $100 savings transfer. <strong>Split Monthly</strong> spreads one monthly total across the weeks (household supplies).</p>
       <div class="why"><strong>Why it matters:</strong> once allowances are set aside, the surplus you see each week is money you can actually spend or save. It isn't already promised to groceries.</div>
       <div class="pair">
@@ -301,17 +294,17 @@
       </div>
     </section>
 
-    <!-- 6 -->
+    <!-- 5 -->
     <section class="step" id="yearly" style="--c: var(--green)">
-      <div class="step-head"><div class="num">06</div><div><h2>Yearly costs</h2><p class="where">Yearly Costs → Create New Yearly Cost</p></div></div>
+      <div class="step-head"><div class="num">05</div><div><h2>Yearly costs</h2><p class="where">Yearly Costs → Create New Yearly Cost</p></div></div>
       <p>Some bills only show up once a year: car registration, a club membership, holiday gifts. Add them with the month and day they're due.</p>
       <div class="why"><strong>Why it matters:</strong> the costs that hurt most are the ones you forget. The Overview lays them out by month so you can see them coming.</div>
       <figure><button data-full="img/tour/09-yearly-list.png"><img loading="lazy" src="img/tour/09-yearly-list.png" alt="Yearly Costs list with four annual expenses." width="1920" height="1080"></button><figcaption>Four annual costs, $765 a year in total.</figcaption></figure>
     </section>
 
-    <!-- 7 -->
+    <!-- 6 -->
     <section class="step" id="optimize" style="--c: var(--amber)">
-      <div class="step-head"><div class="num">07</div><div><h2>Overview &amp; Optimize</h2><p class="where">Overview → Optimize Now</p></div></div>
+      <div class="step-head"><div class="num">06</div><div><h2>Overview &amp; Optimize</h2><p class="where">Overview → Optimize Now</p></div></div>
       <p>The Overview now shows October as five pay weeks: income, expenses and the surplus left in each. Before optimizing, every bill sits in the week it's due. November's $1,400 rent lands in Pay Week 5, leaving Alex <strong>$595 short</strong> that week.</p>
       <figure><button data-full="img/tour/10-overview-before-optimize.png"><img loading="lazy" src="img/tour/10-overview-before-optimize.png" alt="Overview before optimizing: Pay Week 5 shows a negative surplus of 595 dollars." width="1920" height="1080"></button><figcaption>Before: week 5 goes negative, and the app suggests re-optimizing.</figcaption></figure>
       <p>One click on <strong>Optimize</strong> spreads big bills across earlier paychecks and plans the next three years. Rent is now saved a little each week, and every week clears the $300 surplus target. That $300 a week is just the default: change it any time under <em>Settings &rarr; Budget</em>; the Overview shows the current target next to the pay weeks.</p>
@@ -322,17 +315,17 @@
       </div>
     </section>
 
-    <!-- 8 -->
+    <!-- 7 -->
     <section class="step" id="account" style="--c: var(--sky)">
-      <div class="step-head"><div class="num">08</div><div><h2>Add your bank account</h2><p class="where">Sidebar → Cash → Add Account</p></div></div>
+      <div class="step-head"><div class="num">07</div><div><h2>Add your bank account</h2><p class="where">Sidebar → Cash → Add Account</p></div></div>
       <p>Add a checking account with its current balance. Alex starts with $1,800. Balances are always calculated from the transactions, so they never drift.</p>
       <div class="why"><strong>Why it matters:</strong> your real money is what the Plan hands out. The starting balance becomes your first “Ready to Assign” dollars.</div>
       <figure><button data-full="img/tour/13-account-form.png"><img loading="lazy" src="img/tour/13-account-form.png" alt="Add Account form: Checking with a starting balance of 1800." width="1920" height="1080"></button><figcaption>Checking, $1,800.</figcaption></figure>
     </section>
 
-    <!-- 9 -->
+    <!-- 8 -->
     <section class="step" id="plan" style="--c: var(--indigo)">
-      <div class="step-head"><div class="num">09</div><div><h2>Build your Plan</h2><p class="where">Plan → Create your first group</p></div></div>
+      <div class="step-head"><div class="num">08</div><div><h2>Build your Plan</h2><p class="where">Plan → Create your first group</p></div></div>
       <p>The Plan is a zero-based budget: every dollar gets a job. Create groups (Alex uses <em>Bills</em>, <em>Everyday</em> and <em>Goals</em>) and fill them with your bills and personal expenses, including Alex's $100-a-week Savings.</p>
       <div class="why"><strong>Why it matters:</strong> items linked to your bills and allowances know their own amounts and schedules, so the Plan can fund them for you on payday.</div>
       <div class="pair">
@@ -341,9 +334,9 @@
       </div>
     </section>
 
-    <!-- 10 -->
+    <!-- 9 -->
     <section class="step" id="payday" style="--c: var(--green)">
-      <div class="step-head"><div class="num">10</div><div><h2>Payday: Auto-assign</h2><p class="where">Plan → Assign → Auto</p></div></div>
+      <div class="step-head"><div class="num">09</div><div><h2>Payday: Auto-assign</h2><p class="where">Plan → Assign → Auto</p></div></div>
       <p>Friday, October 2nd: payday. Alex records the paycheck in <strong>Cash → Checking → Add Transaction</strong>: an inflow for the paycheck amount, the memo <code>Income</code>, and no category. That lands the money in Ready to Assign, and the memo is what tells the app a paycheck has arrived. Then, in the Plan, <strong>Assign → Auto</strong> funds this pay week in one click: each allowance gets its weekly amount, and each bill gets exactly the slice the Optimize schedule set for this week.</p>
       <div class="why"><strong>Why it matters:</strong> no math on payday. The Plan and the Overview always agree, and an amber ⚠ appears if an item ever drifts from the schedule.</div>
       <div class="pair">
@@ -356,9 +349,9 @@
       </div>
     </section>
 
-    <!-- 11 -->
+    <!-- 10 -->
     <section class="step" id="spend" style="--c: var(--sky)">
-      <div class="step-head"><div class="num">11</div><div><h2>Track your spending</h2><p class="where">Cash → Checking</p></div></div>
+      <div class="step-head"><div class="num">10</div><div><h2>Track your spending</h2><p class="where">Cash → Checking</p></div></div>
       <p>Through October, Alex logs purchases and bill payments in the checking ledger, each one tagged with a Plan item. Every Friday: record the paycheck, then click Auto.</p>
       <div class="why"><strong>Why it matters:</strong> each item's <em>Available</em> balance shows what's really left in that envelope, so overspending shows up the same day, not at the end of the month.</div>
       <div class="pair">
@@ -367,9 +360,9 @@
       </div>
     </section>
 
-    <!-- 12 -->
+    <!-- 11 -->
     <section class="step" id="sandbox" style="--c: var(--amber)">
-      <div class="step-head"><div class="num">12</div><div><h2>What if? Try a sandbox</h2><p class="where">Settings → Data → Try a sandbox</p></div></div>
+      <div class="step-head"><div class="num">11</div><div><h2>What if? Try a sandbox</h2><p class="where">Settings → Data → Try a sandbox</p></div></div>
       <p>At the end of the month Alex wonders: what would next month look like without the gym? <strong>Try a sandbox</strong> (under Settings &rarr; Data) switches the whole app onto a <em>copy</em> of the data. An amber banner stays on every page while it's active. Alex deletes the gym membership, clicks Optimize, and flips to November to see the result, all without touching the real numbers.</p>
       <p>When you're done, <strong>Discard</strong> throws the copy away and the app goes straight back to your real data. If you like what you see, <strong>Keep</strong> makes it real instead (a backup of the old data is saved first). Closing the app always discards the sandbox.</p>
       <div class="why"><strong>Why it matters:</strong> you can test a decision before you make it, and a wrong experiment costs nothing.</div>
@@ -379,9 +372,9 @@
       </div>
     </section>
 
-    <!-- 13 -->
+    <!-- 12 -->
     <section class="step" id="stats" style="--c: var(--rose)">
-      <div class="step-head"><div class="num">13</div><div><h2>Look back</h2><p class="where">Statistics · Overview</p></div></div>
+      <div class="step-head"><div class="num">12</div><div><h2>Look back</h2><p class="where">Statistics · Overview</p></div></div>
       <p>Statistics breaks spending (and income) down by item and payee, month by month and across the year. Click any bar to jump into that month.</p>
       <div class="why"><strong>Why it matters:</strong> a plan is only as good as what actually happened. Seeing where October really went makes November's plan better.</div>
       <div class="pair">
@@ -390,13 +383,25 @@
       </div>
       <figure><button data-full="img/tour/22-overview-month-end.png"><img loading="lazy" src="img/tour/22-overview-month-end.png" alt="Overview at month end, with past pay weeks locked." width="1920" height="1080"></button><figcaption>The Overview on October 30th, with the current pay week marked NOW. Weeks that have started are locked, so re-optimizing never rewrites money that's already been handed out.</figcaption></figure>
     </section>
+
+    <!-- 13 -->
+    <section class="step" id="sync" style="--c: var(--sky)">
+      <div class="step-head"><div class="num">13</div><div><h2>Sync across devices</h2><p class="where">Settings → Phone &amp; sync</p></div></div>
+      <p>Finances OS is local by default: everything lives in one database file on your PC. Sync is optional and <strong>bring-your-own</strong>. Create a free cloud database at <a href="https://turso.tech">Turso</a> (hosted SQLite, the same engine the app uses), paste its URL and a token into <strong>Settings &rarr; Phone &amp; sync</strong>, and click <strong>Connect</strong>. Your data is uploaded once; from then on every change is saved on the PC at once and sent to the cloud a few seconds later. Offline, you keep working as usual and the changes go out when the cloud is back.</p>
+      <p>A status line at the bottom of the sidebar says where things stand: a green <strong>Synced</strong> dot; amber while syncing, or offline with the number of changes waiting; and red only if another device changed the cloud while this PC still had changes to send. Nothing is ever merged behind your back: the app asks which side to keep and backs the other up first. <strong>Export</strong> gives you a plain SQLite file any time, and <strong>Forget this device</strong> turns the PC back into a local-only install with the data it has.</p>
+      <div class="why"><strong>Why it matters:</strong> nobody but you holds your data, and the app sends nothing anywhere unless you set this up. The token is stored encrypted on your PC and never inside the database.</div>
+      <div class="pair">
+        <figure><button data-full="img/tour/27-sync-settings.png"><img loading="lazy" src="img/tour/27-sync-settings.png" alt="Settings, Phone and sync tab: a database URL and a token pasted in, ready to connect." width="1920" height="1080"></button><figcaption>Two values from Turso, pasted into Settings.</figcaption></figure>
+        <figure><button data-full="img/tour/28-sync-status.png"><img loading="lazy" src="img/tour/28-sync-status.png" alt="The Overview with a green Synced status line at the bottom of the sidebar." width="1920" height="1080"></button><figcaption>Synced: the status at the bottom of the sidebar.</figcaption></figure>
+      </div>
+      <p>📱 <strong>Phone app: coming soon.</strong> The next feature is an Android app that connects to the same cloud database with the same two values, so you can check the budget and add transactions from anywhere while the PC is off.</p>
+    </section>
   </div>
 </main>
 
 <footer>
   <p><strong>Finances OS</strong> is a Windows desktop app (Electron + Next.js + SQLite).</p>
   <p>Everything in this tour (names, amounts, payees) is made up. The screenshots are generated automatically from an empty demo database by <code>scripts/demo/tour.mjs</code>, so they always match the current app.</p>
-  <p>Optional: <a href="sync.html">set up sync</a> to keep several devices in step through a free cloud database you own.</p>
   <p><a href="https://github.com/DeweyHammers/finances-os">Source on GitHub</a></p>
 </footer>
 

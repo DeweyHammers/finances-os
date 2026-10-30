@@ -7,7 +7,6 @@ import { createWindow } from "./helpers/create-window";
 import { startServer, API_PORT } from "./api-server";
 import { cleanupStaleSandbox } from "./sandbox";
 import { initSync } from "./sync";
-import { initUpdater } from "./updater";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -48,15 +47,6 @@ const cleanup = () => {
     await initSync();
   } catch (e: any) {
     console.error("[Sync] startup failed, continuing on the local database:", e?.message ?? e);
-  }
-
-  // In-app updates (CLAUDE.md → "Updates"): wires electron-updater as the
-  // engine behind /api/updates in the PACKAGED app only, plus one silent
-  // check later on. Dev builds keep the link-only GitHub check.
-  try {
-    initUpdater();
-  } catch (e: any) {
-    console.error("[Updates] setup failed, continuing without in-app updates:", e?.message ?? e);
   }
 
   // 3. Start API server after ready
@@ -101,8 +91,8 @@ const cleanup = () => {
   mainWindow.maximize();
   mainWindow.setBackgroundColor("#0f172a");
 
-  // Links the renderer opens with target="_blank" (Settings → Help, the
-  // Release page of an update) go to the user's browser instead of a bare
+  // Links the renderer opens with target="_blank" (Settings → Help, GitHub
+  // issues) go to the user's browser instead of a bare
   // Electron window. Anything that isn't http(s) is dropped.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);

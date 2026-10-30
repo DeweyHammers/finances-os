@@ -1,7 +1,7 @@
 /**
- * Renderer side of the Settings page's non-resource calls (main/meta.ts,
- * main/updates.ts): app facts, in-app updates and database backups. Like
- * sandbox-api.ts these bypass Refine because none of them is a resource.
+ * Renderer side of the Settings page's non-resource calls (main/meta.ts):
+ * app facts and database backups. Like sandbox-api.ts these bypass Refine
+ * because none of them is a resource.
  */
 import { API_URL } from "./api-url";
 
@@ -13,52 +13,9 @@ export interface AppMeta {
   platform: string;
   databasePath: string;
   repoUrl: string;
-  releasesUrl: string;
   issuesUrl: string;
   docsUrl: string;
 }
-
-// ── In-app updates (main/updates.ts; shapes mirrored from there) ────────────
-
-export type UpdateState =
-  | "idle"
-  | "checking"
-  | "up-to-date"
-  | "available"
-  | "downloading"
-  | "downloaded"
-  | "installing"
-  | "error";
-
-export interface UpdateProgress {
-  percent: number;
-  transferred: number;
-  total: number;
-  bytesPerSecond: number;
-}
-
-/** Why the installed app can't run the installer on this PC (Smart App Control). */
-export interface InstallBlock {
-  code: "SMART_APP_CONTROL";
-  message: string;
-}
-
-export interface UpdateStatus {
-  /** The installed app can download + install; dev/hosted can only link. */
-  supported: boolean;
-  /** Set when `supported` but this PC refuses the install: show the Release page instead. */
-  installBlocked: InstallBlock | null;
-  state: UpdateState;
-  current: string;
-  latest: string | null;
-  releaseDate: string | null;
-  releaseUrl: string;
-  progress: UpdateProgress | null;
-  error: string | null;
-  checkedAt: string | null;
-}
-
-export type UpdateAction = "check" | "download" | "install";
 
 export interface BackupInfo {
   directory: string;
@@ -83,21 +40,6 @@ async function parse<T>(res: Response): Promise<T> {
 
 export async function fetchMeta(signal?: AbortSignal): Promise<AppMeta> {
   return parse<AppMeta>(await fetch(`${API_URL}/meta`, { signal, cache: "no-store" }));
-}
-
-/** Where the updater stands right now (polled while checking/downloading). */
-export async function fetchUpdateStatus(signal?: AbortSignal): Promise<UpdateStatus> {
-  return parse<UpdateStatus>(await fetch(`${API_URL}/updates/status`, { signal, cache: "no-store" }));
-}
-
-/**
- * check: answers with the resulting status (a failure is inside it, state
- * "error"). download / install: answer at once; poll fetchUpdateStatus.
- * A wrong-state call or an unsupported build is a 409 whose `error` is the
- * message to show.
- */
-export async function runUpdateAction(action: UpdateAction): Promise<UpdateStatus> {
-  return parse<UpdateStatus>(await fetch(`${API_URL}/updates/${action}`, { method: "POST" }));
 }
 
 export async function fetchBackups(): Promise<BackupInfo> {

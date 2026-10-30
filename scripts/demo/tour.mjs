@@ -3,7 +3,7 @@
 // screenshot at every step.
 //
 //   node scripts/demo/create-db.mjs          # (re)start from an empty DB
-//   npx tsx scripts/demo/serve.ts            # demo API on prisma/demo.db
+//   npx tsx scripts/demo/serve.ts            # demo API on prisma/demo/demo.db
 //   (cd renderer && npx next dev -p 8888)    # the app UI
 //   node scripts/demo/tour.mjs               # → docs/img/tour/*.png
 //
@@ -16,13 +16,24 @@
 // through the same REST API the forms use.
 import path from "node:path";
 import fs from "node:fs";
-import { execSync } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import { launch } from "./cdp.mjs";
 
 const OUT = path.join("docs", "img", "tour");
 // `DEMO_API_PORT` matches serve.ts: run the demo API on another port (and the
 // renderer with NEXT_PUBLIC_API_URL) while the installed app still owns 5858.
 const API = `http://127.0.0.1:${process.env.DEMO_API_PORT ?? 5858}/api`;
+
+// The sync step connects the demo app to a MOCK of the cloud protocol
+// (tests/helpers/libsql-sync-server-child.ts, the same one the sync tests
+// run) on this port, so the tour never needs a real Turso account. The URL
+// and token typed into the Settings form for the picture are fictional; the
+// real connection is made through the API against the mock. The demo app
+// keeps its sync.json and local copy in prisma/demo/, never beside dev.db.
+const SYNC_MOCK_PORT = 18081;
+const SYNC_MOCK_URL = `http://127.0.0.1:${SYNC_MOCK_PORT}`;
+const SYNC_URL_SHOWN = "libsql://finances-alex.turso.io";
+const SYNC_TOKEN_SHOWN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.alex-demo-token";
 
 // ── Fake data ────────────────────────────────────────────────────────────
 const INCOME = { name: "Paycheck", amount: 1150, paymentCycle: "WEEKLY", payDay: 5 }; // Fridays
@@ -127,9 +138,44 @@ async function clickPeriodButton(page) {
   await page.sleep(500);
 }
 
+/** Start the sync mock in its own process and wait until it answers. */
+async function startSyncMock() {
+  const proc = spawn("npx", ["tsx", "tests/helpers/libsql-sync-server-child.ts", "--port", String(SYNC_MOCK_PORT)], {
+    stdio: "ignore",
+    shell: true,
+  });
+  for (let i = 0; i < 100; i++) {
+    try {
+      await fetch(`${SYNC_MOCK_URL}/info`);
+      return proc;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  killTree(proc);
+  throw new Error("the sync mock never came up");
+}
+
+/** Kill a `shell: true` child and everything it spawned (Windows: the whole tree). */
+function killTree(proc) {
+  if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+  else proc.kill();
+}
+
+/**
+ * "Forget this device" if the demo API is synced — at the start (a previous
+ * run that died mid-step would otherwise leave the API on a copy of a cloud
+ * that no longer exists) and at the end (so the demo DB is local again).
+ */
+async function forgetSync() {
+  const status = await api("GET", "sync");
+  if (status.configured) await post("sync/disconnect");
+}
+
 // ── The tour ─────────────────────────────────────────────────────────────
+await forgetSync();
 execSync("node scripts/demo/create-db.mjs", { stdio: "ignore" });
 const page = await launch({ width: 1920, height: 1080 });
+let syncMock = null;
 try {
   // Day 0: Thursday Oct 1 2026, the day Alex installs the app.
   await page.setClock("2026-10-01T09:00:00");
@@ -345,8 +391,30 @@ try {
   await shot(page, "statistics-month");
   await page.clickText("Yearly Overview");
   await shot(page, "statistics-year");
+
+  console.log("Step 12 · sync across devices");
+  // The Settings form, filled with a made-up Turso URL and token (not
+  // submitted: the picture is what matters).
+  await page.goto("/Settings?tab=sync");
+  await page.fill("Database URL", SYNC_URL_SHOWN);
+  await page.fill("Token", SYNC_TOKEN_SHOWN);
+  await shot(page, "sync-settings");
+  // The real thing, against the mock: the data is uploaded and the green
+  // "Synced" status appears at the bottom of the sidebar.
+  syncMock = await startSyncMock();
+  await post("sync/connect", { url: SYNC_MOCK_URL, token: "alex-demo-token" });
+  await page.goto("/Overview");
+  await waitForText(page, /Synced/);
+  await shot(page, "sync-status");
 } finally {
   await page.close();
+  // Back to local only, whatever happened above; then stop the mock.
+  try {
+    await forgetSync();
+  } catch (e) {
+    console.warn(`(could not forget the sync setup: ${e.message})`);
+  }
+  if (syncMock) killTree(syncMock);
   if (page.problems.length) {
     console.log("\nProblems seen during the tour:");
     for (const p of page.problems) console.log("  " + p);

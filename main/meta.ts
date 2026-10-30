@@ -2,7 +2,6 @@
  * meta.ts — app facts and maintenance actions behind the Settings page.
  *
  *  - getAppMeta():      version, run mode, platform, database location, links
- *  - checkForUpdates(): latest GitHub Release vs the running version
  *  - listBackups() / createBackup(): timestamped .bak copies of the REAL
  *    database beside it (same naming as scripts/db-sync.cjs and Sandbox Keep)
  *
@@ -17,7 +16,6 @@ import { backupFilePath, snapshotCurrentDatabase } from "./sync";
 
 export const GITHUB_REPO = "DeweyHammers/finances-os";
 export const REPO_URL = `https://github.com/${GITHUB_REPO}`;
-export const RELEASES_URL = `${REPO_URL}/releases`;
 export const ISSUES_URL = `${REPO_URL}/issues`;
 /** The picture tour (docs/ → GitHub Pages). */
 export const DOCS_URL = "https://deweyhammers.github.io/finances-os/";
@@ -37,7 +35,6 @@ export interface AppMeta {
   /** Filesystem path of the REAL database (the sandbox copy is never shown). */
   databasePath: string;
   repoUrl: string;
-  releasesUrl: string;
   issuesUrl: string;
   docsUrl: string;
 }
@@ -65,6 +62,9 @@ export function readVersion(): string {
 
 export function getAppMode(): AppMode {
   if (process.env.FINANCES_OS_MODE === "hosted") return "hosted";
+  // The demo server (scripts/demo/serve.ts) poses as the installed app for
+  // the tour's pictures; only the Settings labels read the mode.
+  if (process.env.FINANCES_OS_MODE === "electron") return "electron";
   if (process.versions.electron && process.env.NODE_ENV === "production") return "electron";
   return "dev";
 }
@@ -76,74 +76,9 @@ export function getAppMeta(): AppMeta {
     platform: process.platform,
     databasePath: realDbPath(),
     repoUrl: REPO_URL,
-    releasesUrl: RELEASES_URL,
     issuesUrl: ISSUES_URL,
     docsUrl: DOCS_URL,
   };
-}
-
-// ── Update check ────────────────────────────────────────────────────────────
-
-export interface UpdateCheck {
-  current: string;
-  latest: string;
-  /** Release page to download from. */
-  url: string;
-  updateAvailable: boolean;
-  checkedAt: string;
-}
-
-/** Numeric dotted compare ("1.2.0" vs "1.10.0"); a leading "v" is ignored. */
-export function compareVersions(a: string, b: string): number {
-  const parse = (v: string) =>
-    v.replace(/^v/i, "").split(".").map((n) => parseInt(n, 10) || 0);
-  const pa = parse(a);
-  const pb = parse(b);
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d !== 0) return d < 0 ? -1 : 1;
-  }
-  return 0;
-}
-
-/**
- * Asks GitHub for the latest Release of this repo. Network failures throw —
- * the route turns them into a 502 the Settings page can show. `fetchImpl`
- * exists for the tests; the 6 s timeout keeps a dead network from hanging
- * the button.
- */
-export async function checkForUpdates(
-  fetchImpl: typeof fetch = fetch,
-): Promise<UpdateCheck> {
-  const current = readVersion();
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 6000);
-  try {
-    const res = await fetchImpl(
-      `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-      {
-        headers: {
-          Accept: "application/vnd.github+json",
-          "User-Agent": `finances-os/${current}`,
-        },
-        signal: ctrl.signal,
-      },
-    );
-    if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-    const json = (await res.json()) as { tag_name?: string; html_url?: string };
-    const latest = String(json.tag_name ?? "").replace(/^v/i, "");
-    if (!latest) throw new Error("No release found");
-    return {
-      current,
-      latest,
-      url: json.html_url ?? RELEASES_URL,
-      updateAvailable: compareVersions(latest, current) > 0,
-      checkedAt: new Date().toISOString(),
-    };
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // ── Backups ─────────────────────────────────────────────────────────────────

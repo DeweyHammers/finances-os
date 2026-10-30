@@ -202,7 +202,8 @@ export const SyncSection = ({ docsUrl, toast }: SyncSectionProps) => {
     }
   };
 
-  const guideHref = docsUrl ? `${docsUrl.replace(/\/?$/, "/")}sync.html` : undefined;
+  // The sync step of the picture tour (docs/index.html#sync).
+  const guideHref = docsUrl ? `${docsUrl.replace(/\/?$/, "/")}#sync` : undefined;
   const configured = !!status?.configured;
   const pending = status?.pendingChanges ?? 0;
   const pendingText = pending === 1 ? "1 change" : `${pending} changes`;
