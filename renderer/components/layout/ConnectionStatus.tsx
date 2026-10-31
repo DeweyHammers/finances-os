@@ -32,12 +32,12 @@ const RED = "#f43f5e";
 const AMBER = "#fbbf24";
 
 /**
- * Dot colour, label and the second line for each state. "Synced" has no
- * second line on purpose — the word is the whole message (user request,
- * Oct 29 2026). "Last synced …"
- * lives only in the tooltip: on the row it re-rendered once a minute and
- * looked frozen (user feedback, Oct 28 2026); a tooltip is computed when
- * it opens, so it is always current.
+ * Dot colour, label and the second line for each state. Every state has a
+ * second line, "Synced" included ("Up to date with the cloud" — it stood
+ * alone from Oct 29 to Oct 30 2026, then the user wanted a detail like the
+ * other states). "Last synced …" lives only in the tooltip: on the row it
+ * re-rendered once a minute and looked frozen (user feedback, Oct 28 2026);
+ * a tooltip is computed when it opens, so it is always current.
  */
 function describe(status: Status): { color: string; label: string; detail?: string; help: string } {
   const last = ` Last synced ${timeAgo(status.lastSyncedAt)}; the app checks the cloud every minute on its own.`;
@@ -58,6 +58,7 @@ function describe(status: Status): { color: string; label: string; detail?: stri
       return {
         color: GREEN,
         label: "Synced",
+        detail: "Up to date with the cloud",
         help:
           "Changes are saved on this PC at once and sent to your cloud database within a few seconds; other devices see them on their next sync." +
           last,
@@ -210,7 +211,7 @@ export const ConnectionStatus = ({ variant = "sider" }: ConnectionStatusProps) =
         <Typography sx={{ fontSize: "0.8rem", fontWeight: 700, color: "#cbd5e1", lineHeight: 1.2 }}>
           {label}
         </Typography>
-        {/* Second line only when the state has something to add; "Synced" stands alone. */}
+        {/* Second line: what the state means in a few words. */}
         {detail && (
           <Typography sx={{ fontSize: "0.68rem", color: "text.secondary", lineHeight: 1.2, whiteSpace: "nowrap" }}>
             {detail}
