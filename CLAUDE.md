@@ -284,7 +284,7 @@ Add `successNotification: false, errorNotification: false` to any `useList`/`use
 ## Tests
 
 ```
-npm run test          # run all (382 tests as of Oct 30 2026, incl. the local lock-ins; the 28 updater tests went with the feature)
+npm run test          # run all (385 tests as of Oct 31 2026, incl. the local lock-ins; the 28 updater tests went with the feature)
 npm run test:watch    # watch mode
 ```
 

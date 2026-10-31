@@ -46,7 +46,16 @@ function describe(status: Status): { color: string; label: string; detail?: stri
   }
   const pending = status.status?.pendingChanges ?? 0;
   const waiting = pending === 1 ? "1 change waiting" : `${pending} changes waiting`;
-  switch (status.state) {
+  // A sync in flight on a healthy connection (after a save, from the dot, or
+  // the server's own pull) IS the syncing state for the whole row: amber,
+  // the arrows, "Sending and receiving changes" and the syncing tooltip.
+  // Until Oct 31 2026 only the label changed, so the row read "Syncing…" in
+  // Synced's green and, once Synced got its detail line, over "Up to date
+  // with the cloud" — two states on one card (user report, Oct 31 2026).
+  // Offline, conflict, paused and blocked keep their own description while
+  // a sync runs: those labels are the more important news.
+  const state = status.syncing && status.state === "synced" ? "syncing" : status.state;
+  switch (state) {
     case "syncing":
       return {
         color: AMBER,
@@ -123,13 +132,11 @@ export const ConnectionStatus = ({ variant = "sider" }: ConnectionStatusProps) =
   // Local only: nothing to be connected to, so nothing to show.
   if (!status.configured) return null;
 
-  const described = describe(status);
-  const { color, detail, help } = described;
+  const { color, label, detail, help } = describe(status);
   // A sync in flight (after a save, from the dot, or the server's own pull)
-  // reads "Syncing…" and spins the arrows, but keeps the state's colour: a
-  // save on a healthy connection shouldn't flash the card amber.
+  // spins the arrows in place of the dot; `describe` already turned a healthy
+  // connection's row amber "Syncing…" for it.
   const spinning = status.syncing && !status.apiDown;
-  const label = spinning && status.state === "synced" ? "Syncing…" : described.label;
   const clickable = status.state !== "paused" && status.state !== "blocked" && status.state !== "conflict";
 
   return (
