@@ -406,10 +406,15 @@ const SettingsGear = () => {
         onClick={() => openSettings()}
         sx={{
           flexShrink: 0,
-          // Optical alignment: the bold 20px title's letters sit above the
-          // centre of their 32px line box, so a mathematically centred gear
-          // looks low next to them (user report, Oct 29 2026). Nudge it up.
-          mt: "-2px",
+          // Optical alignment, measured in the browser (Nov 2 2026): the bold
+          // 20px title's ink (cap top to baseline, no descenders) is centred
+          // 0.5px BELOW the row's centre, and the gear's own ink is centred
+          // exactly on it, so a plain centred gear reads 0.5px high. The row
+          // centres the gear's MARGIN box, so a margin moves the gear by half
+          // its value: 1px of top margin = the 0.5px drop. (A -2px nudge from
+          // Oct 29 2026 had answered a "looks low" report and overshot — the
+          // user then saw it high.)
+          mt: "1px",
           borderRadius: "8px",
           color: active ? "primary.light" : "#94a3b8",
           bgcolor: active ? "rgba(129, 140, 248, 0.15)" : "transparent",
