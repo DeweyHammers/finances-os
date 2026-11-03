@@ -138,6 +138,15 @@ database is unrecoverable).
 6. Guide: "Set up sync" in `docs/sync.html` — **text done 2026-10-27**,
    screenshots are TODO placeholders.
 
+> **Superseded (2026-11-02).** Phases C and D below were tried once (branch
+> `android-app`, PR 20: the whole desktop renderer wrapped in Capacitor) and
+> rejected by the user as "the desktop smashed onto a phone"; the branch was
+> deleted on 2026-11-01. The phone app is now **`plans/phone-app.md`**: a
+> separate phone-native UI in `phone/`, read-only except transactions, online
+> only against the user's Turso database, built on the dev PC and installed
+> from the user's Google Drive — nothing on GitHub (no Releases since
+> 2026-10-30). The two sections are kept for the record only.
+
 ### Phase C — Android app, local only
 7. Capacitor project under `android/` wrapping the renderer's static export;
    local SQLite plugin backend; Refine data provider calling the data layer
