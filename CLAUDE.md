@@ -33,8 +33,9 @@ npx prisma generate  # Only for the Prisma-client scripts (prisma/seed.ts, scrip
 ## PROD Deployment Flow
 
 1. Verify all changes in dev mode (`npm run dev`)
-2. Only when user explicitly says to push: `npm run db:push` (copies dev.db to PROD)
-3. Then `npm run deploy:prod` (ships the code to the installed app — required for UI/code changes to take effect)
+2. **Bump the version** — `npm version X.Y.Z --no-git-tag-version` (updates package.json + package-lock.json), in the same commit as the change: patch for a fix or tweak, minor for new behaviour, below 1.0 while alpha. User rule since Nov 6 2026, when two different bundles went out as 0.4.0 the same evening and neither Settings nor the `app.asar.<version>.<stamp>.bak` backups could tell them apart; 0.5.0 was the first bump under it. `deploy:prod` prints "Installed app.asar <old> → <new>" — those two numbers should never be equal.
+3. Only when user explicitly says to push: `npm run db:push` (copies dev.db to PROD)
+4. Then `npm run deploy:prod` (ships the code to the installed app — required for UI/code changes to take effect)
 
 **NEVER run `npm run db:push` without explicit user instruction.** DEV is for experimentation; PROD changes are deliberate.
 
