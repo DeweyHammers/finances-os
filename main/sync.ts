@@ -93,7 +93,11 @@ import { isSandboxActive } from "./sandbox";
 export const REPLICA_FILENAME = "replica.db";
 /** How often the local copy syncs while idle. */
 export const SYNC_INTERVAL_MS = 60_000;
-/** Pause after a local write before the push (more writes usually follow). */
+/**
+ * Pause after a local write before the push (more writes usually follow).
+ * Also how long after the last write the 60 s timer treats writes as still
+ * landing and lets this pause do the syncing instead — see noteLocalWrite.
+ */
 export const SYNC_AFTER_WRITE_MS = 3_000;
 /**
  * A sync that takes longer than this is given up (the store's lock is held
@@ -261,6 +265,19 @@ let syncTimeoutMs = SYNC_TIMEOUT_MS;
 
 export function __setSyncTimeoutForTests(ms: number | null): void {
   syncTimeoutMs = ms ?? SYNC_TIMEOUT_MS;
+}
+
+let syncAfterWriteMs = SYNC_AFTER_WRITE_MS;
+/** When the last route wrote (ms since epoch; 0 = never in this run). */
+let lastWriteAt = 0;
+
+export function __setSyncAfterWriteMsForTests(ms: number | null): void {
+  syncAfterWriteMs = ms ?? SYNC_AFTER_WRITE_MS;
+}
+
+/** The 60 s timer firing right now (it is never that patient in a test). */
+export function __intervalTickForTests(): Promise<void> {
+  return intervalTick();
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -643,9 +660,26 @@ async function tick(): Promise<void> {
   }
 }
 
+/**
+ * The 60 s timer's tick. It stands down while writes are still landing (one
+ * arrived less than SYNC_AFTER_WRITE_MS ago): the after-write timer syncs
+ * once they stop. A sync holds the store's lock for its whole round trip to
+ * the cloud, so one started in the middle of a run of saves (Optimize's
+ * rewrite of 36 months, Sync Plan) makes every further write and every read
+ * of the UI wait on the network — the Nov 6 2026 freeze.
+ */
+async function intervalTick(): Promise<void> {
+  if (writesLanding()) return;
+  await tick();
+}
+
+function writesLanding(): boolean {
+  return Date.now() - lastWriteAt < syncAfterWriteMs;
+}
+
 function startTimer(): void {
   stopTimer();
-  timer = setInterval(() => void tick(), SYNC_INTERVAL_MS);
+  timer = setInterval(() => void intervalTick(), SYNC_INTERVAL_MS);
   timer.unref?.();
 }
 
@@ -656,15 +690,20 @@ function stopTimer(): void {
   afterWriteTimer = null;
 }
 
-/** A route wrote something: count it as pending and push shortly (more writes usually follow). */
-export function noteLocalWrite(): void {
+/**
+ * A route wrote something: count it as pending (`count` rows for a batch)
+ * and push shortly — more writes usually follow, so each one restarts the
+ * pause, and the push happens SYNC_AFTER_WRITE_MS after the last of them.
+ */
+export function noteLocalWrite(count = 1): void {
   if (!state.settings || state.pausedBy) return;
-  state.pendingChanges += 1;
+  state.pendingChanges += count;
+  lastWriteAt = Date.now();
   if (afterWriteTimer) clearTimeout(afterWriteTimer);
   afterWriteTimer = setTimeout(() => {
     afterWriteTimer = null;
     void tick();
-  }, SYNC_AFTER_WRITE_MS);
+  }, syncAfterWriteMs);
   afterWriteTimer.unref?.();
 }
 
@@ -704,6 +743,7 @@ export async function __resetSyncForTests(options: { keepFiles?: boolean } = {})
     clearSyncSettings();
   }
   Object.assign(state, INITIAL);
+  lastWriteAt = 0;
 }
 
 // ── Cloud side ──────────────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ import { cuid } from "./cuid";
 import { fromStorage, toStorage, transformBody } from "./coerce";
 import { DataError } from "./errors";
 import { SCHEMA_SQL } from "./schema-sql";
-import { MODELS, SCHEMA_VERSION, getModelByName, resolveModel, type Column, type Model } from "./schema";
+import { MODELS, SCHEMA_VERSION, resolveModel, type Column, type Model } from "./schema";
 import {
   quoteIdent,
   splitStatements,
@@ -53,6 +53,15 @@ export interface ListResult {
   items: Record_[];
   total: number;
 }
+
+/** One write inside `DataStore.batch()` — the same inputs as the matching single call. */
+export type BatchOperation =
+  | { op: "create"; model: Model; values: Record_ }
+  | { op: "update"; model: Model; id: string; values: Record_ }
+  | { op: "delete"; model: Model; id: string };
+
+/** The stored row for a create / update, `{ success: true }` for a delete. */
+export type BatchResult = Record_ | { success: true };
 
 /** Body keys the routes always dropped (relation names + the id). */
 const CREATE_STRIP = ["id", "client", "contracts"];
@@ -297,6 +306,9 @@ export class DataStore {
   }
 
   // ── Writes ──
+  // The single calls and `batch()` share the same rules (applyCreate /
+  // applyUpdate / applyRemove below), so a row written inside a batch is
+  // exactly the row the matching single call would have written.
 
   /**
    * Insert one row from a request body. `id` and the legacy relation keys are
@@ -304,8 +316,10 @@ export class DataStore {
    * and the stored row is returned.
    */
   create(model: Model, body: Record_): Promise<Record_> {
-    if (model.name === "Income") return this.createIncome(body);
-    return this.locked((exec) => this.insert(exec, model, this.prepareCreate(body)));
+    const run = (exec: Exec) => this.applyCreate(exec, model, body);
+    // Income is two statements (demote the others, insert), hence the
+    // transaction; every other create is one autocommitted INSERT.
+    return model.name === "Income" ? this.transaction(run) : this.locked(run);
   }
 
   /**
@@ -314,16 +328,9 @@ export class DataStore {
    * on its first save so a brand-new database can store its settings.
    */
   update(model: Model, id: string, body: Record_): Promise<Record_> {
-    if (model.name === "Income") return this.updateIncome(id, body);
-    const data = this.prepareUpdate(body);
-    if (model.name === "AppSettings" && id === "global") {
-      return this.transaction(async (exec) => {
-        const existing = await this.findById(exec, model, id);
-        if (existing) return this.patch(exec, model, id, data);
-        return this.insert(exec, model, { ...data, id });
-      });
-    }
-    return this.locked((exec) => this.patch(exec, model, id, data));
+    const run = (exec: Exec) => this.applyUpdate(exec, model, id, body);
+    const multiStatement = model.name === "Income" || (model.name === "AppSettings" && id === "global");
+    return multiStatement ? this.transaction(run) : this.locked(run);
   }
 
   /**
@@ -332,50 +339,104 @@ export class DataStore {
    * label after `categoryItemId` is set to NULL by the foreign key.
    */
   remove(model: Model, id: string): Promise<void> {
+    return this.transaction((exec) => this.applyRemove(exec, model, id));
+  }
+
+  /**
+   * Many writes as ONE transaction: one BEGIN … COMMIT, so the file is
+   * written once (a single WAL commit — a handful of frames instead of a few
+   * per row) and a failure anywhere rolls every operation back. Operations
+   * run in the order given; each result is the stored row (create / update)
+   * or `{ success: true }` (delete), one per operation.
+   *
+   * Added Nov 6 2026 for Overview's Optimize, which rewrites up to ~2000
+   * BillSplit rows at once. As one request per row, each its own commit, the
+   * run took long enough for the background sync to start in the middle of
+   * it — and a sync holds this lock for its whole round trip to the cloud,
+   * so every write and every read of the UI queued behind it (the app
+   * froze), while the thousands of WAL frames those commits left took many
+   * pushes to send (the run ended in a sync conflict). Anything that writes
+   * many rows should come through here.
+   */
+  batch(operations: readonly BatchOperation[]): Promise<BatchResult[]> {
     return this.transaction(async (exec) => {
-      if (model.name === "BudgetCategoryItem") {
-        const item = await this.findById(exec, model, id);
-        if (item) {
-          await exec('UPDATE "AccountTransaction" SET "categoryName" = ? WHERE "categoryItemId" = ?', [
-            item.name as string,
-            id,
-          ]);
+      const results: BatchResult[] = [];
+      for (const op of operations) {
+        switch (op.op) {
+          case "create":
+            results.push(await this.applyCreate(exec, op.model, op.values));
+            break;
+          case "update":
+            results.push(await this.applyUpdate(exec, op.model, op.id, op.values));
+            break;
+          case "delete":
+            await this.applyRemove(exec, op.model, op.id);
+            results.push({ success: true });
+            break;
+          default:
+            throw new DataError("VALIDATION", `Unknown batch operation "${String((op as { op: unknown }).op)}".`);
         }
       }
-      const result = await exec(
-        `DELETE FROM ${quoteIdent(model.name)} WHERE ${quoteIdent(model.idColumn)} = ? RETURNING ${quoteIdent(model.idColumn)}`,
-        [id],
-      );
-      if (result.length === 0) {
-        throw new DataError("NOT_FOUND", `Record to delete does not exist (${model.name} ${id}).`);
-      }
+      return results;
     });
   }
 
-  // ── Income: at most one primary ──
+  // ── The write rules, on an executor the caller already holds ──
+  // (the store's lock, inside a transaction where more than one statement
+  // runs). Shared by create / update / remove and batch.
 
   private primaryFlag(body: Record_): boolean {
     return body.isPrimary === true || body.isPrimary === "true";
   }
 
-  private createIncome(body: Record_): Promise<Record_> {
-    const model = getModelByName("Income");
+  /** create(): plus the Income single-primary rule (a new primary demotes the others). */
+  private async applyCreate(exec: Exec, model: Model, body: Record_): Promise<Record_> {
     const data = this.prepareCreate(body);
-    const isPrimary = this.primaryFlag(data);
-    return this.transaction(async (exec) => {
+    if (model.name === "Income") {
+      const isPrimary = this.primaryFlag(data);
       if (isPrimary) await exec('UPDATE "Income" SET "isPrimary" = 0');
       return this.insert(exec, model, { ...data, isPrimary });
-    });
+    }
+    return this.insert(exec, model, data);
   }
 
-  private updateIncome(id: string, body: Record_): Promise<Record_> {
-    const model = getModelByName("Income");
+  /**
+   * update(): plus the Income single-primary rule (a patch WITHOUT isPrimary
+   * clears it — historic quirk, kept) and the AppSettings/global upsert.
+   */
+  private async applyUpdate(exec: Exec, model: Model, id: string, body: Record_): Promise<Record_> {
     const data = this.prepareUpdate(body);
-    const isPrimary = this.primaryFlag(data);
-    return this.transaction(async (exec) => {
+    if (model.name === "Income") {
+      const isPrimary = this.primaryFlag(data);
       if (isPrimary) await exec('UPDATE "Income" SET "isPrimary" = 0 WHERE "id" != ?', [id]);
       return this.patch(exec, model, id, { ...data, isPrimary });
-    });
+    }
+    if (model.name === "AppSettings" && id === "global") {
+      const existing = await this.findById(exec, model, id);
+      if (existing) return this.patch(exec, model, id, data);
+      return this.insert(exec, model, { ...data, id });
+    }
+    return this.patch(exec, model, id, data);
+  }
+
+  /** remove(): plus the BudgetCategoryItem name snapshot. */
+  private async applyRemove(exec: Exec, model: Model, id: string): Promise<void> {
+    if (model.name === "BudgetCategoryItem") {
+      const item = await this.findById(exec, model, id);
+      if (item) {
+        await exec('UPDATE "AccountTransaction" SET "categoryName" = ? WHERE "categoryItemId" = ?', [
+          item.name as string,
+          id,
+        ]);
+      }
+    }
+    const result = await exec(
+      `DELETE FROM ${quoteIdent(model.name)} WHERE ${quoteIdent(model.idColumn)} = ? RETURNING ${quoteIdent(model.idColumn)}`,
+      [id],
+    );
+    if (result.length === 0) {
+      throw new DataError("NOT_FOUND", `Record to delete does not exist (${model.name} ${id}).`);
+    }
   }
 
   // ── Row-level primitives ──

@@ -4,7 +4,7 @@
  * does and sql.ts for the tiny interface a backend has to provide.
  */
 export { DataStore, createDatabase, ensureSchemaVersion, getSchemaVersion, prepareDatabase, RESOURCE_MODELS } from "./store";
-export type { ListQuery, ListResult, Record_ } from "./store";
+export type { BatchOperation, BatchResult, ListQuery, ListResult, Record_ } from "./store";
 export { MODELS, SCHEMA_VERSION, resolveModel, getModelByName } from "./schema";
 export type { Column, Model, ScalarType } from "./schema";
 export { SCHEMA_SQL } from "./schema-sql";

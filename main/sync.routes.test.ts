@@ -309,6 +309,66 @@ describe("while synced", () => {
     expect((await billNames()).filter((n) => String(n).startsWith("Synced"))).toHaveLength(20);
   });
 
+  it("a batch of writes is one commit: a fraction of the frames, counted as pending, pushed by one sync", async () => {
+    // Optimize's shape — a BillSplit row per bill per pay week, months deep.
+    // Until Nov 6 2026 each row was its own request and its own commit; the
+    // frames those commits left took many pushes to send and the background
+    // sync kept starting mid-run (the app froze, then a sync conflict).
+    const bill = (await api().post("/api/Bill").send({ name: "Batched", amount: 1, dueDate: 1 })).body;
+    expect((await api().post("/api/sync/now")).body.state).toBe("synced");
+    const split = (i: number, monthKey: string) => ({ billId: bill.id, monthKey, weekIndex: i % 5, amountCents: 1 + i, occurrenceCoord: Math.floor(i / 5) + 1 });
+
+    // The old way: 100 single requests, then one sync.
+    const before = (await cloud.snapshot()).maxFrame;
+    for (let i = 0; i < 100; i++) expect((await api().post("/api/BillSplit").send(split(i, "2030-01"))).status).toBe(200);
+    expect((await api().post("/api/sync/now")).body.state).toBe("synced");
+    const singleFrames = (await cloud.snapshot()).maxFrame - before;
+
+    // The new way: the same 100 rows as one batch.
+    const pushesBefore = (await cloud.snapshot()).pushes;
+    const mid = (await cloud.snapshot()).maxFrame;
+    const operations = Array.from({ length: 100 }, (_, i) => ({ op: "create", resource: "BillSplit", values: split(i, "2030-02") }));
+    const res = await api().post("/api/batch").send({ operations });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(100);
+    // Local, like every write: nothing pushed yet, every row counted as pending.
+    expect((await cloud.snapshot()).pushes).toBe(pushesBefore);
+    expect((await api().get("/api/sync")).body.pendingChanges).toBe(100);
+    expect((await api().post("/api/sync/now")).body).toMatchObject({ state: "synced", pendingChanges: 0 });
+    const batchFrames = (await cloud.snapshot()).maxFrame - mid;
+    console.log(`100 BillSplit rows pushed as WAL frames — single requests: ${singleFrames}, one batch: ${batchFrames}`);
+    expect(batchFrames).toBeGreaterThan(0);
+    expect(batchFrames).toBeLessThan(singleFrames / 4);
+    expect((await cloudRows('SELECT count(*) AS n FROM "BillSplit"'))[0].n).toBe(200);
+  }, 30_000);
+
+  it("the background timer never starts a sync while writes are still landing; the after-write pause pushes once they stop", async () => {
+    // A sync holds the store's lock for its round trips to the cloud, so one
+    // started in the middle of a run of saves made every further write and
+    // every read wait on the network (Nov 6 2026). The pause after a write is
+    // 3 s in the app; shortened here.
+    sync.__setSyncAfterWriteMsForTests(400);
+    try {
+      const pushesBefore = (await cloud.snapshot()).pushes;
+      expect((await api().post("/api/Bill").send({ name: "Mid-run", amount: 1, dueDate: 1 })).status).toBe(200);
+      // The 60 s timer fires right after the write: it stands down.
+      await sync.__intervalTickForTests();
+      expect((await cloud.snapshot()).pushes).toBe(pushesBefore);
+      expect((await api().get("/api/sync")).body.pendingChanges).toBe(1);
+      // 400 ms of quiet later the after-write timer has pushed it.
+      await new Promise((r) => setTimeout(r, 1_000));
+      expect((await api().get("/api/sync")).body).toMatchObject({ state: "synced", pendingChanges: 0 });
+      expect((await cloud.snapshot()).pushes).toBeGreaterThan(pushesBefore);
+      expect(await billNames()).toEqual(["Mid-run", "Seed"]);
+      // With nothing landing, the timer's tick syncs as usual (here: a pull that finds nothing new).
+      const requestsBefore = (await cloud.snapshot()).requests.length;
+      await sync.__intervalTickForTests();
+      expect((await cloud.snapshot()).requests.length).toBeGreaterThan(requestsBefore);
+    } finally {
+      sync.__setSyncAfterWriteMsForTests(null);
+    }
+  });
+
   it("pulls what another device pushed", async () => {
     other = await otherDevice();
     expect(await other.bills()).toEqual(["Seed"]);

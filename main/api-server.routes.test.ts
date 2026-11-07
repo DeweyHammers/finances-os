@@ -192,6 +192,93 @@ describe("Income single-primary rule", () => {
   });
 });
 
+describe("batch writes (/api/batch)", () => {
+  // One transaction for many writes — what Overview's Optimize sends since
+  // Nov 6 2026 instead of one request per BillSplit row (see the route).
+  it("applies creates, updates and deletes in order and answers one result per operation", async () => {
+    const bill = (await api().post("/api/Bill").send({ name: "Sample Loan", amount: 100, dueDate: 1 })).body;
+    const doomed = (await api().post("/api/BillSplit").send({ billId: bill.id, monthKey: "2026-10", weekIndex: 0, amountCents: 1, occurrenceCoord: 1 })).body;
+
+    const res = await api().post("/api/batch").send({
+      operations: [
+        { op: "delete", resource: "BillSplit", id: doomed.id },
+        { op: "create", resource: "BillSplit", values: { billId: bill.id, monthKey: "2026-10", weekIndex: 0, amountCents: 6000, occurrenceCoord: 32 } },
+        { op: "create", resource: "BillSplit", values: { billId: bill.id, monthKey: "2026-10", weekIndex: 1, amountCents: 4000, occurrenceCoord: 32 } },
+        { op: "update", resource: "Bill", id: bill.id, values: { amount: "120" } },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const { results } = res.body;
+    expect(results).toHaveLength(4);
+    expect(results[0]).toEqual({ success: true });
+    // Rows come back exactly as the single routes return them (coercion included).
+    expect(results[1]).toMatchObject({ billId: bill.id, monthKey: "2026-10", weekIndex: 0, amountCents: 6000, occurrenceCoord: 32 });
+    expect(typeof results[1].id).toBe("string");
+    expect(results[2]).toMatchObject({ weekIndex: 1, amountCents: 4000 });
+    expect(results[3]).toMatchObject({ id: bill.id, name: "Sample Loan", amount: 120 });
+
+    const rows = (await api().get("/api/BillSplit?_sort=weekIndex&_order=asc")).body;
+    expect(rows.map((r: any) => [r.weekIndex, r.amountCents])).toEqual([[0, 6000], [1, 4000]]);
+    expect((await api().get(`/api/Bill/${bill.id}`)).body.amount).toBe(120);
+  });
+
+  it("is all or nothing: one failing operation rolls every other one back", async () => {
+    const bill = (await api().post("/api/Bill").send({ name: "Sample Insurance", amount: 90, dueDate: 31 })).body;
+    const row = { billId: bill.id, monthKey: "2026-10", weekIndex: 0, amountCents: 3000, occurrenceCoord: 31 };
+    const res = await api().post("/api/batch").send({
+      operations: [
+        { op: "create", resource: "BillSplit", values: row },
+        { op: "update", resource: "Bill", id: bill.id, values: { amount: 95 } },
+        { op: "create", resource: "BillSplit", values: row }, // the unique key again
+      ],
+    });
+    expect(res.status).toBe(500);
+    expect((await api().get("/api/BillSplit")).body).toEqual([]);
+    expect((await api().get(`/api/Bill/${bill.id}`)).body.amount).toBe(90);
+  });
+
+  it("validates the request before touching the database", async () => {
+    expect((await api().post("/api/batch").send({})).status).toBe(400);
+    expect((await api().post("/api/batch").send({ operations: "nope" })).status).toBe(400);
+    expect((await api().post("/api/batch").send({ operations: [{ op: "create", resource: "NotAModel", values: {} }] })).status).toBe(404);
+    expect((await api().post("/api/batch").send({ operations: [{ op: "delete", resource: "Bill" }] })).status).toBe(400);
+    expect((await api().post("/api/batch").send({ operations: [{ op: "upsert", resource: "Bill", values: {} }] })).status).toBe(400);
+    // An empty batch is fine and writes nothing.
+    expect((await api().post("/api/batch").send({ operations: [] })).body).toEqual({ results: [] });
+    expect((await api().get("/api/Bill")).body).toEqual([]);
+  });
+
+  it("applies the store's rules inside a batch exactly as the single routes do", async () => {
+    const res = await api().post("/api/batch").send({
+      operations: [
+        { op: "create", resource: "Income", values: { name: "Day job", amount: 700, isPrimary: true } },
+        { op: "create", resource: "Income", values: { name: "Side gig", amount: 100, isPrimary: "true" } },
+        // AppSettings/global is created on its first save, in a batch too.
+        { op: "update", resource: "AppSettings", id: "global", values: { wifeWeeklyTargetCents: 25000 } },
+      ],
+    });
+    expect(res.status).toBe(200);
+    const incomes = (await api().get("/api/Income?_sort=name&_order=asc")).body;
+    expect(incomes.map((i: any) => [i.name, i.isPrimary])).toEqual([["Day job", false], ["Side gig", true]]);
+    expect((await api().get("/api/AppSettings/global")).body.wifeWeeklyTargetCents).toBe(25000);
+  });
+
+  it("accepts a whole Optimize plan in one request (well past Express's 100 kb default)", async () => {
+    const bill = (await api().post("/api/Bill").send({ name: "Sample Loan", amount: 100, dueDate: 1 })).body;
+    // ~2000 rows: a full 36-month re-plan with ~55 splits a month.
+    const operations = Array.from({ length: 2000 }, (_, i) => ({
+      op: "create",
+      resource: "BillSplit",
+      values: { billId: bill.id, monthKey: `${2027 + Math.floor(i / 60)}-${String(1 + Math.floor((i % 60) / 5)).padStart(2, "0")}`, weekIndex: i % 5, amountCents: 100 + i, occurrenceCoord: 1 },
+    }));
+    expect(JSON.stringify({ operations }).length).toBeGreaterThan(100 * 1024);
+    const res = await api().post("/api/batch").send({ operations });
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(2000);
+    expect((await api().get("/api/BillSplit")).headers["x-total-count"]).toBe("2000");
+  });
+});
+
 describe("BudgetCategoryItem delete", () => {
   it("snapshots the item name onto its transactions before deleting", async () => {
     const group = (await api().post("/api/BudgetCategoryGroup").send({ name: "Checking" })).body;

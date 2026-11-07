@@ -25,8 +25,7 @@ import {
   useList,
   BaseRecord,
   useOne,
-  useCreate,
-  useDelete,
+  useInvalidate,
   useUpdate,
 } from "@refinedev/core";
 import {
@@ -53,6 +52,8 @@ import { YearlyOverview } from "./YearlyOverview";
 import { CashFlowOverview } from "./CashFlowOverview";
 import { SurplusTargetPill } from "./SurplusTargetPill";
 import { SHORT_MONTHS } from "../../lib/constants";
+import { applyBatch, type BatchOperation } from "../../lib/batch-api";
+import { notifyLocalWrite } from "../../lib/use-connection-status";
 import { useRouter } from "next/navigation";
 import {
   getPayPeriodsForMonth,
@@ -169,8 +170,10 @@ export function OverviewPage() {
     successNotification: false,
     errorNotification: false,
   });
-  const { mutateAsync: createSplit } = useCreate();
-  const { mutateAsync: deleteSplit } = useDelete();
+  // Optimize's BillSplit writes go out as ONE batch request (lib/batch-api.ts),
+  // not through useCreate / useDelete — see handleOptimize. `invalidate`
+  // refetches the BillSplit lists afterwards, as those hooks would have.
+  const invalidate = useInvalidate();
   const { mutateAsync: updateSettings } = useUpdate();
   // Guards the one-time "no baseline yet → adopt current inputs" DB write so
   // re-renders before the settings refetch lands don't fire it repeatedly.
@@ -351,16 +354,31 @@ export function OverviewPage() {
         targetSurplusCents,
       });
 
-      // PHASE B — apply. Delete-then-create is intentional: there's no
-      // `upsert` for a composite key that includes occurrenceCoord, and the
-      // algorithm may add/remove splits (not just change amounts). Locked-week
-      // rows are excluded from `toDelete` so they survive.
+      // PHASE B — apply, as ONE request and ONE database transaction
+      // (lib/batch-api.ts → POST /api/batch). Delete-then-create is
+      // intentional: there's no `upsert` for a composite key that includes
+      // occurrenceCoord, and the algorithm may add/remove splits (not just
+      // change amounts). Locked-week rows are excluded from `toDelete` so they
+      // survive. Each month's deletes precede its creates, as they always did,
+      // so a replaced row never collides with the unique key it is replacing.
+      //
+      // Until Nov 6 2026 every row was its own request (≈2000 for a full
+      // re-plan, each its own commit). With sync on, the background sync kept
+      // starting in the middle of that run, and every sync holds the database
+      // lock for its round trips to the cloud — so the remaining writes and
+      // all of the UI's reads queued behind the network: the app froze, and
+      // the thousands of WAL frames those commits left ended in a sync
+      // conflict. One transaction = one commit, a handful of frames, and one
+      // push once it is done. All or nothing, too: a failure anywhere leaves
+      // the database exactly as it was, like a Phase A failure.
+      const operations: BatchOperation[] = [];
       for (const plan of writePlans) {
         for (const o of plan.toDelete) {
-          await deleteSplit({ resource: "BillSplit", id: o.id, successNotification: false, errorNotification: false });
+          operations.push({ op: "delete", resource: "BillSplit", id: o.id });
         }
         for (const a of plan.toCreate) {
-          await createSplit({
+          operations.push({
+            op: "create",
             resource: "BillSplit",
             values: {
               billId: a.billId,
@@ -369,10 +387,17 @@ export function OverviewPage() {
               amountCents: a.amountCents,
               occurrenceCoord: a.occurrenceCoord,
             },
-            successNotification: false,
-            errorNotification: false,
           });
         }
+      }
+      if (operations.length > 0) {
+        await applyBatch(operations);
+        // The batch bypasses Refine's data provider, so do what useCreate /
+        // useDelete did for us: one notice to the sync indicator (spinning
+        // arrows, then a single push of the whole plan) and a refetch of the
+        // BillSplit lists every page reads.
+        notifyLocalWrite();
+        invalidate({ resource: "BillSplit", invalidates: ["list", "many"] });
       }
 
       // Success only — the alert and the baseline signature are cleared/saved

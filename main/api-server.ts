@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
 import { getStore } from "../shared/db";
-import { transformBody } from "../shared/data";
+import { transformBody, type BatchOperation } from "../shared/data";
 import {
   BackupError,
   createBackup,
@@ -98,7 +98,10 @@ export function isAllowedHost(host: string | undefined, port = listeningPort): b
 // Exported so server/index.ts (hosted mode) can mount the renderer's static
 // export on the same Express app. The Electron app never touches it directly.
 export const app = express();
-app.use(express.json());
+// Express's default JSON limit is 100 kb; one Optimize plan sent as a batch
+// (POST /api/batch, ~2000 BillSplit rows) is several hundred kb. Loopback
+// only, so a generous cap costs nothing.
+app.use(express.json({ limit: "16mb" }));
 
 // Origin / Host gate + CORS. Runs before every route (and before preflight
 // handling), so a rejected caller never reaches the database.
@@ -345,6 +348,59 @@ app.use("/api/:resource", (req: Request, res: Response, next: NextFunction) => {
   next();
 });
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── Batch writes ─────────────────────────────────────────────────────────────
+// Many creates / updates / deletes in ONE transaction (DataStore.batch):
+//   POST /api/batch { operations: [{ op: "create", resource, values },
+//                                  { op: "update", resource, id, values },
+//                                  { op: "delete", resource, id }] }
+//   → { results: [row | row | { success: true }] }, one per operation, in order.
+// All or nothing: any failure rolls the whole batch back (500, like the
+// single routes). Overview's Optimize sends its whole 36-month plan this way
+// since Nov 6 2026 — one request per row (~2000 commits, each a few WAL frames)
+// took long enough for the background sync to start in the middle, and a sync
+// holds the store's lock for its round trips to the cloud: the UI's reads and
+// the remaining writes queued behind it (the app froze) and the pile of frames
+// ended in a sync conflict. Sits behind the write gate above and BEFORE the
+// generic `/api/:resource` POST, which would otherwise take "batch" as a model.
+app.post("/api/batch", async (req: Request, res: Response) => {
+  const list = req.body?.operations;
+  if (!Array.isArray(list)) {
+    res.status(400).json({ error: "Expected a body of { operations: [...] }." });
+    return;
+  }
+  const operations: BatchOperation[] = [];
+  for (let i = 0; i < list.length; i++) {
+    const raw = list[i];
+    const resource = raw && typeof raw.resource === "string" ? raw.resource : "";
+    const model = resource ? getStore().resolveResource(resource) : undefined;
+    if (!model) {
+      res.status(404).json({ error: `Model ${resource || "(missing)"} not found (operation ${i})` });
+      return;
+    }
+    const needsId = raw.op === "update" || raw.op === "delete";
+    if (needsId && typeof raw.id !== "string") {
+      res.status(400).json({ error: `Operation ${i} (${raw.op} ${resource}) needs an id.` });
+      return;
+    }
+    if (raw.op === "create") operations.push({ op: "create", model, values: raw.values ?? {} });
+    else if (raw.op === "update") operations.push({ op: "update", model, id: raw.id, values: raw.values ?? {} });
+    else if (raw.op === "delete") operations.push({ op: "delete", model, id: raw.id });
+    else {
+      res.status(400).json({ error: `Unknown operation "${String(raw?.op)}" (operation ${i}); expected create, update or delete.` });
+      return;
+    }
+  }
+  // Not the body: a full Optimize plan is hundreds of kb of rows.
+  console.log(`POST /api/batch - ${operations.length} operations`);
+  try {
+    const results = await getStore().batch(operations);
+    noteLocalWrite(operations.length);
+    res.json({ results });
+  } catch (error: any) {
+    failed(req, res, error, true);
+  }
+});
 
 // List & Create
 app.get("/api/:resource", async (req: Request, res: Response) => {
