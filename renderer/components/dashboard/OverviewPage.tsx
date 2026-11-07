@@ -52,15 +52,31 @@ import { YearlyOverview } from "./YearlyOverview";
 import { CashFlowOverview } from "./CashFlowOverview";
 import { SurplusTargetPill } from "./SurplusTargetPill";
 import { SHORT_MONTHS } from "../../lib/constants";
-import { applyBatch, type BatchOperation } from "../../lib/batch-api";
-import { notifyLocalWrite } from "../../lib/use-connection-status";
 import { useRouter } from "next/navigation";
 import {
   getPayPeriodsForMonth,
   BillSplitRecord,
 } from "../../lib/pay-period-utils";
-// Optimize PHASE A (pure planning) + the horizon constant.
-import { planOptimize, OPTIMIZE_HORIZON_MONTHS } from "../../lib/optimize-plan";
+// The horizon constant (the success toast reads it).
+import { OPTIMIZE_HORIZON_MONTHS } from "../../lib/optimize-plan";
+// Everything Optimize shares with the automatic re-plan (lib/auto-optimize.tsx):
+// the input signatures + their baseline, the single-batch apply with the
+// baseline save, and the stale-data alert's storage. Since Nov 6 2026 the
+// run normally happens by itself after every input change; this page's
+// button and alert are the fallback for when that run fails.
+import {
+  type InputSignatures,
+  computeInputSignatures,
+  parseOptimizedSig,
+  describeInputChange,
+  isInputChangeAlert,
+  isAutoOptimizeFailureAlert,
+  readOptimizeAlert,
+  subscribeOptimizeAlert,
+  runOptimize,
+  surplusTargetCentsOf,
+} from "../../lib/optimize-run";
+import { useAutoOptimize } from "../../lib/auto-optimize-context";
 
 // Input signatures (bills / incomes / personals / surplus target) as of the
 // last SUCCESSFUL Optimize, stored as JSON in `AppSettings.optimizedInputsSig`.
@@ -72,31 +88,7 @@ import { planOptimize, OPTIMIZE_HORIZON_MONTHS } from "../../lib/optimize-plan";
 // renderer, PROD app, a browser tab) has its own localStorage, so a baseline
 // there went stale whenever Optimize ran from a different window and the
 // alert kept nagging about changes that were already optimized.
-interface InputSignatures {
-  bills: string;
-  incomes: string;
-  personals: string;
-  surplusTarget: number;
-}
-
-function parseOptimizedSig(raw: unknown): InputSignatures | null {
-  if (typeof raw !== "string" || !raw) return null;
-  try {
-    return JSON.parse(raw) as InputSignatures;
-  } catch {
-    return null;
-  }
-}
-
-// Alert texts raised by input-change detection. Only these are auto-cleared
-// when the inputs match the baseline again — the legacy-split migration alert
-// is cleared only by Optimize.
-const INPUT_CHANGE_ALERTS = new Set([
-  "Bills were added or updated.",
-  "Income was added or updated.",
-  "Personal expenses were added or updated.",
-  "Weekly surplus target was changed.",
-]);
+// The signature code itself is in lib/optimize-run.ts, shared with the runner.
 
 
 export function OverviewPage() {
@@ -112,12 +104,15 @@ export function OverviewPage() {
   const [isOptimizing, setIsOptimizing] = useState(false);
 
   // Stale-data alert banner. Persisted to localStorage so it survives page
-  // navigation and app restarts — the user should keep seeing "please
-  // Optimize" until they actually click the button. Cleared inside
-  // handleOptimize().
-  const [optimizeAlert, setOptimizeAlert] = useState<string | null>(() => {
-    try { return localStorage.getItem("overviewOptimizeAlert"); } catch { return null; }
-  });
+  // navigation and app restarts — the user keeps seeing it until a run
+  // succeeds (the automatic one, or the button). Cleared by a successful
+  // handleOptimize(), and by the runner through the subscription below.
+  const [optimizeAlert, setOptimizeAlert] = useState<string | null>(() => readOptimizeAlert());
+  // The automatic re-plan's state: while a run is pending or in flight, the
+  // input-change check below holds back its alert — the run is about to make
+  // the inputs match again, and a one-second flash of "please Optimize" would
+  // only be noise. Idle (no provider) in the lock-in tests.
+  const autoOptimize = useAutoOptimize();
   // Result toast. Message and open flag are split (see CLAUDE.md → "Toast
   // pattern") so the text doesn't collapse during the exit animation.
   // Severity lets the same Snackbar report failures — the old success-only
@@ -143,6 +138,10 @@ export function OverviewPage() {
       else localStorage.removeItem("overviewOptimizeAlert");
     } catch {}
   }, [optimizeAlert]);
+  // The automatic re-plan writes the same stored text (a failure message, or
+  // null on success) from whatever page the user is on; pick its changes up
+  // while this page is mounted.
+  useEffect(() => subscribeOptimizeAlert(setOptimizeAlert), []);
 
   // ── Data queries ──
   // `successNotification: false, errorNotification: false` is required
@@ -207,7 +206,7 @@ export function OverviewPage() {
   // Minimum weekly surplus target (cents). Default $300 if unset.
   // DB column is `wifeWeeklyTargetCents` for backward compat with earlier
   // installs — the field is user-facing as "Surplus Target".
-  const targetSurplusCents = Number(settings?.wifeWeeklyTargetCents ?? 30000);
+  const targetSurplusCents = surplusTargetCentsOf(settings);
 
   // ── Top-of-page summary totals ──
   // High-overview trio at the very top: how much money the user is committed
@@ -255,22 +254,24 @@ export function OverviewPage() {
   );
 
   // ── Change detection → stale-data alert ──
-  // Signatures of every Optimize input. Anything that changes the plan's
-  // inputs must be reflected here, or edits to it won't raise the alert.
-  const inputSigs: InputSignatures = useMemo(() => ({
-    bills: bills.map((b: any) => `${b.id}:${b.amount}:${b.dueDate}:${b.neverSplit ? 1 : 0}`).sort().join(","),
-    incomes: incomes.map((i: any) => `${i.id}:${i.amount}:${i.payDay}:${i.paymentCycle}:${i.payWeekOffset ?? 0}`).sort().join(","),
-    personals: personalBills.map((p: any) => `${p.id}:${p.amount}:${p.dueDate}:${p.repeatWeekly ? 1 : 0}:${p.weekOfMonth ?? ""}`).sort().join(","),
-    surplusTarget: targetSurplusCents,
-  }), [bills, incomes, personalBills, targetSurplusCents]);
+  // Signatures of every Optimize input (lib/optimize-run.ts — the runner
+  // computes the very same ones from the API). Anything that changes the
+  // plan's inputs must be reflected there, or edits to it won't raise the
+  // alert or start an automatic run.
+  const inputSigs: InputSignatures = useMemo(
+    () => computeInputSignatures({ bills, incomes, personalBills, targetSurplusCents }),
+    [bills, incomes, personalBills, targetSurplusCents],
+  );
 
-  // Persist the inputs as the new "last optimized" baseline. Shared by the
-  // first-run adoption below and a successful Optimize.
-  const saveOptimizedSig = (sig: InputSignatures) =>
+  // Persist the inputs (as their JSON) as the new "last optimized" baseline.
+  // Shared by the first-run adoption below and a successful Optimize. Its
+  // only key is `optimizedInputsSig`, which the automatic re-plan's trigger
+  // ignores — otherwise every run would schedule the next one.
+  const saveOptimizedSig = (sigJson: string) =>
     updateSettings({
       resource: "AppSettings",
       id: "global",
-      values: { optimizedInputsSig: JSON.stringify(sig) },
+      values: { optimizedInputsSig: sigJson },
       successNotification: false,
       errorNotification: false,
     });
@@ -309,100 +310,56 @@ export function OverviewPage() {
     if (!baseline) {
       if (!baselineAdoptedRef.current) {
         baselineAdoptedRef.current = true;
-        saveOptimizedSig(inputSigs).catch((err) => console.error("Saving optimize baseline failed:", err));
+        saveOptimizedSig(JSON.stringify(inputSigs)).catch((err) => console.error("Saving optimize baseline failed:", err));
       }
       return;
     }
 
-    if (inputSigs.bills !== baseline.bills) {
-      setOptimizeAlert("Bills were added or updated.");
-    } else if (inputSigs.incomes !== baseline.incomes) {
-      setOptimizeAlert("Income was added or updated.");
-    } else if (inputSigs.personals !== baseline.personals) {
-      setOptimizeAlert("Personal expenses were added or updated.");
-    } else if (inputSigs.surplusTarget !== baseline.surplusTarget) {
-      setOptimizeAlert("Weekly surplus target was changed.");
+    const change = describeInputChange(inputSigs, baseline);
+    if (change) {
+      // An automatic re-plan is on its way (or running): it will make the
+      // inputs match again in a moment, or leave its own failure alert.
+      if (autoOptimize.busy) return;
+      // A failed automatic run's text carries the error — keep it over the
+      // generic "were added or updated".
+      setOptimizeAlert((prev) => (isAutoOptimizeFailureAlert(prev) ? prev : change));
     } else {
-      // Inputs match what was last optimized — drop any stale change alert.
-      setOptimizeAlert((prev) => (prev && INPUT_CHANGE_ALERTS.has(prev) ? null : prev));
+      // Inputs match what was last optimized — drop any stale change alert
+      // (a failed automatic run has nothing left to re-plan either).
+      setOptimizeAlert((prev) => (prev && (isInputChangeAlert(prev) || isAutoOptimizeFailureAlert(prev)) ? null : prev));
     }
-  }, [inputSigs, settings?.optimizedInputsSig, hasLegacySplits, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading, splitsQuery.isLoading]);
+  }, [inputSigs, settings?.optimizedInputsSig, hasLegacySplits, autoOptimize.busy, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading, splitsQuery.isLoading]);
 
   // ── Optimize action ──
-  // PHASE A (planOptimize, lib/optimize-plan.ts) plans the next
-  // OPTIMIZE_HORIZON_MONTHS months with zero DB writes; PHASE B below applies
-  // the deletes/creates. Locked-week preservation and every fail-loud guard
-  // live in planOptimize — see its doc comment.
+  // The button's run: `runOptimize` (lib/optimize-run.ts) is PHASE A
+  // (planOptimize — zero DB writes; locked-week preservation and every
+  // fail-loud guard live there) followed by PHASE B (the whole plan as ONE
+  // batch request / ONE transaction) and the baseline save, success only.
+  // The automatic re-plan calls the very same function, so the two cannot
+  // drift; this one adds the toast.
   const handleOptimize = async () => {
     if (isOptimizing || !primaryIncome) return;
     setIsOptimizing(true);
     try {
-      // PHASE A — plan every month WITHOUT touching the DB (pure function in
-      // lib/optimize-plan.ts). The balance algorithm + underfunded / locked-
-      // week assertions can throw; doing all of that before the first delete
-      // means a failure leaves the DB exactly as it was, instead of the old
-      // behaviour (delete a month's rows, then die halfway through
-      // re-creating them — which silently dropped two split bills from
-      // Oct 2026 and inflated that week's surplus).
-      const writePlans = planOptimize({
-        today,
-        bills,
-        personalBills,
-        incomes,
-        primaryIncome,
-        splitRows: splitRowsRaw,
-        targetSurplusCents,
-      });
+      await runOptimize(
+        {
+          today,
+          bills,
+          personalBills,
+          incomes,
+          primaryIncome,
+          splitRows: splitRowsRaw,
+          targetSurplusCents,
+        },
+        inputSigs,
+        {
+          saveBaseline: (sigJson) => saveOptimizedSig(sigJson),
+          invalidateSplits: () => invalidate({ resource: "BillSplit", invalidates: ["list", "many"] }),
+        },
+      );
 
-      // PHASE B — apply, as ONE request and ONE database transaction
-      // (lib/batch-api.ts → POST /api/batch). Delete-then-create is
-      // intentional: there's no `upsert` for a composite key that includes
-      // occurrenceCoord, and the algorithm may add/remove splits (not just
-      // change amounts). Locked-week rows are excluded from `toDelete` so they
-      // survive. Each month's deletes precede its creates, as they always did,
-      // so a replaced row never collides with the unique key it is replacing.
-      //
-      // Until Nov 6 2026 every row was its own request (≈2000 for a full
-      // re-plan, each its own commit). With sync on, the background sync kept
-      // starting in the middle of that run, and every sync holds the database
-      // lock for its round trips to the cloud — so the remaining writes and
-      // all of the UI's reads queued behind the network: the app froze, and
-      // the thousands of WAL frames those commits left ended in a sync
-      // conflict. One transaction = one commit, a handful of frames, and one
-      // push once it is done. All or nothing, too: a failure anywhere leaves
-      // the database exactly as it was, like a Phase A failure.
-      const operations: BatchOperation[] = [];
-      for (const plan of writePlans) {
-        for (const o of plan.toDelete) {
-          operations.push({ op: "delete", resource: "BillSplit", id: o.id });
-        }
-        for (const a of plan.toCreate) {
-          operations.push({
-            op: "create",
-            resource: "BillSplit",
-            values: {
-              billId: a.billId,
-              monthKey: plan.mk,
-              weekIndex: a.weekIndex,
-              amountCents: a.amountCents,
-              occurrenceCoord: a.occurrenceCoord,
-            },
-          });
-        }
-      }
-      if (operations.length > 0) {
-        await applyBatch(operations);
-        // The batch bypasses Refine's data provider, so do what useCreate /
-        // useDelete did for us: one notice to the sync indicator (spinning
-        // arrows, then a single push of the whole plan) and a refetch of the
-        // BillSplit lists every page reads.
-        notifyLocalWrite();
-        invalidate({ resource: "BillSplit", invalidates: ["list", "many"] });
-      }
-
-      // Success only — the alert and the baseline signature are cleared/saved
-      // ONLY when every write landed, so a failed run keeps nagging.
-      await saveOptimizedSig(inputSigs);
+      // Success only — the alert is cleared ONLY when every write landed, so
+      // a failed run keeps nagging.
       setOptimizeAlert(null);
       showToast(`Pay weeks optimized across the next ${OPTIMIZE_HORIZON_MONTHS} months!`, "success");
     } catch (err: any) {
@@ -686,7 +643,9 @@ export function OverviewPage() {
               {optimizeAlert}
             </Typography>
             <Typography sx={{ color: "text.secondary", fontSize: "0.78rem", mt: 0.25 }}>
-              Re-optimize your pay week schedule to reflect the latest changes.
+              {isAutoOptimizeFailureAlert(optimizeAlert)
+                ? "The pay week schedule could not be re-planned by itself after your last change — run it again here."
+                : "Re-optimize your pay week schedule to reflect the latest changes."}
             </Typography>
           </Box>
           <Button

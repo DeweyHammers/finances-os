@@ -52,6 +52,7 @@ import { SandboxBanner } from "../components/sandbox/SandboxBanner";
 import { SettingsDialogProvider } from "../components/settings/SettingsDialogContext";
 import { SettingsDialog } from "../components/settings/SettingsDialog";
 import { SyncStatusProvider, withSyncWriteNotices } from "../lib/use-connection-status";
+import { AutoOptimizeProvider, withAutoOptimizeTriggers } from "../lib/auto-optimize";
 
 // IPC bridge address — the Electron main process spins up an in-memory REST
 // server on this port that translates HTTP calls into Prisma queries against
@@ -247,8 +248,13 @@ function App({ children }: { children: ReactNode }) {
   // main process listens on that port and translates them to Prisma queries.
   // Memoized so Refine's internal effect deps stay stable across renders.
   // Wrapped so every successful write reports to the sync indicator (the
-  // spinning arrows after a save) — see lib/use-connection-status.ts.
-  const memoizedDataProvider = useMemo(() => withSyncWriteNotices(dataProvider(API_URL)), []);
+  // spinning arrows after a save) — see lib/use-connection-status.ts — and so
+  // a write to one of Optimize's inputs (Bill, Personal, Income, AppSettings)
+  // schedules the automatic re-plan — see lib/auto-optimize.tsx.
+  const memoizedDataProvider = useMemo(
+    () => withAutoOptimizeTriggers(withSyncWriteNotices(dataProvider(API_URL))),
+    [],
+  );
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
@@ -279,6 +285,11 @@ function App({ children }: { children: ReactNode }) {
         {/* One poller for the sync status (sider row + Settings); see
             lib/use-connection-status.ts. */}
         <SyncStatusProvider>
+        {/* The automatic Optimize runner (one per window): re-plans the pay
+            weeks about a second after any input write; see lib/auto-optimize.tsx.
+            Inside Refine (its hooks) and SandboxProvider (it waits out a
+            sandbox switch). */}
+        <AutoOptimizeProvider>
         <SettingsDialogProvider>
         <ThemedLayout
           Header={CustomHeader}
@@ -310,6 +321,7 @@ function App({ children }: { children: ReactNode }) {
             Overview's surplus pill open it — see components/settings. */}
         <SettingsDialog />
         </SettingsDialogProvider>
+        </AutoOptimizeProvider>
         </SyncStatusProvider>
         {/* KBar command palette (Cmd/Ctrl+K) — the provider wraps everything
             in <Providers> below; this renderer just mounts the overlay. */}
