@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Finances OS — phone data-path spike</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; background: #0f172a; color: #f8fafc; font: 15px/1.5 "Inter", "Segoe UI", sans-serif; }
+      main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      p.lead { color: #94a3b8; margin: 0 0 20px; }
+      fieldset { border: 1px solid #334155; border-radius: 8px; margin: 0 0 16px; padding: 14px 16px 16px; }
+      legend { color: #94a3b8; padding: 0 6px; font-size: 13px; }
+      label { display: block; font-size: 13px; color: #94a3b8; margin: 8px 0 4px; }
+      input { width: 100%; box-sizing: border-box; padding: 9px 10px; border-radius: 6px; border: 1px solid #475569; background: #1e293b; color: inherit; font: inherit; }
+      .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      button { padding: 9px 14px; border-radius: 6px; border: 1px solid #475569; background: #1e293b; color: inherit; font: inherit; cursor: pointer; }
+      button.primary { background: #3dbc83; border-color: #3dbc83; color: #052e1b; font-weight: 600; }
+      button.danger { border-color: #f43f5e; color: #fda4af; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      .hint { color: #94a3b8; font-size: 13px; margin: 8px 0 0; }
+      #target { font-weight: 600; }
+      #target.real { color: #fbbf24; }
+      #target.mock { color: #3dbc83; }
+      pre { background: #020617; border: 1px solid #334155; border-radius: 8px; padding: 12px; margin: 0; min-height: 180px; white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+      .ok { color: #4ade80; } .bad { color: #fb7185; } .dim { color: #94a3b8; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Phone data-path spike</h1>
+      <p class="lead">
+        Runs the phone app's planned data path from a browser: the shared data layer on
+        <code>@libsql/client/web</code>, straight to the cloud database. Nothing you type here is saved —
+        not in a file, not in the browser. Close the tab and it is gone.
+      </p>
+
+      <fieldset>
+        <legend>1 · Database</legend>
+        <label for="url">Database URL</label>
+        <input id="url" autocomplete="off" spellcheck="false" placeholder="libsql://your-database.turso.io   or   http://127.0.0.1:18081 (the mock)" />
+        <label for="token">Token</label>
+        <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="paste the token (any text for the mock)" />
+        <p class="hint">Talking to: <span id="target" class="dim">nothing yet</span></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>2 · Read only (changes nothing)</legend>
+        <div class="row"><button id="read" class="primary">Run the read checks</button></div>
+        <p class="hint">Connects, checks the schema version, counts rows, and times one bundled read. No row contents are shown.</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>3 · Write test (one harmless row)</legend>
+        <div class="row">
+          <button id="add" disabled>Add the test payee</button>
+          <button id="rename" disabled>Rename it</button>
+          <button id="remove" class="danger" disabled>Delete the test payee</button>
+        </div>
+        <p class="hint">
+          Writes a single <strong>Payee</strong> named “Phone spike test …” through the shared data layer. A payee touches no balance,
+          no plan and no bill. Enabled once the read checks pass. Delete removes every payee whose name starts with “Phone spike test”.
+        </p>
+      </fieldset>
+
+      <pre id="log" aria-live="polite"></pre>
+    </main>
+    <script type="module" src="./spike.ts"></script>
+  </body>
+</html>

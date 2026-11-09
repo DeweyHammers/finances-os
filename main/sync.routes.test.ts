@@ -385,6 +385,98 @@ describe("while synced", () => {
     expect(await other.bills()).toEqual(["From the PC", "From the phone", "Seed"]);
   });
 
+  // plans/phone-app.md, step 1(b). The phone app has no local copy: it sends
+  // plain SQL to the cloud over Hrana (HTTP), the way @libsql/client/web does
+  // from its WebView. The "other device" above is a second FRAME-PUSHING
+  // copy, and every Hrana write the app itself makes is followed by fetching
+  // the copy again — so "SQL written on the cloud, then an ordinary pull on
+  // this PC" was never exercised before Nov 9 2026. Pinned here against the
+  // mock (whose Hrana writes land in its frame log); the user's live run
+  // against Turso is what proves the real server does the same.
+  describe("a phone that writes straight to the cloud (Hrana over HTTP)", () => {
+    /** The phone's whole transport: the browser build of @libsql/client. */
+    async function phone() {
+      const { createClient } = await import("@libsql/client/web");
+      return createClient({ url: cloud.url, authToken: TOKEN });
+    }
+    const exportsSeen = async () => (await cloud.snapshot()).requests.filter((r) => r.startsWith("GET /export"));
+    const backups = () => fs.readdirSync(tmpDir).filter((f) => f.endsWith(".bak"));
+
+    it("its write reaches this PC through an ordinary pull: no conflict, no copy fetched again, and this PC's next save pushes cleanly", async () => {
+      const client = await phone();
+      try {
+        // One autocommitted statement with RETURNING: the data layer's create.
+        const added = await client.execute({
+          sql: 'INSERT INTO "Bill" ("id", "name", "amount", "dueDate") VALUES (?, ?, 1, 1) RETURNING "id"',
+          args: ["phone-1", "From the phone"],
+        });
+        expect(added.rows).toHaveLength(1);
+        expect(await apiBillNames()).toEqual(["Seed"]);
+
+        await cloud.clearRequests();
+        const pulled = await api().post("/api/sync/now");
+        expect(pulled.status).toBe(200);
+        expect(pulled.body).toMatchObject({ state: "synced", conflict: null, pendingChanges: 0 });
+        expect(await apiBillNames()).toEqual(["From the phone", "Seed"]);
+        // An ordinary pull: the copy was not thrown away and bootstrapped again.
+        expect(await exportsSeen()).toEqual([]);
+        expect(backups()).toEqual([]);
+
+        // An interactive transaction over several HTTP requests: the data
+        // layer's remove (BEGIN, DELETE … RETURNING, COMMIT).
+        const tx = await client.transaction("write");
+        const gone = await tx.execute({ sql: 'DELETE FROM "Bill" WHERE "id" = ? RETURNING "id"', args: ["phone-1"] });
+        expect(gone.rows).toHaveLength(1);
+        await tx.commit();
+        // …and one that is rolled back leaves nothing behind.
+        const undone = await client.transaction("write");
+        await undone.execute({ sql: 'INSERT INTO "Bill" ("id", "name", "amount", "dueDate") VALUES (?, ?, 1, 1)', args: ["phone-2", "Never saved"] });
+        await undone.rollback();
+        expect(await billNames()).toEqual(["Seed"]);
+        expect((await api().post("/api/sync/now")).body).toMatchObject({ state: "synced", conflict: null });
+        expect(await apiBillNames()).toEqual(["Seed"]);
+
+        // This PC writes on top of what it pulled, and the phone reads it back.
+        await api().post("/api/Bill").send({ name: "From the PC", amount: 2, dueDate: 2 });
+        const pushed = await api().post("/api/sync/now");
+        expect(pushed.status).toBe(200);
+        expect(pushed.body).toMatchObject({ state: "synced", conflict: null, pendingChanges: 0 });
+        const seenByPhone = await client.execute('SELECT "name" FROM "Bill" ORDER BY "name"');
+        expect(seenByPhone.rows.map((r) => r.name)).toEqual(["From the PC", "Seed"]);
+        expect(await exportsSeen()).toEqual([]);
+        expect(backups()).toEqual([]);
+      } finally {
+        client.close();
+      }
+    });
+
+    it("its write while this PC holds an unpushed change is the conflict, and 'cloud' is the answer that keeps the phone's row", async () => {
+      const client = await phone();
+      try {
+        await client.execute({
+          sql: 'INSERT INTO "Bill" ("id", "name", "amount", "dueDate") VALUES (?, ?, 1, 1)',
+          args: ["phone-1", "From the phone"],
+        });
+        // This PC has not pulled it yet and saves on top of the old state.
+        await api().post("/api/Bill").send({ name: "Mine", amount: 1, dueDate: 1 });
+        const res = await api().post("/api/sync/now");
+        expect(res.status).toBe(409);
+        expect(res.body.code).toBe("SYNC_CONFLICT");
+
+        const settled = await api().post("/api/sync/resolve").send({ keep: "cloud" });
+        expect(settled.status).toBe(200);
+        expect(settled.body).toMatchObject({ state: "synced", conflict: null });
+        expect(await apiBillNames()).toEqual(["From the phone", "Seed"]);
+        // This PC's unpushed row is in the backup, not lost.
+        const bak = libsql.openLibsql(settled.body.backupPath);
+        expect((await bak.exec('SELECT name FROM "Bill" ORDER BY name')).map((r) => r.name)).toEqual(["Mine", "Seed"]);
+        await bak.close();
+      } finally {
+        client.close();
+      }
+    });
+  });
+
   it("keeps working read-write offline, counts the changes, and pushes them when the cloud is back", async () => {
     await cloud.set("reachable", false);
     expect((await api().post("/api/Bill").send({ name: "Offline write", amount: 1, dueDate: 1 })).status).toBe(200);

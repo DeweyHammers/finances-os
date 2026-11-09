@@ -17,6 +17,76 @@ now the most important line in this plan), "Data freshness" was rewritten
 for the automatic Optimize, the APK follows the version rule, and two risks
 were added.
 
+## Spike results (step 1)
+
+**Against the mock — done 2026-11-09, branch `phone-spike`.**
+
+- **(b) Cloud → desktop.** Two tests in `main/sync.routes.test.ts` ("a phone
+  that writes straight to the cloud"): a row written by `@libsql/client/web`
+  over Hrana is pulled by `POST /api/sync/now` with no conflict, no
+  `GET /export` (the copy is not fetched again) and no `.bak`; an interactive
+  transaction commits and a rolled-back one leaves nothing; this PC's next
+  save then pushes cleanly and the phone reads it back. The same phone write
+  while this PC holds an unpushed row is `SYNC_CONFLICT`, and `keep: "cloud"`
+  keeps the phone's row (the PC's goes to the `.bak`).
+- **(a) Phone → cloud, in a real browser.** `phone/spike/` (page on
+  `http://localhost:8890`, `.claude/launch.json` → `phone-spike`; the mock is
+  `sync-mock` on 18081) runs the shared `DataStore` unchanged on
+  `turso-executor.ts`: list, create (one INSERT … RETURNING), update (one
+  UPDATE … RETURNING) and remove (BEGIN, DELETE … RETURNING, COMMIT as one
+  Hrana interactive transaction) all work cross-origin; 22 counts in one
+  `client.batch` is one request.
+- **The mock had to learn two things** (`tests/helpers/libsql-sync-server.ts`):
+  CORS (a browser page is another origin; the plan's first draft assumed it
+  already answered preflights — it did not) and Hrana **streams with a
+  baton** (an interactive transaction spans several HTTP requests; the mock
+  used to close the session after every request).
+- **Found: the schema gate must run BEFORE the data layer sees the
+  connection.** `DataStore` calls `prepareDatabase` on first use, which
+  creates the whole schema in an empty database and stamps a newer
+  `SchemaVersion` into an older one. Right for the desktop's own file; on a
+  phone it would build tables in a mistyped database or "migrate" the cloud
+  behind the desktop's back. The spike page checks on the bare connection —
+  no tables, or a version other than `SCHEMA_VERSION` → stop, nothing written
+  — and only then constructs the store (the check is then a no-op). The
+  phone's `connection.ts` must do the same; verified in the browser with the
+  mock stamped as version 2 (writes stayed disabled).
+
+**Against the user's Turso database — PASSED 2026-11-09** (the user pasted
+the URL and token into the spike page; the installed desktop app, 0.5.0, was
+open and "Synced"; the test row was a **payee** "Phone spike test …" — a
+payee touches no balance, plan or bill, so it replaced the test transaction
+this plan first named):
+
+| Step | Result |
+| --- | --- |
+| Browser → Turso, cross-origin (page origin `http://localhost:8890`) | Works. Turso answers the preflight; no CapacitorHttp route needed for a browser origin (the WebView's `https://localhost` is still to be seen on the phone). |
+| Speed | ~50 ms per request once connected (first request ~300 ms); 22 statements in one `client.batch` = one ~57 ms request; create 94 ms, update 122 ms, remove (interactive transaction, 3 round trips) 388 ms. |
+| Schema gate | Cloud 1 = build 1; the store's first use wrote nothing. |
+| Phone add → desktop | The desktop's next timed sync pulled the row: state `synced`, no conflict, no copy fetched again (its API listed the payee, count 39 → 40). **The go/no-go holds on real Turso.** |
+| Desktop write on top | The user renamed the payee on the desktop; its push went through, `pendingChanges` 0, no conflict. |
+| Desktop → phone | The page then read the desktop's new name and renamed it again (update), then removed it (transaction). |
+| Phone delete → desktop | Gone from the desktop's copy after its next sync (count back to 39), still `synced`. |
+
+Two things the live run turned up:
+
+- **The desktop does not show what a sync pulled.** The row was in the
+  desktop's database within a minute, but the open page kept its old list
+  (the user looked and did not see it): nothing invalidates Refine's caches
+  when a background sync brings frames in — until now only this PC ever
+  wrote. With a phone this is a real gap. **Desktop change, with piece 4:**
+  when a sync reports pulled frames, invalidate the renderer's queries (the
+  sync status the renderer already polls can carry a "data changed" counter).
+  Also decide the pull cadence: today 60 s while idle, 3 s after a local
+  save, and on a click of the sync dot; syncing when the window regains
+  focus is the natural extra ("I just used the phone, now I am back").
+- **One 20-second stall, cause unknown.** The first request after the
+  bundled `client.batch(…, "read")` took 20.05 s (the same step took 45 ms
+  on the mock); everything before and after was ~50 ms. It may be Turso
+  holding the read batch's stream, or a one-off. To repeat before the
+  Overview's bundled read is built on `client.batch` (piece 3): run the read
+  checks several times, with and without the batch first.
+
 ## Decisions (user, 2026-11-02)
 
 | Decision | Choice |
@@ -128,7 +198,8 @@ phone/
 - **Settings storage.** URL + token in `@capacitor/preferences` (app-private
   storage on the phone; the user's own device). The token never appears in
   logs or screens. Forget deletes both and clears the query cache.
-- **Schema gate.** On connect and once per app start the phone reads
+- **Schema gate — before the store exists** (see "Spike results": the
+  store's first use would otherwise create or stamp the schema). On connect and once per app start the phone reads
   `SchemaVersion` and compares it with its own `SCHEMA_VERSION`. Cloud
   newer → read-only with "Update the phone app" (the desktop was updated
   first); cloud older → "Update the desktop" and read-only too. Same rule
@@ -252,7 +323,8 @@ user through it if that day comes.
 
 - **`npm run phone:dev`** — Vite on port 8890 at 412×915 in the browser,
   connected to the sync mock (`npx tsx tests/helpers/libsql-sync-server-child.ts
-  --port 18081`, which speaks Hrana) filled with the demo tour's FAKE data
+  --port 18081`; since the spike it answers CORS preflights and keeps Hrana
+  streams open, which a browser page needs) filled with the demo tour's FAKE data
   (`scripts/demo/`). dev.db and PROD are never opened. Every screen is
   walked here before an APK is built. **Never type the user's real Turso URL
   or token into the browser check**; the real database is for the phone.

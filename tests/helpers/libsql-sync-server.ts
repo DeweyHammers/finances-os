@@ -71,6 +71,23 @@ export interface SyncServerSnapshot {
   hang: boolean;
 }
 
+/** A temporary plain copy of the cloud's contents that statements run on. */
+interface OpenSession {
+  db: Database.Database;
+  file: string;
+  /** Lets the next session start (see `openSession`). */
+  release: () => void;
+  /** Set while a Hrana stream holds it open between requests. */
+  idle?: NodeJS.Timeout;
+}
+
+/**
+ * How long a Hrana stream may sit open between two requests before the mock
+ * rolls it back (Turso closes idle streams too). A stream holds the session
+ * turn, so an abandoned one must not block the next write for long.
+ */
+const STREAM_IDLE_MS = 10_000;
+
 export class LibsqlSyncServer {
   generation = 1;
   /** The database file at the start of the current generation. */
@@ -124,10 +141,15 @@ export class LibsqlSyncServer {
     this.reachable = true;
     this.hang = false;
     this.releaseHung();
+    // Streams left open belong to the old contents: roll them back. Not
+    // awaited (reset is synchronous for its callers); the next session waits
+    // for its turn behind them anyway.
+    void this.dropStreams();
   }
 
   async close(): Promise<void> {
     this.releaseHung();
+    await this.dropStreams();
     if (this.server) {
       this.server.closeAllConnections?.();
       await new Promise<void>((resolve) => this.server!.close(() => resolve()));
@@ -181,39 +203,84 @@ export class LibsqlSyncServer {
    * append the WAL frames it committed to the log. Sessions are serialised:
    * two at once would both start from the same frames.
    */
-  private session<T>(fn: (db: Database.Database) => T): Promise<T> {
-    const run = async (): Promise<T> => {
-      const file = path.join(this.tmp, `session-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  private async session<T>(fn: (db: Database.Database) => T): Promise<T> {
+    const s = await this.openSession();
+    let ok = false;
+    try {
+      const result = fn(s.db);
+      ok = true;
+      return result;
+    } finally {
+      await this.closeSession(s, ok);
+    }
+  }
+
+  /**
+   * Open a temporary plain copy of the current contents, once every earlier
+   * session has finished (its turn in `sessionChain`). The caller MUST hand
+   * it to `closeSession`, which is what lets the next session start. Split
+   * out of `session()` on Nov 9 2026 so a Hrana stream the client keeps open
+   * across several HTTP requests (an interactive transaction — what the
+   * phone app's data layer uses for BEGIN … COMMIT) can hold one.
+   */
+  private async openSession(): Promise<OpenSession> {
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => (release = resolve));
+    const before = this.sessionChain;
+    this.sessionChain = before.then(() => mine);
+    await before;
+    const file = path.join(this.tmp, `session-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    let db: Database.Database | null = null;
+    try {
       fs.writeFileSync(file, this.materialize());
-      const db = new Database(file);
-      try {
-        db.exec("PRAGMA journal_mode = WAL");
-        db.exec("PRAGMA wal_autocheckpoint = 0");
-        db.exec("PRAGMA foreign_keys = ON");
-        const result = fn(db);
-        this.frames.push(...harvestFrames(`${file}-wal`));
-        return result;
-      } finally {
-        // libsql frees its statements only when GC collects them, and the
-        // file stays open until then (see backends/libsql.ts → close); the
-        // temp files are swept at close() anyway, so a failed delete is fine.
-        collectGarbage();
-        await new Promise((r) => setImmediate(r));
-        db.close();
-        collectGarbage();
-        await new Promise((r) => setImmediate(r));
-        for (const f of [file, `${file}-wal`, `${file}-shm`]) {
-          try {
-            fs.rmSync(f, { force: true });
-          } catch {
-            /* swept at close() */
-          }
+      db = new Database(file);
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("PRAGMA wal_autocheckpoint = 0");
+      db.exec("PRAGMA foreign_keys = ON");
+      return { db, file, release };
+    } catch (e) {
+      db?.close();
+      release();
+      throw e;
+    }
+  }
+
+  /**
+   * Close a session. With `harvest`, the WAL frames it COMMITTED are appended
+   * to the log first (a transaction left open is rolled back: its frames sit
+   * after the last commit frame and `harvestFrames` drops them).
+   */
+  private async closeSession(s: OpenSession, harvest: boolean): Promise<void> {
+    if (s.idle) clearTimeout(s.idle);
+    try {
+      if (s.db.inTransaction) s.db.exec("ROLLBACK");
+      // Before close(): closing the last connection checkpoints the WAL away.
+      if (harvest) this.frames.push(...harvestFrames(`${s.file}-wal`));
+    } finally {
+      // libsql frees its statements only when GC collects them, and the
+      // file stays open until then (see backends/libsql.ts → close); the
+      // temp files are swept at close() anyway, so a failed delete is fine.
+      collectGarbage();
+      await new Promise((r) => setImmediate(r));
+      s.db.close();
+      collectGarbage();
+      await new Promise((r) => setImmediate(r));
+      for (const f of [s.file, `${s.file}-wal`, `${s.file}-shm`]) {
+        try {
+          fs.rmSync(f, { force: true });
+        } catch {
+          /* swept at close() */
         }
       }
-    };
-    const next = this.sessionChain.then(run, run);
-    this.sessionChain = next.catch(() => {});
-    return next;
+      s.release();
+    }
+  }
+
+  /** Roll back and close every stream a client left open (reset / close). */
+  private async dropStreams(): Promise<void> {
+    const open = Array.from(this.streams.values());
+    this.streams.clear();
+    for (const s of open) await this.closeSession(s, false);
   }
 
   /** Run statements "in the cloud" inside one transaction and record the frames they produce. */
@@ -264,6 +331,21 @@ export class LibsqlSyncServer {
     }
     if (this.hang) {
       this.pending.push(res);
+      return;
+    }
+    // CORS, for a browser page on another origin (the phone app's dev check
+    // talks to this mock straight from the page, as it will to Turso from the
+    // app's WebView). The app's own clients run in Node and never send a
+    // preflight, so this changes nothing for them — and an OPTIONS request is
+    // not recorded in `requests`, which the tests assert on.
+    res.setHeader("access-control-allow-origin", "*");
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, {
+        "access-control-allow-methods": "GET, POST, OPTIONS",
+        "access-control-allow-headers": req.headers["access-control-request-headers"] ?? "authorization, content-type",
+        "access-control-max-age": "600",
+      });
+      res.end();
       return;
     }
     const url = new URL(req.url ?? "/", this.url);
@@ -393,18 +475,73 @@ export class LibsqlSyncServer {
   /** SQL texts stored by id (`store_sql`), which @libsql/client uses for batches. */
   private readonly storedSql = new Map<number, string>();
 
-  /** One Hrana v2 pipeline: every request runs in order in one session. */
-  private pipeline(body: { requests: any[] }): Promise<unknown> {
-    return this.session((db) => {
+  /** Hrana streams a client left open: the baton it must send next → the session it holds. */
+  private readonly streams = new Map<string, OpenSession>();
+
+  /**
+   * One Hrana v2 pipeline: every request runs in order on one stream.
+   *
+   * A stream is one session. A client that ends its pipeline with `close`
+   * (every plain `execute` / `batch` of @libsql/client does) gets the old
+   * behaviour: one request, one session, `baton: null`. A client that does
+   * NOT close — `client.transaction()`, an interactive transaction spread
+   * over several HTTP requests — gets a baton back and the session stays
+   * open for the request that presents it (Nov 9 2026, for the phone app:
+   * its data layer's BEGIN … COMMIT runs this way over HTTP). Frames reach
+   * the log when the stream closes; an idle or abandoned stream is rolled
+   * back after STREAM_IDLE_MS. While a stream is open no other session
+   * starts (one writer at a time, like SQLite). Not modelled: a frame PUSH
+   * arriving while a stream is open — the two would both extend the same
+   * log; the tests never do that.
+   */
+  private async pipeline(body: { baton?: string | null; requests: any[] }): Promise<unknown> {
+    let s: OpenSession;
+    if (body.baton) {
+      const open = this.streams.get(body.baton);
+      if (!open) throw new Error("stream not found: the baton is unknown, already used, or the stream was closed for being idle");
+      this.streams.delete(body.baton);
+      if (open.idle) clearTimeout(open.idle);
+      open.idle = undefined;
+      s = open;
+    } else {
+      s = await this.openSession();
+    }
+    const db = s.db;
+    let closeAsked = false;
+    let response: { results: unknown[] };
+    try {
+      response = this.runPipeline(db, body.requests, () => (closeAsked = true));
+    } catch (e) {
+      await this.closeSession(s, false);
+      throw e;
+    }
+    if (closeAsked) {
+      await this.closeSession(s, true);
+      return { baton: null, base_url: null, results: response.results };
+    }
+    const baton = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    s.idle = setTimeout(() => {
+      if (this.streams.delete(baton)) void this.closeSession(s, false);
+    }, STREAM_IDLE_MS);
+    s.idle.unref?.();
+    this.streams.set(baton, s);
+    return { baton, base_url: null, results: response.results };
+  }
+
+  private runPipeline(db: Database.Database, requests: any[], onClose: () => void): { results: unknown[] } {
+    {
       const sqlOf = (stmt: any): string => {
         if (typeof stmt.sql === "string") return stmt.sql;
         const stored = this.storedSql.get(stmt.sql_id);
         if (stored === undefined) throw new Error(`unknown sql_id ${stmt.sql_id}`);
         return stored;
       };
-      const results = body.requests.map((request) => {
+      const results = requests.map((request) => {
         try {
-          if (request.type === "close") return { type: "ok", response: { type: "close" } };
+          if (request.type === "close") {
+            onClose();
+            return { type: "ok", response: { type: "close" } };
+          }
           if (request.type === "store_sql") {
             this.storedSql.set(request.sql_id, request.sql);
             return { type: "ok", response: { type: "store_sql" } };
@@ -459,8 +596,8 @@ export class LibsqlSyncServer {
           return { type: "error", error: { message: e?.message ?? String(e) } };
         }
       });
-      return { baton: null, base_url: null, results };
-    });
+      return { results };
+    }
   }
 }
 
@@ -582,11 +719,22 @@ export class SyncServerProcess {
       if (msg.error) w.reject(new Error(msg.error));
       else w.resolve(msg.result);
     });
-    child.on("exit", () => {
-      for (const w of Array.from(this.waiting.values())) w.reject(new Error("sync server process exited"));
+    child.on("exit", (code, signal) => {
+      // Say HOW it went (a native crash has no JS error to print: on Windows
+      // an access violation is exit code 3221225477 = 0xC0000005), and
+      // remember it: every later call must fail at once. Without this a
+      // crashed child left each remaining test's hooks waiting out their
+      // full timeout on a message that could never come — the run looked
+      // hung for minutes (seen Nov 9 2026: the child died mid-pipeline about
+      // once in eight runs of sync.routes.test.ts, old and new mock alike).
+      this.exited = `sync server process exited (code ${code ?? "none"}, signal ${signal ?? "none"})`;
+      for (const w of Array.from(this.waiting.values())) w.reject(new Error(this.exited));
       this.waiting.clear();
     });
   }
+
+  /** Why the child is gone, once it is (see the exit handler). */
+  private exited: string | null = null;
 
   static async start(options: { base?: Buffer; port?: number } = {}): Promise<SyncServerProcess> {
     const entry = path.join(__dirname, "libsql-sync-server-child.ts");
@@ -602,10 +750,15 @@ export class SyncServerProcess {
   }
 
   private call(op: string, args: unknown[] = []): Promise<unknown> {
+    if (this.exited) return Promise.reject(new Error(this.exited));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.waiting.set(id, { resolve, reject });
-      this.child.send({ id, op, args });
+      this.child.send({ id, op, args }, (error) => {
+        // The channel closed between the check above and the send.
+        if (!error || !this.waiting.delete(id)) return;
+        reject(new Error(this.exited ?? `sync server process is gone: ${error.message}`));
+      });
     });
   }
 
