@@ -8,6 +8,15 @@ as the only navigation, desktop modals. This plan replaces Phase C and the
 phone half of Phase D. The desktop renderer is NOT touched by it (one small
 main-process change aside, see "Desktop change").
 
+**Revised 2026-11-09** against the desktop work of Nov 6 2026 (version
+0.5.0: `DataStore.batch` + `POST /api/batch`, Optimize running by itself
+after every input change, the sync timer standing down while writes land,
+and the version-bump rule). Nothing in the user's decisions moved. What
+changed here: the spike gained a second go/no-go check (see step 1 — it is
+now the most important line in this plan), "Data freshness" was rewritten
+for the automatic Optimize, the APK follows the version rule, and two risks
+were added.
+
 ## Decisions (user, 2026-11-02)
 
 | Decision | Choice |
@@ -32,6 +41,10 @@ safe-area aware. Android's back button pops the in-app history.
    each (income · expenses · surplus), tap to expand. Month picker in the
    title row. The three summary numbers (Bills / Personal / Yearly) as one
    compact row. **No Optimize, no stale alert, no surplus-target editor.**
+   (Since Nov 6 2026 the desktop re-plans by itself ~1 s after any bill /
+   personal / income / settings change, so the `BillSplit` rows the phone
+   reads are normally current; the phone never writes one of those inputs,
+   so it can never make the plan stale itself.)
 2. **Plan** (read-only). Ready to Assign sticky at the top. Groups as
    collapsible sections; each item one row: name, assigned, available, the
    same ⚠ badge via the shared `evaluatePlanSync`. **No assign, no Auto,
@@ -95,7 +108,15 @@ phone/
   `client.execute`. `RETURNING` works on Turso as it does on libsql. The
   `DataStore` then runs unchanged: same validation, same cuids, same
   millisecond dates, same Income/Category rules (unused by the phone but
-  present). Reads for a screen are bundled into one `client.batch` where it
+  present). The store's write rules are now `applyCreate` / `applyUpdate` /
+  `applyRemove`, shared by the single calls and `DataStore.batch`: a plain
+  create or update is ONE autocommitted statement (`client.execute`), while
+  `remove`, `batch`, an Income write and the AppSettings upsert run inside
+  `BEGIN … COMMIT` — so on the phone, Add and Edit are one round trip and
+  Delete is the interactive-transaction path (the spike must exercise both).
+  The phone has no bulk write, so it does not need `batch`; if one ever
+  appears it goes through `store.batch`, never a loop.
+  Reads for a screen are bundled into one `client.batch` where it
   matters (the Overview needs settings, incomes, bills, splits, personals,
   yearly costs, budget items, assignments and the month's transactions).
 - **CORS.** The Capacitor WebView's origin is `https://localhost`; a fetch
@@ -116,20 +137,57 @@ phone/
 ## Data freshness, and the one desktop change
 
 The phone shows what the cloud holds, i.e. what the desktop last **pushed**.
-The desktop pushes 3 s after every write and every 60 s while it runs
-(`main/sync.ts`). Gap: the user closes the desktop less than 3 s after a save,
-or while offline, and leaves for work — the phone then shows yesterday's
-plan, and when the desktop comes back its push **conflicts** with any
-transaction the phone wrote in between ("Needs your choice", one side's
-changes end up in a `.bak`).
+The desktop pushes 3 s after the LAST write of a burst (`noteLocalWrite`;
+the 60 s timer stands down while writes are landing) and every 60 s while it
+is idle (`main/sync.ts`).
 
-**Desktop change (small, in `main/main.ts` + `main/sync.ts`):** run one
-`syncNow()` in the `before-quit` cleanup when sync is configured and
-`pendingChanges > 0`, bounded by a few seconds. Pinned by a test in
-`main/sync.routes.test.ts`. With it, the conflict case shrinks to "the PC
-was offline when it closed", which the existing conflict UI already handles.
-The phone itself never creates a conflict: every phone write is already in
-the cloud's frame log, so the desktop's next pull simply receives it.
+**The rule that makes a phone safe (and the one way it breaks).** libsql
+refuses a push when the cloud moved on while this PC had unpushed frames —
+that is the desktop's "Needs your choice" conflict, and neither answer
+merges: "Use the cloud's copy" drops the PC's unpushed rows into a `.bak`,
+"Keep this PC's changes" REPLACES the cloud's rows, which would erase the
+transactions the phone logged (they survive only in the `.bak` it names).
+So: a phone write is harmless whenever the desktop has nothing unpushed (its
+next sync just pulls the row), and a conflict whenever it does. The phone
+cannot avoid it from its side; the desktop must not leave unpushed frames
+behind. Since Nov 6 2026 there are more of those than "a save in the last
+3 s":
+
+- An edit to a bill / personal / income / setting is followed ~1 s later by
+  the automatic Optimize (one batch, ~2 s), then the 3 s pause, then the
+  push — the PC is "dirty" for roughly 6 s after such an edit, not 3.
+- The runner's start-up check (1.5 s after the window opens) may write a
+  re-plan nobody asked for: an edit whose run did not finish last time, or
+  the horizon's new last month at a month rollover. It runs AFTER
+  `initSync()`'s first sync, so it never conflicts with what the phone
+  wrote while the PC was off — only with a phone write in the few seconds
+  between that re-plan and its push.
+- Closing the app inside either window, or working offline, leaves the
+  frames unpushed until the next start, whose first sync pushes them — the
+  conflict, if the phone wrote in between.
+
+**Desktop change (small, in `main/main.ts` + `main/sync.ts`; its own PR with
+piece 4):** on `before-quit`, when sync is configured and
+`pendingChanges > 0`, hold the quit (`event.preventDefault()`), run one
+`syncNow()` bounded by ~5 s, then quit. Pinned by a test in
+`main/sync.routes.test.ts`. A re-plan the runner had not started yet is not
+lost: the next start's check finds the baseline differs and plans it, after
+the pull. Until then the phone shows the edited bill with the previous plan
+— stale by one re-plan, never wrong data. What remains is "the PC was
+offline when it closed and the phone wrote before it came back": the
+existing conflict screen, where **"Use the cloud's copy" is the answer that
+keeps the phone's transactions** (piece 4 adds that sentence to the dialog
+once a phone exists).
+
+Not assumed, to be PROVEN in step 1: that a row the phone writes over Hrana
+(plain SQL to the cloud) reaches the desktop's synced copy through an
+ordinary pull. Every Hrana write the desktop makes today (first upload,
+Keep, Import, settling a conflict) is followed by throwing the copy away and
+bootstrapping it again, and the tests' "second device" is another
+frame-pushing libsql copy — so "SQL write on the cloud, then an incremental
+pull on the PC" has never run against Turso. The mock harvests a Hrana
+write's WAL frames into its frame log, so it will pass there; the Nov 6
+single-device conflict is the reminder that Turso's server is not the mock.
 
 ## Connection status
 
@@ -172,7 +230,13 @@ By the script (`npm run phone:build` → `scripts/phone-build.mjs`):
 3. `gradlew assembleRelease` signed with that key →
    `dist/Finances-OS-phone-<version>.apk` (the version from the root
    `package.json`; `versionCode` derived from it so Android accepts it as an
-   update).
+   update). The desktop and the phone share that ONE version, and the
+   version rule of Nov 6 2026 applies to the APK too: bump it
+   (`npm version X.Y.Z --no-git-tag-version`) in the same commit as the
+   change, before building. The script refuses to build when an APK with
+   this version already exists in `dist/` — two different APKs with one
+   version cannot be told apart on the phone, and Android would not install
+   the second over the first as an update.
 4. Refuse if the keystore fingerprint differs from the one recorded in
    `phone/keystore/fingerprint.txt` (a rebuilt key would not install over
    the existing app).
@@ -209,10 +273,10 @@ user through it if that day comes.
 
 | # | Piece | Done when |
 | --- | --- | --- |
-| 1 | **Spike** (½ day, throwaway): `@libsql/client/web` from a Vite page against the sync mock and, once, against the user's own Turso database (the user pastes the values into the running page, never into a file): `SELECT count(*)` works, an interactive transaction with `RETURNING` works, CORS headers observed and recorded here. | The data path is proven or the CapacitorHttp route is chosen. |
+| 1 | **Spike** (½–1 day, throwaway except the test). **(a) Phone → cloud:** `@libsql/client/web` from a Vite page against the sync mock and, once, against the user's own Turso database (the user pastes the values into the running page, never into a file): `SELECT count(*)` works, a single `INSERT … RETURNING` works, an interactive transaction (`DELETE … RETURNING` inside BEGIN/COMMIT) works, CORS headers observed and recorded here. **(b) Cloud → desktop, the go/no-go:** a new test in `main/sync.routes.test.ts` — a row written to the mock by `@libsql/client` (Hrana) is pulled by `POST /api/sync/now` with no conflict and no re-bootstrap, and the same write while this PC has an unpushed row IS the conflict. Then the same thing live: with the installed desktop app open and showing "Synced", the spike page adds one test transaction to the user's Turso database; the desktop's next sync must show it, stay "Synced", and a save on the desktop afterwards must push cleanly. The test transaction is deleted from the desktop at the end. | (a) proven, or the CapacitorHttp route chosen. (b) proven on Turso — **if the desktop conflicts or cannot pull a Hrana write, stop**: the fallback to discuss is a desktop rule "the cloud moved and this PC has nothing unpushed → fetch the copy again by itself", before any phone UI is built. |
 | 2 | Toolchain: the user installs JDK + command-line tools; `phone/` created with Capacitor; `npm run phone:build` produces a signed APK of a hello-world page; installed from Drive on the phone. | An app icon on the phone that opens. Keystore backed up by the user. |
 | 3 | Shell: theme extraction (`renderer/app/theme.ts`, desktop unchanged), bottom tabs, top bar, status line, Settings (connect / forget), schema gate, the executor + store + hooks. | Connected to the mock in the browser check and to Turso on the phone; status line green. |
-| 4 | Cash: accounts with balances, ledger list, Add / Edit / Delete transaction (full-screen forms), the FAB on every tab. **Desktop change: sync on quit** (own small PR). | A purchase logged on the phone appears in the desktop ledger after its next sync; parity test for the written row. |
+| 4 | Cash: accounts with balances, ledger list, Add / Edit / Delete transaction (full-screen forms), the FAB on every tab. **Desktop change: sync on quit** (own small PR, with the "Use the cloud's copy keeps the phone's transactions" line in the conflict dialog). | A purchase logged on the phone appears in the desktop ledger after its next sync; parity test for the written row; closing the desktop right after an edit leaves `pendingChanges` at 0. |
 | 5 | Overview (read-only), month picker. | Parity test per pay week. |
 | 6 | Plan (read-only) with ⚠. | Parity test for available + badges. |
 | 7 | Costs page; icon + splash from the logo (`@capacitor/assets`); status-bar colour = canvas. | First "real" APK the user keeps. |
@@ -231,6 +295,14 @@ distributing the APK to anyone else.
 
 ## Risks
 
+- **A Hrana write pulled by the desktop's synced copy** — unverified against
+  Turso until the spike, and the assumption the whole design rests on.
+- **Conflicts on the desktop cost phone data if answered wrong.** A conflict
+  already happened with ONE device (Nov 6 2026, after a long multi-push
+  Optimize; the batch write made pushes small since). With a phone, "Keep
+  this PC's changes" erases what the phone logged since the last pull.
+  Mitigations: sync on quit, small pushes, the dialog's wording, and the
+  `.bak` every resolution writes.
 - **Turso CORS / Hrana from a WebView** — unverified until the spike.
 - **Capacitor + JDK + SDK versions** — fixed by the Capacitor major chosen in
   step 2; Gradle downloads ~1 GB on the first build.
