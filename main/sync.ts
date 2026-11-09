@@ -151,6 +151,17 @@ export interface SyncStatus {
   pendingPush: boolean;
   /** The cloud moved on while this device had unpushed changes; the user must choose. */
   conflict: SyncConflict | null;
+  /**
+   * How many times, in this run, the rows this API serves changed WITHOUT a
+   * write through it: a sync pulled another device's changes (the phone app
+   * logging a transaction), or the copy itself was swapped in. The renderer
+   * watches it and reloads its queries when it moves — a pull changes the
+   * database under an open page, and nothing else would tell that page
+   * (found Nov 9 2026 in the phone spike's live run: the row was here within
+   * a minute and the open list kept showing the old one). It does NOT move
+   * for this device's own saves or their push.
+   */
+  remoteChanges: number;
   replicaPath: string | null;
   appSchemaVersion: number;
 }
@@ -294,6 +305,8 @@ interface State {
   offline: boolean;
   conflict: SyncConflict | null;
   pendingChanges: number;
+  /** See SyncStatus.remoteChanges. */
+  remoteChanges: number;
 }
 
 const INITIAL: State = {
@@ -307,6 +320,7 @@ const INITIAL: State = {
   offline: false,
   conflict: null,
   pendingChanges: 0,
+  remoteChanges: 0,
 };
 
 const state: State = { ...INITIAL };
@@ -469,6 +483,7 @@ export function getSyncStatus(): SyncStatus {
     pendingChanges: configured ? state.pendingChanges : 0,
     pendingPush: configured && state.pendingChanges > 0,
     conflict: state.conflict,
+    remoteChanges: state.remoteChanges,
     replicaPath: configured ? replicaDbPath() : null,
     appSchemaVersion: SCHEMA_VERSION,
   };
@@ -483,6 +498,35 @@ async function checkSchemaGate(): Promise<void> {
 }
 
 /**
+ * SQLite's `data_version` on the store's connection. It moves when ANOTHER
+ * connection changes the file and never for this connection's own commits —
+ * and libsql applies the frames a sync pulls through a connection of its own,
+ * while a push only reads the local WAL. So "it differs across a sync" means
+ * exactly "the sync brought in rows this device did not write" (pinned in
+ * sync.routes.test.ts: unchanged for an empty sync and for a push, changed
+ * for a pull). libsql's own `frames_synced` cannot tell: it counts pushed
+ * and pulled frames together and is ≥ 1 for any sync that reached the cloud.
+ * null when it cannot be read; the caller then reports no change.
+ *
+ * Read on the bare connection, NOT through the store: the store's first use
+ * runs `prepareDatabase`, and on a copy bootstrapped a moment ago (which may
+ * still be the cloud's base snapshot without the tables) that creates the
+ * schema locally — frames the first sync would then push into a conflict
+ * (`InvalidPushFrameConflict`; the tests caught exactly that). `sync()`
+ * itself bypasses the store's bookkeeping for the same reason. A PRAGMA
+ * read needs no lock: the backend's statements are synchronous native calls.
+ */
+async function dataVersion(): Promise<number | null> {
+  try {
+    const rows = await getCurrentConnection().exec("PRAGMA data_version");
+    const version = Number(rows[0]?.data_version);
+    return Number.isFinite(version) ? version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * One sync: push this device's frames, pull the others'. Records the outcome
  * in the status — offline (libsql reports 0 frames when the cloud can't be
  * reached), conflict (the cloud moved on while this device had unpushed
@@ -492,6 +536,7 @@ async function runSync(): Promise<void> {
   if (!state.settings) throw new SyncError("Sync is not set up on this device.");
   state.syncing = true;
   try {
+    const versionBefore = await dataVersion();
     const { framesSynced } = await getStore().sync({ timeoutMs: syncTimeoutMs });
     if (framesSynced === 0) {
       state.offline = true;
@@ -503,6 +548,11 @@ async function runSync(): Promise<void> {
     state.lastSyncedAt = new Date().toISOString();
     state.pendingChanges = 0;
     state.conflict = null;
+    // Did the pull bring in another device's rows? (See dataVersion.)
+    const versionAfter = await dataVersion();
+    if (versionBefore !== null && versionAfter !== null && versionAfter !== versionBefore) {
+      state.remoteChanges += 1;
+    }
     await checkSchemaGate();
   } catch (e) {
     if (isSyncConflictError(e)) {

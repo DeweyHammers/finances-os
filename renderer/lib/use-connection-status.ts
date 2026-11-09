@@ -31,6 +31,15 @@
  * (Optimize writes hundreds of rows) collapse into one sync; a write that
  * lands during the sync queues exactly one more. The arrows stay at least
  * MIN_SPIN_MS so a fast sync is still visible as a flick.
+ *
+ * Other devices' changes (Nov 9 2026, for the phone app). The server pulls
+ * them on its own 60 s timer; this poller adds one more moment: when the
+ * WINDOW REGAINS FOCUS it asks for a sync right away ("I just logged
+ * something on the phone, now I am back at the PC"), at most once per
+ * FOCUS_SYNC_MIN_GAP_MS. Whatever sync pulled them, the status then carries a
+ * higher `remoteChanges`, and `SyncPullRefresh` (lib/sync-pull-refresh.tsx)
+ * reloads the open page's data — a pull changes the database under the page
+ * and nothing else would tell it.
  */
 import { createContext, createElement, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { DataProvider } from "@refinedev/core";
@@ -71,8 +80,19 @@ const PING_TIMEOUT_MS = 5000;
 export const WRITE_SETTLE_MS = 400;
 /** The arrows spin at least this long after a save, so a fast sync still shows. */
 export const MIN_SPIN_MS = 700;
+/** A focus-triggered sync runs at most this often (alt-tabbing back and forth). */
+export const FOCUS_SYNC_MIN_GAP_MS = 10_000;
 
 let latest: SyncStatus | null = null;
+
+/**
+ * Forget the last status (tests only). The module keeps it across mounts so
+ * a remounted provider starts from what is known instead of "unknown"; a
+ * test that mounts a fresh provider must not inherit the previous test's.
+ */
+export function __resetConnectionStatusForTests(): void {
+  latest = null;
+}
 
 /** The mounted poller's write handler (null when no provider is mounted). */
 let writeHandler: (() => void) | null = null;
@@ -223,6 +243,22 @@ function useSyncPoller(intervalMs: number): ConnectionStatus {
     };
   }, [noteWrite]);
 
+  // ── The window regains focus → pull the other devices' changes now ──
+  // Only where a sync can do something: a cloud database is set up and the
+  // state is synced or offline (a conflict, a sandbox pause and the schema
+  // gate all refuse a sync; local only has nothing to sync with). Not while
+  // a save's own sync is waiting or running — that one pulls too.
+  const lastFocusSync = useRef(0);
+  const onFocus = useCallback(() => {
+    if (!latest?.configured) return;
+    if (latest.state !== "synced" && latest.state !== "offline") return;
+    if (running.current || settle.current) return;
+    const now = Date.now();
+    if (lastFocusSync.current && now - lastFocusSync.current < FOCUS_SYNC_MIN_GAP_MS) return;
+    lastFocusSync.current = now;
+    void sync();
+  }, [sync]);
+
   useEffect(() => {
     refresh();
     const id = setInterval(refresh, intervalMs);
@@ -232,15 +268,17 @@ function useSyncPoller(intervalMs: number): ConnectionStatus {
     const onOnline = () => void sync();
     window.addEventListener("online", onOnline);
     window.addEventListener("offline", refresh);
+    window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(id);
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", refresh);
+      window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
       inFlight.current?.abort();
     };
-  }, [refresh, sync, intervalMs]);
+  }, [refresh, sync, onFocus, intervalMs]);
 
   return {
     configured: status?.configured ?? false,

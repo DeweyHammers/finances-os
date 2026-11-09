@@ -52,6 +52,7 @@ import { SandboxBanner } from "../components/sandbox/SandboxBanner";
 import { SettingsDialogProvider } from "../components/settings/SettingsDialogContext";
 import { SettingsDialog } from "../components/settings/SettingsDialog";
 import { SyncStatusProvider, withSyncWriteNotices } from "../lib/use-connection-status";
+import { SyncPullRefresh } from "../lib/sync-pull-refresh";
 import { AutoOptimizeProvider, withAutoOptimizeTriggers } from "../lib/auto-optimize";
 
 // IPC bridge address — the Electron main process spins up an in-memory REST
@@ -285,6 +286,9 @@ function App({ children }: { children: ReactNode }) {
         {/* One poller for the sync status (sider row + Settings); see
             lib/use-connection-status.ts. */}
         <SyncStatusProvider>
+        {/* Reloads the page's data when a sync pulled another device's
+            changes (the phone app); see lib/sync-pull-refresh.tsx. */}
+        <SyncPullRefresh />
         {/* The automatic Optimize runner (one per window): re-plans the pay
             weeks about a second after any input write; see lib/auto-optimize.tsx.
             Inside Refine (its hooks) and SandboxProvider (it waits out a

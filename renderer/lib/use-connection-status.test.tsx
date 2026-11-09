@@ -17,6 +17,7 @@ vi.mock("./sync-api", () => ({
 
 import { fetchSyncStatus, syncNow } from "./sync-api";
 import {
+  FOCUS_SYNC_MIN_GAP_MS,
   MIN_SPIN_MS,
   SyncStatusProvider,
   WRITE_SETTLE_MS,
@@ -39,6 +40,7 @@ const status = (over: Record<string, unknown> = {}) => ({
   pendingChanges: 0,
   pendingPush: false,
   conflict: null,
+  remoteChanges: 0,
   replicaPath: "replica.db",
   appSchemaVersion: 1,
   ...over,
@@ -145,6 +147,75 @@ describe("saves → spinning arrows → one confirming sync", () => {
   it("the server's own pull also shows as syncing", async () => {
     const hook = await mountWith(status({ state: "syncing", syncing: true }));
     expect(hook.result.current.syncing).toBe(true);
+  });
+});
+
+// Nov 9 2026 (the phone app): coming back to the window pulls what another
+// device wrote, without waiting for the server's 60 s timer.
+describe("the window regains focus → one sync", () => {
+  const focus = async () => {
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  };
+
+  it("asks for a sync, and hands its answer to everyone", async () => {
+    const hook = await mountWith(status({ remoteChanges: 0 }));
+    vi.mocked(syncNow).mockResolvedValue(status({ remoteChanges: 1 }) as any);
+    await focus();
+    expect(syncNow).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.status?.remoteChanges).toBe(1);
+    expect(hook.result.current.syncing).toBe(false);
+  });
+
+  it("at most once per FOCUS_SYNC_MIN_GAP_MS, however often the window is switched", async () => {
+    await mountWith(status());
+    await focus();
+    await focus();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(FOCUS_SYNC_MIN_GAP_MS - 1);
+    });
+    await focus();
+    expect(syncNow).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await focus();
+    expect(syncNow).toHaveBeenCalledTimes(2);
+  });
+
+  it("offline counts too (the cloud may be back); the states that refuse a sync do not", async () => {
+    await mountWith(status({ state: "offline" }));
+    await focus();
+    expect(syncNow).toHaveBeenCalledTimes(1);
+
+    for (const refused of [
+      status({ state: "conflict", conflict: { message: "x", since: "2026-11-09T00:00:00.000Z" } }),
+      status({ state: "paused", pausedBy: "sandbox" }),
+      status({ state: "blocked", schemaGate: { app: 1, database: 2 } }),
+      status({ configured: false, state: "local" }),
+    ]) {
+      vi.mocked(syncNow).mockClear();
+      const hook = await mountWith(refused);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(FOCUS_SYNC_MIN_GAP_MS);
+      });
+      await focus();
+      expect(syncNow).not.toHaveBeenCalled();
+      hook.unmount();
+    }
+  });
+
+  it("stands back while a save's own sync is waiting — that one pulls too", async () => {
+    await mountWith(status());
+    act(() => notifyLocalWrite());
+    await focus();
+    expect(syncNow).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(WRITE_SETTLE_MS + MIN_SPIN_MS);
+    });
+    expect(syncNow).toHaveBeenCalledTimes(1);
   });
 });
 

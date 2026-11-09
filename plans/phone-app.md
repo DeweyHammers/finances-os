@@ -74,12 +74,17 @@ Two things the live run turned up:
   desktop's database within a minute, but the open page kept its old list
   (the user looked and did not see it): nothing invalidates Refine's caches
   when a background sync brings frames in — until now only this PC ever
-  wrote. With a phone this is a real gap. **Desktop change, with piece 4:**
-  when a sync reports pulled frames, invalidate the renderer's queries (the
-  sync status the renderer already polls can carry a "data changed" counter).
-  Also decide the pull cadence: today 60 s while idle, 3 s after a local
-  save, and on a click of the sync dot; syncing when the window regains
-  focus is the natural extra ("I just used the phone, now I am back").
+  wrote. With a phone this is a real gap. **FIXED the same day (0.5.1,
+  ahead of piece 4):** the sync status carries `remoteChanges`, which the
+  main process raises only when a sync brought in rows this PC did not
+  write (`PRAGMA data_version` differs across the sync); `SyncPullRefresh`
+  in the renderer invalidates every active query when it rises; and the
+  window regaining focus now asks for a sync at once (at most every 10 s).
+  Pull cadence is otherwise unchanged: 60 s while idle, 3 s after a local
+  save, a click of the sync dot. Checked in the browser against the mock: a
+  row added by "another device" showed 116 ms after focus, and a delete
+  with no focus at all showed after 36 s (worst case ~90 s: the 60 s timer
+  plus the 30 s status poll). See CLAUDE.md → Sync → Renderer.
 - **One 20-second stall, cause unknown.** The first request after the
   bundled `client.batch(…, "read")` took 20.05 s (the same step took 45 ms
   on the mock); everything before and after was ~50 ms. It may be Turso

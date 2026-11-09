@@ -30,6 +30,12 @@ export interface SyncStatus {
   pendingPush: boolean;
   /** The cloud changed while this PC had unpushed changes; the user chooses a side. */
   conflict: SyncConflict | null;
+  /**
+   * Counts the times a sync brought in rows this PC did not write (another
+   * device's changes). `SyncPullRefresh` reloads the page's data when it
+   * moves; it stays put for this PC's own saves.
+   */
+  remoteChanges: number;
   replicaPath: string | null;
   appSchemaVersion: number;
 }

@@ -385,6 +385,38 @@ describe("while synced", () => {
     expect(await other.bills()).toEqual(["From the PC", "From the phone", "Seed"]);
   });
 
+  it("counts the syncs that brought in another device's changes — and no others — so the open page knows to reload", async () => {
+    const remoteChanges = async () => (await api().get("/api/sync")).body.remoteChanges as number;
+    const start = await remoteChanges();
+    expect(typeof start).toBe("number");
+
+    // A sync with nothing to exchange.
+    expect((await api().post("/api/sync/now")).status).toBe(200);
+    expect(await remoteChanges()).toBe(start);
+
+    // This PC's own save and its push: the page that saved already has it.
+    await api().post("/api/Bill").send({ name: "From the PC", amount: 2, dueDate: 2 });
+    expect(await remoteChanges()).toBe(start);
+    expect((await api().post("/api/sync/now")).body).toMatchObject({ state: "synced", pendingChanges: 0 });
+    expect(await remoteChanges()).toBe(start);
+
+    // Another device's row arrives: exactly one step, reported by the sync
+    // that pulled it (the renderer reads it off that very answer).
+    other = await otherDevice();
+    await other.addBill("From the phone");
+    expect(await remoteChanges()).toBe(start);
+    const pulled = await api().post("/api/sync/now");
+    expect(pulled.body.remoteChanges).toBe(start + 1);
+    expect(await apiBillNames()).toEqual(["From the PC", "From the phone", "Seed"]);
+
+    // Quiet again: nothing new, no step.
+    expect((await api().post("/api/sync/now")).body.remoteChanges).toBe(start + 1);
+
+    // A push and a pull in the same sync still count as a pull.
+    await other.addBill("Second from the phone");
+    expect((await api().post("/api/sync/now")).body.remoteChanges).toBe(start + 2);
+  });
+
   // plans/phone-app.md, step 1(b). The phone app has no local copy: it sends
   // plain SQL to the cloud over Hrana (HTTP), the way @libsql/client/web does
   // from its WebView. The "other device" above is a second FRAME-PUSHING
@@ -414,9 +446,12 @@ describe("while synced", () => {
         expect(await apiBillNames()).toEqual(["Seed"]);
 
         await cloud.clearRequests();
+        const changesBefore = (await api().get("/api/sync")).body.remoteChanges as number;
         const pulled = await api().post("/api/sync/now");
         expect(pulled.status).toBe(200);
         expect(pulled.body).toMatchObject({ state: "synced", conflict: null, pendingChanges: 0 });
+        // …and the status says so, which is what makes the open page reload.
+        expect(pulled.body.remoteChanges).toBe(changesBefore + 1);
         expect(await apiBillNames()).toEqual(["From the phone", "Seed"]);
         // An ordinary pull: the copy was not thrown away and bootstrapped again.
         expect(await exportsSeen()).toEqual([]);
