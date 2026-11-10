@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://deweyhammers.github.io/finances-os/">
-    <img src="docs/img/tour/11-overview-optimized.png" alt="Finances OS Overview: five pay weeks with income, expenses and surplus" width="900">
+    <img src="docs/img/tour/10-overview-optimized.png" alt="Finances OS Overview: five pay weeks with income, expenses and surplus" width="900">
   </a>
 </p>
 
