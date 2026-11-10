@@ -22,11 +22,15 @@
 
 /**
  * Version of the database shape this build of the app understands. Bump it
- * with every schema change (together with a migration step in store.ts) and
- * regenerate schema.sql. Phase D of plans/phone-app-and-sync.md gates sync on
- * it: an app older than the database refuses to write.
+ * with every schema change (together with a migration step in migrations.ts)
+ * and regenerate schema.sql. Phase D of plans/phone-app-and-sync.md gates sync
+ * on it: an app older than the database refuses to write.
+ *
+ *   1  the Prisma-era shape (Oct 2026)
+ *   2  Income.baseHours / baseTaxes / baseFlatDeductions + the IncomeOverride
+ *      table (per-week income, Nov 2026)
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type ScalarType = "String" | "Int" | "Float" | "Boolean" | "DateTime";
 
@@ -88,6 +92,20 @@ export const MODELS: readonly Model[] = [
     "payDay Int",
     "payWeekOffset Int",
     "isPrimary Boolean",
+    // Schema version 2. Last on purpose — see migrations.ts (ALTER TABLE
+    // appends, so a migrated file and a fresh one keep the same order).
+    "baseHours Float?",
+    "baseTaxes Float?",
+    "baseFlatDeductions Float?",
+  ]),
+  // Schema version 2: one paycheck that differs from Income.amount, keyed by
+  // income + the payday's date as a YYYYMMDD number (unique together).
+  model("IncomeOverride", [
+    "id String cuid",
+    "incomeId String",
+    "payDate Int", // YYYYMMDD, e.g. 20261118
+    "amount Float",
+    "hours Float?",
   ]),
   // `id` defaults to 'global' in the DDL (no cuid): the single settings row.
   model("AppSettings", [

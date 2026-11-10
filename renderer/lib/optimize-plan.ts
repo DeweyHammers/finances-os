@@ -69,6 +69,13 @@ export interface OptimizeInputs {
   personalBills: any[];
   /** Raw Income rows from the API. */
   incomes: any[];
+  /**
+   * Raw IncomeOverride rows from the API: single paychecks that differ from
+   * their income's regular amount (a 32-hour week). Each replaces the income
+   * of exactly the pay week its payday falls in — see pay-period-utils →
+   * "Per-week income overrides". Omitted / empty = every paycheck is regular.
+   */
+  incomeOverrides?: any[];
   /** The isPrimary income — its payDay/cycle drive the pay-week grid. */
   primaryIncome: any;
   /** Raw BillSplit rows from the API (all months). */
@@ -129,6 +136,7 @@ export function planOptimize(inputs: OptimizeInputs): MonthWritePlan[] {
     bills,
     personalBills,
     incomes,
+    incomeOverrides = [],
     primaryIncome,
     splitRows,
     targetSurplusCents,
@@ -196,7 +204,7 @@ export function planOptimize(inputs: OptimizeInputs): MonthWritePlan[] {
     const nextViewFirstWeek = nextPeriods.length === 0
       ? undefined
       : {
-          incomeCents: computeIncomePerPeriodCents(incomes, nextPeriods, next.getFullYear(), next.getMonth(), incomeDefaults)[0],
+          incomeCents: computeIncomePerPeriodCents(incomes, nextPeriods, next.getFullYear(), next.getMonth(), incomeDefaults, incomeOverrides)[0],
           fixedExpensesCents: computeOptimizerPersonalPerPeriod(personalBills, nextPeriods)[0],
         };
 
@@ -248,7 +256,12 @@ export function planOptimize(inputs: OptimizeInputs): MonthWritePlan[] {
     const result = balancePayWeeks({
       bills: bills.map((b: any) => ({ id: b.id, amount: Number(b.amount), dueDate: Number(b.dueDate), neverSplit: Boolean(b.neverSplit) })),
       periods,
-      incomePerPeriodCents: computeIncomePerPeriodCents(incomes, periods, tYear, tMonth, incomeDefaults),
+      // A week whose paycheck has an override (a short week) simply has less
+      // income here, so the balance moves bills out of it into the other
+      // unlocked weeks — and only that week changes, because the override is
+      // keyed on the payday's date. A LOCKED week keeps its rows whatever its
+      // income now says (its paycheck is already handed out).
+      incomePerPeriodCents: computeIncomePerPeriodCents(incomes, periods, tYear, tMonth, incomeDefaults, incomeOverrides),
       fixedExpensesPerPeriodCents: computeOptimizerPersonalPerPeriod(personalBills, periods),
       targetSurplusCents,
       todayCoord: tTodayCoord,

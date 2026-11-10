@@ -7,8 +7,13 @@
  * so per-week surplus-target headroom is honored proportionally rather than
  * dumping the whole monthly amount into one week.
  *
- * Read-only. Consumes `bills`, `personalBills`, `incomes`, `settings`, and
- * `splits` (persisted BillSplit rows) already fetched by the Overview page.
+ * A pay week whose paycheck has an override (Income page → "Upcoming
+ * paychecks", e.g. a 32-hour week) shows that amount as its income, with the
+ * hours under the number and in the income tooltip.
+ *
+ * Read-only. Consumes `bills`, `personalBills`, `incomes`, `incomeOverrides`,
+ * `settings`, and `splits` (persisted BillSplit rows) already fetched by the
+ * Overview page.
  */
 
 import { FC } from "react";
@@ -19,7 +24,7 @@ import {
   getBillAllocationCentsForPeriod,
   computeSplitPersonalAllocations,
   monthKeyOf,
-  getIncomeSourcesForPeriod,
+  getIncomePaymentsForPeriod,
   withLegacyIncomeFallback,
   BillSplitRecord,
   PayPeriod,
@@ -35,9 +40,19 @@ interface CashFlowOverviewProps {
   bills: any[];
   personalBills: any[];
   incomes?: any[];
+  /** IncomeOverride rows: single paychecks that differ from their income's regular amount. */
+  incomeOverrides?: any[];
   viewYear?: number;
   viewMonth?: number;
   splits?: BillSplitRecord[];
+}
+
+/** One income's paycheck in a pay week, as the card and its tooltip show it. */
+interface IncomeLine {
+  name: string;
+  amount: number;
+  /** Set when this paycheck has a per-week override: "32 hrs", or "Custom" when no hours were entered. */
+  customLabel?: string;
 }
 
 export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
@@ -45,6 +60,7 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
   bills,
   personalBills,
   incomes = [],
+  incomeOverrides = [],
   viewYear,
   viewMonth,
   splits = [],
@@ -70,11 +86,24 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
   // Which income sources fire inside this pay period (shared helper — handles
   // bi-weekly payWeekOffset so two bi-weekly incomes can sit on opposite
   // weeks). Kept in DOLLARS here because it feeds the per-source tooltip.
-  const getIncomeBreakdown = (period: PayPeriod): { name: string; amount: number }[] =>
-    getIncomeSourcesForPeriod(allSources, period, year, month, {
-      payDay: payWeekday,
-      paymentCycle: settings.paymentCycle,
-    }).map((income) => ({ name: income.name ?? "Income", amount: Number(income.amount) || 0 }));
+  // A paycheck with a per-week override pays the override's amount instead of
+  // the income's regular one (same shared helper the Plan and Optimize use).
+  const getIncomeBreakdown = (period: PayPeriod): IncomeLine[] =>
+    getIncomePaymentsForPeriod(
+      allSources,
+      period,
+      year,
+      month,
+      { payDay: payWeekday, paymentCycle: settings.paymentCycle },
+      incomeOverrides,
+    ).map(({ source, amount, override }) => {
+      const line: IncomeLine = { name: source.name ?? "Income", amount };
+      if (override) {
+        const hours = Number(override.hours);
+        line.customLabel = override.hours != null && Number.isFinite(hours) ? `${hours} hrs` : "Custom";
+      }
+      return line;
+    });
 
   // Bills per period, summing split allocations when present.
   const billsPerPeriodDollars = periods.map((period) =>
@@ -245,7 +274,7 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
     amount: number;
     income: number;
     expenses: number;
-    incomeSources: { name: string; amount: number }[];
+    incomeSources: IncomeLine[];
     expensesBreakdown: { bills: number; personal: number };
   }) => {
     // Negative surplus → red regardless of the period's usual color, so
@@ -334,7 +363,7 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
           </Typography>
 
           <Grid container spacing={2} sx={{ mb: 3 }}>
-            <Grid size={{ xs: 6 }}>
+            <Grid size={{ xs: 6 }} sx={{ position: "relative" }}>
               <Typography
                 variant="caption"
                 sx={{ display: "block", color: "text.secondary", fontWeight: 800, fontSize: "0.65rem", mb: 0.5 }}
@@ -353,7 +382,13 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
                     ) : (
                       incomeSources.map((s) => (
                         <Box key={s.name} sx={{ display: "flex", justifyContent: "space-between", gap: 3 }}>
-                          <Typography sx={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.85)", lineHeight: 1.4 }}>{s.name}</Typography>
+                          <Typography sx={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.85)", lineHeight: 1.4 }}>
+                            {s.name}
+                            {/* This week's paycheck was set by hand on the Income page. */}
+                            {s.customLabel && (
+                              <Box component="span" sx={{ color: "#fbbf24", fontWeight: 700 }}>{` · ${s.customLabel}`}</Box>
+                            )}
+                          </Typography>
                           <Typography sx={{ fontSize: "0.72rem", fontWeight: 800, color: "#3DBC83", lineHeight: 1.4 }}>${s.amount.toFixed(2)}</Typography>
                         </Box>
                       ))
@@ -365,6 +400,28 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
                   ${income.toFixed(0)}
                 </Typography>
               </Tooltip>
+              {/* Only on a week whose paycheck has a per-week override: says
+                  at a glance which week is the short (or long) one. Absolutely
+                  positioned in the gap under the amount (the grid's mb: 3), so
+                  the card keeps the height of its neighbours and the Surplus
+                  rows stay level across the row. */}
+              {incomeSources.some((s) => s.customLabel) && (
+                <Typography
+                  sx={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    top: "100%",
+                    color: "#fbbf24",
+                    fontWeight: 800,
+                    fontSize: "0.6rem",
+                    lineHeight: 1.2,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {incomeSources.find((s) => s.customLabel)!.customLabel}
+                </Typography>
+              )}
             </Grid>
 
             <Grid size={{ xs: 6 }}>

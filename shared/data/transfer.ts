@@ -93,9 +93,13 @@ export async function dumpDatabase(db: SqlExecutor): Promise<DatabaseDump> {
       tables.push({ table: model.name, columns, rows: [] });
       continue;
     }
-    const rows = await db.exec(
-      `SELECT ${columns.map(quoteIdent).join(", ")} FROM ${quoteIdent(model.name)} ORDER BY rowid`,
-    );
+    // `SELECT *`, then pick this build's columns BY NAME: a source made by an
+    // older build (an exported file, or the cloud database before this PC's
+    // migration reached it) lacks the columns added since, and those simply
+    // come out as NULL instead of failing the whole dump with "no such
+    // column". New columns are nullable or defaulted for exactly this reason
+    // (migrations.ts); a column this build does not know is left behind.
+    const rows = await db.exec(`SELECT * FROM ${quoteIdent(model.name)} ORDER BY rowid`);
     tables.push({ table: model.name, columns, rows: rows.map((r: Row) => columns.map((c) => r[c] ?? null)) });
   }
   const version = tables.find((t) => t.table === "SchemaVersion");

@@ -78,6 +78,7 @@ import {
   hasNoTables,
   loadDatabase,
   loadStatements,
+  migrationStatements,
   schemaVersionGate,
   type DatabaseDump,
   type Row,
@@ -815,6 +816,12 @@ async function probe(remote: RemoteDatabase): Promise<RemoteFacts> {
 
 /** Make the cloud database hold exactly `dump` (schema created when missing). */
 async function replaceRemote(remote: RemoteDatabase, dump: DatabaseDump): Promise<void> {
+  // A cloud database last written by an OLDER build has the old shape, and
+  // the dump's INSERTs name this build's columns: bring it up to date first
+  // (shared/data/migrations.ts — nothing on an empty or current database).
+  // Its version stamp arrives with the dump's own SchemaVersion rows.
+  const migration = await migrationStatements(remote);
+  if (migration.length > 0) await remote.batch(migration.map((sql) => ({ sql, args: [] })));
   const statements = loadStatements(dump);
   // Several transactions, in order: the FK ordering keeps every prefix
   // consistent, and a batch stays well under any request-size limit.

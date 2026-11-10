@@ -205,7 +205,7 @@ describe("connect", () => {
     // The cloud holds the schema + the row; the local copy was bootstrapped
     // beside the local file (libsql's db + -info pair); the local file is untouched.
     expect(await billNames()).toEqual(["Uploaded"]);
-    expect(await cloudRows('SELECT version FROM "SchemaVersion"')).toEqual([{ version: 1 }]);
+    expect(await cloudRows('SELECT version FROM "SchemaVersion"')).toEqual([{ version: (await import("../shared/data")).SCHEMA_VERSION }]);
     expect(fs.existsSync(replicaDb)).toBe(true);
     expect(fs.existsSync(`${replicaDb}-info`)).toBe(true);
     const localConn = libsql.openLibsql(tmpDb);
@@ -243,7 +243,7 @@ describe("connect", () => {
     const refused = await connect();
     expect(refused.status).toBe(409);
     expect(refused.body.code).toBe("REMOTE_HAS_DATA");
-    expect(refused.body.details).toMatchObject({ empty: false, dataRows: 1, schemaVersion: 1 });
+    expect(refused.body.details).toMatchObject({ empty: false, dataRows: 1, schemaVersion: (await import("../shared/data")).SCHEMA_VERSION });
     expect((await api().get("/api/sync")).body.configured).toBe(false);
     expect(await billNames()).toEqual(["Theirs"]);
 
@@ -794,6 +794,88 @@ describe("while synced", () => {
     expect(back.body).toMatchObject({ state: "synced", readOnly: false, writesBlocked: null });
     expect(await apiBillNames()).toEqual(["Only in the copy", "Seed"]);
   });
+
+  // ── Upgrading the app while synced (schema version 1 → 2, Nov 2026) ──
+  // The installed app is a synced copy of the user's cloud database, so a
+  // schema change cannot arrive by copying a file: the new build migrates its
+  // local copy on first use (shared/data/migrations.ts) and the next sync
+  // pushes that like any other write.
+  describe("a database made by the previous build (schema 1)", () => {
+    /** Put the CLOUD back into the version-1 shape, as the previous build left it. */
+    async function downgradeCloud() {
+      await cloud.exec('DROP TABLE "IncomeOverride"');
+      for (const column of ["baseFlatDeductions", "baseTaxes", "baseHours"]) {
+        await cloud.exec(`ALTER TABLE "Income" DROP COLUMN "${column}"`);
+      }
+      await cloud.exec('DELETE FROM "SchemaVersion"');
+      await cloud.exec('INSERT INTO "SchemaVersion" ("version", "appliedAt") VALUES (1, 0)');
+    }
+    const cloudTables = async () => (await cloudRows("SELECT name FROM sqlite_master WHERE type = 'table'")).map((r) => r.name);
+    const cloudIncomeSql = async () => String((await cloudRows("SELECT sql FROM sqlite_master WHERE name = 'Income'"))[0].sql);
+    const cloudVersion = async () => Number((await cloudRows('SELECT max("version") AS v FROM "SchemaVersion"'))[0].v);
+
+    it("the new build migrates its copy on first use and the next sync gives the cloud the new shape", async () => {
+      const { SCHEMA_VERSION } = await import("../shared/data");
+      await api().post("/api/Income").send({ name: "Paycheck", amount: 700, isPrimary: true });
+      await api().post("/api/sync/now");
+      await downgradeCloud();
+      // The copy pulls the old shape: this PC now holds exactly what the
+      // previous build left behind — copy and cloud both at version 1.
+      await api().post("/api/sync/now");
+      expect(await cloudTables()).not.toContain("IncomeOverride");
+      expect(await cloudVersion()).toBe(1);
+
+      // "Install the new build": restart on the same files.
+      await sync.__resetSyncForTests({ keepFiles: true });
+      const status = await sync.initSync();
+      expect(status).toMatchObject({ configured: true, state: "synced", schemaGate: null });
+
+      // First use migrates the copy — locally, no network needed for it …
+      const incomes = await api().get("/api/Income");
+      expect(incomes.status).toBe(200);
+      expect(incomes.body).toEqual([expect.objectContaining({ name: "Paycheck", amount: 700, baseHours: null })]);
+      expect((await api().get("/api/IncomeOverride")).body).toEqual([]);
+      expect(await cloudTables()).not.toContain("IncomeOverride"); // not pushed yet
+      // … and the new table is usable at once.
+      const incomeId = incomes.body[0].id;
+      const made = await api().post("/api/IncomeOverride").send({ incomeId, payDate: 20261118, amount: 560, hours: 32 });
+      expect(made.status).toBe(200);
+
+      // The next sync pushes the new shape and the row: no conflict, no gate.
+      const synced = await api().post("/api/sync/now");
+      expect(synced.body).toMatchObject({ state: "synced", conflict: null, schemaGate: null, pendingChanges: 0 });
+      expect(await cloudTables()).toContain("IncomeOverride");
+      for (const column of ["baseHours", "baseTaxes", "baseFlatDeductions"]) expect(await cloudIncomeSql()).toContain(`"${column}"`);
+      expect(await cloudVersion()).toBe(SCHEMA_VERSION);
+      expect(await cloudRows('SELECT "payDate", "amount", "hours" FROM "IncomeOverride"')).toEqual([{ payDate: 20261118, amount: 560, hours: 32 }]);
+      expect(await billNames()).toEqual(["Seed"]);
+
+      // Another device on the same cloud sees it all through an ordinary pull.
+      other = await otherDevice();
+      expect((await other.conn.exec('SELECT "amount" FROM "IncomeOverride"')).map((r) => r.amount)).toEqual([560]);
+    });
+
+    it("loading a whole database into an old-shaped cloud migrates the cloud first (Sandbox Keep)", async () => {
+      const { SCHEMA_VERSION } = await import("../shared/data");
+      await api().post("/api/Income").send({ name: "Paycheck", amount: 700, isPrimary: true, baseHours: 40 });
+      await api().post("/api/sync/now");
+      // The cloud is still as the previous build left it; this PC's copy is
+      // already migrated (its push has not happened yet, say).
+      await downgradeCloud();
+
+      await api().post("/api/sandbox/enter");
+      await api().post("/api/Bill").send({ name: "Kept", amount: 3, dueDate: 3 });
+      const kept = await api().post("/api/sandbox/keep");
+      expect(kept.status).toBe(200);
+
+      expect(await cloudTables()).toContain("IncomeOverride");
+      expect(await cloudVersion()).toBe(SCHEMA_VERSION);
+      expect(await cloudRows('SELECT "name", "baseHours" FROM "Income"')).toEqual([{ name: "Paycheck", baseHours: 40 }]);
+      expect(await billNames()).toEqual(["Kept", "Seed"]);
+      expect((await api().get("/api/sync")).body).toMatchObject({ state: "synced", pendingChanges: 0 });
+      expect((await api().get("/api/Income")).body[0]).toMatchObject({ name: "Paycheck", baseHours: 40 });
+    });
+  });
 });
 
 describe("export / import", () => {
@@ -818,7 +900,7 @@ describe("export / import", () => {
     await api().post("/api/Bill").send({ name: "After export", amount: 8, dueDate: 8 });
     const imported = await importDb(file);
     expect(imported.status).toBe(200);
-    expect(imported.body).toMatchObject({ dataRows: 1, schemaVersion: 1, target: "local" });
+    expect(imported.body).toMatchObject({ dataRows: 1, schemaVersion: (await import("../shared/data")).SCHEMA_VERSION, target: "local" });
     expect(fs.existsSync(imported.body.backupPath)).toBe(true);
     expect(await apiBillNames()).toEqual(["Exported"]);
   });

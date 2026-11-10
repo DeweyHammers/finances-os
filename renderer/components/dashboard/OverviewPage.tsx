@@ -11,6 +11,8 @@
  *
  * Data sources (all via Refine.dev useList/useOne):
  *   - Bill, Personal, YearlyCost, Income  → recurring cost inputs
+ *   - IncomeOverride                       → single paychecks that differ from
+ *                                            their income (a 32-hour week)
  *   - AppSettings                          → surplus weekly target, misc
  *   - BillSplit                            → per-week allocations written by Optimize
  *
@@ -163,6 +165,15 @@ export function OverviewPage() {
     successNotification: false,
     errorNotification: false,
   });
+  // Per-week paychecks (Income page → "Upcoming paychecks"): a week with an
+  // override shows that amount as its income here, and Optimize plans the
+  // week's bills around it.
+  const { query: incomeOverridesQuery } = useList<BaseRecord>({
+    resource: "IncomeOverride",
+    pagination: { mode: "off" },
+    successNotification: false,
+    errorNotification: false,
+  });
   const { query: splitsQuery } = useList<BaseRecord>({
     resource: "BillSplit",
     pagination: { mode: "off" },
@@ -186,6 +197,7 @@ export function OverviewPage() {
   const yearlyCosts = (yearlyQuery.data?.data || []) as any[];
   const settings = (settingsQuery.data?.data || {}) as any;
   const incomes = (incomesQuery.data?.data || []) as any[];
+  const incomeOverrides = (incomeOverridesQuery.data?.data || []) as any[];
   const primaryIncome = incomes.find((i) => i.isPrimary) as any | undefined;
   const splitRowsRaw = (splitsQuery.data?.data as any[]) || [];
 
@@ -259,8 +271,8 @@ export function OverviewPage() {
   // plan's inputs must be reflected there, or edits to it won't raise the
   // alert or start an automatic run.
   const inputSigs: InputSignatures = useMemo(
-    () => computeInputSignatures({ bills, incomes, personalBills, targetSurplusCents }),
-    [bills, incomes, personalBills, targetSurplusCents],
+    () => computeInputSignatures({ bills, incomes, incomeOverrides, personalBills, targetSurplusCents }),
+    [bills, incomes, incomeOverrides, personalBills, targetSurplusCents],
   );
 
   // Persist the inputs (as their JSON) as the new "last optimized" baseline.
@@ -293,7 +305,8 @@ export function OverviewPage() {
   useEffect(() => {
     const loading =
       billsQuery.isLoading || personalQuery.isLoading ||
-      settingsQuery.isLoading || incomesQuery.isLoading || splitsQuery.isLoading;
+      settingsQuery.isLoading || incomesQuery.isLoading || incomeOverridesQuery.isLoading ||
+      splitsQuery.isLoading;
     if (loading) return;
 
     if (!initializedRef.current) {
@@ -328,7 +341,7 @@ export function OverviewPage() {
       // (a failed automatic run has nothing left to re-plan either).
       setOptimizeAlert((prev) => (prev && (isInputChangeAlert(prev) || isAutoOptimizeFailureAlert(prev)) ? null : prev));
     }
-  }, [inputSigs, settings?.optimizedInputsSig, hasLegacySplits, autoOptimize.busy, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading, splitsQuery.isLoading]);
+  }, [inputSigs, settings?.optimizedInputsSig, hasLegacySplits, autoOptimize.busy, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading, incomeOverridesQuery.isLoading, splitsQuery.isLoading]);
 
   // ── Optimize action ──
   // The button's run: `runOptimize` (lib/optimize-run.ts) is PHASE A
@@ -347,6 +360,7 @@ export function OverviewPage() {
           bills,
           personalBills,
           incomes,
+          incomeOverrides,
           primaryIncome,
           splitRows: splitRowsRaw,
           targetSurplusCents,
@@ -380,6 +394,7 @@ export function OverviewPage() {
     yearlyQuery.isLoading ||
     settingsQuery.isLoading ||
     incomesQuery.isLoading ||
+    incomeOverridesQuery.isLoading ||
     splitsQuery.isLoading
   ) {
     return (
@@ -774,6 +789,7 @@ export function OverviewPage() {
           bills={bills}
           personalBills={personalBills}
           incomes={incomes}
+          incomeOverrides={incomeOverrides}
           viewYear={viewYear}
           viewMonth={viewMonth}
           splits={splits}
@@ -789,6 +805,7 @@ export function OverviewPage() {
           personalBills={personalBills}
           bills={bills}
           incomes={incomes}
+          incomeOverrides={incomeOverrides}
           settings={effectiveSettings}
           viewYear={viewYear}
           viewMonth={viewMonth}

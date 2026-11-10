@@ -7,7 +7,8 @@
  * Every write the renderer makes goes through Refine's data provider, which
  * app/providers.tsx wraps with `withAutoOptimizeTriggers` (beside
  * `withSyncWriteNotices`). After a successful create / update / delete on one
- * of the planner's INPUT resources — Bill, Personal, Income, AppSettings — it
+ * of the planner's INPUT resources — Bill, Personal, Income, IncomeOverride
+ * (a single week's paycheck, Nov 2026), AppSettings — it
  * calls `notifyInputWrite()`, and the runner mounted once in
  * app/providers.tsx (`AutoOptimizeProvider`) schedules ONE re-plan
  * `AUTO_OPTIMIZE_DEBOUNCE_MS` later: a burst of saves plans once. Two writes
@@ -69,7 +70,7 @@ export const AUTO_OPTIMIZE_STARTUP_DELAY_MS = 1500;
 
 // The planner's inputs, lower-cased (Refine resource names are
 // case-insensitive on the API). BillSplit is deliberately absent.
-const INPUT_RESOURCES = new Set(["bill", "personal", "income", "appsettings"]);
+const INPUT_RESOURCES = new Set(["bill", "personal", "income", "incomeoverride", "appsettings"]);
 // AppSettings keys a run writes itself; a save carrying ONLY these is output,
 // not input.
 const OUTPUT_ONLY_KEYS = new Set(["optimizedInputsSig"]);
@@ -134,10 +135,11 @@ async function getJson(path: string, allowMissing = false): Promise<any> {
  * does not exist until the first Settings save (404 → defaults).
  */
 export async function fetchOptimizeInputs() {
-  const [bills, personalBills, incomes, splitRows, settings] = await Promise.all([
+  const [bills, personalBills, incomes, incomeOverrides, splitRows, settings] = await Promise.all([
     getJson("Bill"),
     getJson("Personal"),
     getJson("Income"),
+    getJson("IncomeOverride"),
     getJson("BillSplit"),
     getJson("AppSettings/global", true),
   ]);
@@ -145,6 +147,7 @@ export async function fetchOptimizeInputs() {
     bills: (bills ?? []) as any[],
     personalBills: (personalBills ?? []) as any[],
     incomes: (incomes ?? []) as any[],
+    incomeOverrides: (incomeOverrides ?? []) as any[],
     splitRows: (splitRows ?? []) as any[],
     settings: (settings ?? {}) as any,
   };
@@ -200,14 +203,14 @@ function useAutoOptimizeRunner(debounceMs: number, startupDelayMs: number | null
   // One run: fetch → compare → (plan + write + save). Never throws.
   const performRun = useCallback(async (reason: AutoOptimizeReason) => {
     try {
-      const { bills, personalBills, incomes, splitRows, settings } = await fetchOptimizeInputs();
+      const { bills, personalBills, incomes, incomeOverrides, splitRows, settings } = await fetchOptimizeInputs();
       const primaryIncome = incomes.find((i: any) => i.isPrimary);
       // No primary income → no pay-week grid → nothing to plan (the Overview
       // shows its "No Income Added Yet" state instead of the button).
       if (!primaryIncome) return;
 
       const targetSurplusCents = surplusTargetCentsOf(settings);
-      const sigs = computeInputSignatures({ bills, incomes, personalBills, targetSurplusCents });
+      const sigs = computeInputSignatures({ bills, incomes, incomeOverrides, personalBills, targetSurplusCents });
       const baseline = parseOptimizedSig(settings?.optimizedInputsSig);
       const stale = !baseline || describeInputChange(sigs, baseline) !== null;
       const today = new Date();
@@ -228,7 +231,7 @@ function useAutoOptimizeRunner(debounceMs: number, startupDelayMs: number | null
       }
 
       const result = await runOptimize(
-        { today, bills, personalBills, incomes, primaryIncome, splitRows, targetSurplusCents },
+        { today, bills, personalBills, incomes, incomeOverrides, primaryIncome, splitRows, targetSurplusCents },
         sigs,
         { saveBaseline, invalidateSplits },
       );

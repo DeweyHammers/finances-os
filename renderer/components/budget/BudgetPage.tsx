@@ -184,6 +184,13 @@ export const BudgetPage = () => {
     resource: "Income",
     pagination: { mode: "off" },
   });
+  // Per-week paychecks (Income page → "Upcoming paychecks"): a week with an
+  // override has that amount as its income in the split-personal math below,
+  // exactly as on the Overview.
+  const { query: incomeOverridesQuery } = useList({
+    resource: "IncomeOverride",
+    pagination: { mode: "off" },
+  });
   const { query: settingsQuery } = useOne({
     resource: "AppSettings",
     id: "global",
@@ -204,6 +211,7 @@ export const BudgetPage = () => {
   const personals = (personalsQuery.data?.data as any[]) || [];
   const splitRowsRaw = (splitsQuery.data?.data as any[]) || [];
   const incomes = (incomesQuery.data?.data as any[]) || [];
+  const incomeOverrides = (incomeOverridesQuery.data?.data as any[]) || [];
   const settings = (settingsQuery.data?.data as any) || {};
 
   const viewYear = month.getUTCFullYear();
@@ -392,6 +400,7 @@ export const BudgetPage = () => {
         payDay,
         paymentCycle: primaryIncome?.paymentCycle ?? settings.paymentCycle,
       },
+      incomeOverrides,
     );
     const fixedPersonalPerPeriodCents = periods.map((p) =>
       personalRefs
@@ -458,6 +467,7 @@ export const BudgetPage = () => {
     splitRowsRaw,
     periods,
     incomes,
+    incomeOverrides,
     settings,
     viewYear,
     viewMonth,

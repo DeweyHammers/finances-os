@@ -1522,6 +1522,8 @@ export function getBillOccurrenceInPeriod(
  * the REST boundary.
  */
 export interface IncomeSourceLike {
+  /** The Income row's id — what a per-week override is matched on. The legacy AppSettings source has none. */
+  id?: string | null;
   name?: string | null;
   amount?: number | string | null;
   /** Payday weekday, 0=Sun … 6=Sat. Missing → `IncomeDefaults.payDay`. */
@@ -1585,11 +1587,123 @@ export function getIncomeSourcesForPeriod<T extends IncomeSourceLike>(
   });
 }
 
+// ── Per-week income overrides (Nov 2026) ──
+// "The Nov 18 paycheck is 32 hours, not 40." An IncomeOverride row replaces
+// ONE paycheck of ONE income, found by the payday's calendar date — so it
+// changes exactly that pay week, never "every week 3", and it stays attached
+// to the same real paycheck whichever month view (or the optimizer's
+// next-month first week) is looking at it. No row = the income's regular
+// amount. Every place that counts paychecks goes through
+// getIncomePaymentsForPeriod / computeIncomePerPeriodCents below, so the
+// Overview, the Plan and Optimize can't disagree about a week's income.
+// See CLAUDE.md → "Per-week income overrides".
+
+/** An IncomeOverride row as it arrives from the API (loose, like IncomeSourceLike). */
+export interface IncomeOverrideLike {
+  id?: string | null;
+  incomeId?: string | null;
+  /** The payday it replaces, as a YYYYMMDD number (see payDateKey). */
+  payDate?: number | string | null;
+  /** The paycheck for that payday, in dollars. 0 is valid: no paycheck that week. */
+  amount?: number | string | null;
+  /** Hours behind it — display only. */
+  hours?: number | string | null;
+}
+
+/**
+ * A calendar date as the YYYYMMDD number overrides are keyed on (Nov 18 2026
+ * → 20261118). `month` is 0-based like Date. A number rather than a
+ * "YYYY-MM-DD" string because the API's body normaliser turns such strings
+ * into Dates (shared/data/coerce.ts); it also sorts chronologically.
+ */
+export function payDateKey(year: number, month: number, day: number): number {
+  return year * 10000 + (month + 1) * 100 + day;
+}
+
+/** payDateKey of a local Date. */
+export function payDateKeyOf(date: Date): number {
+  return payDateKey(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+/** The override for one income's payday, or null. An unreadable amount counts as no override. */
+export function findIncomeOverride<O extends IncomeOverrideLike>(
+  overrides: readonly O[] | null | undefined,
+  incomeId: string | null | undefined,
+  key: number,
+): O | null {
+  if (!overrides || overrides.length === 0 || incomeId == null) return null;
+  for (const o of overrides) {
+    if (String(o.incomeId) !== String(incomeId) || Number(o.payDate) !== key) continue;
+    if (o.amount == null || !Number.isFinite(Number(o.amount))) continue;
+    return o;
+  }
+  return null;
+}
+
+/** One income's paycheck inside a pay period. */
+export interface IncomePayment<T extends IncomeSourceLike, O extends IncomeOverrideLike = IncomeOverrideLike> {
+  source: T;
+  /** Dollars: the override's amount when this payday has one, else the source's regular amount. */
+  amount: number;
+  /** payDateKey of the payday that counts for this period. */
+  payDate: number;
+  /** The override applied, or null for a regular paycheck. */
+  override: O | null;
+}
+
+/**
+ * The paychecks landing inside `period`, one per firing source in input
+ * order — getIncomeSourcesForPeriod plus the amount each one actually pays
+ * in THIS period. A source still counts once per period: when two of its
+ * paydays fall in the same period (a weekly income on a bi-weekly grid), the
+ * first payday that has an override decides the amount, else the regular one.
+ * With no overrides the amounts are exactly `Number(source.amount) || 0`.
+ */
+export function getIncomePaymentsForPeriod<T extends IncomeSourceLike, O extends IncomeOverrideLike = IncomeOverrideLike>(
+  sources: T[],
+  period: Pick<PayPeriod, "startDay" | "endDay">,
+  year: number,
+  month: number,
+  defaults: IncomeDefaults,
+  overrides?: readonly O[] | null,
+): IncomePayment<T, O>[] {
+  const payments: IncomePayment<T, O>[] = [];
+  for (const income of sources) {
+    const payDay = Number(income.payDay ?? defaults.payDay);
+    const isBiWeekly = (income.paymentCycle ?? defaults.paymentCycle) === "BI_WEEKLY";
+    const offset = Number(income.payWeekOffset ?? 0);
+    const paydays = getIncomePaydays(year, month, payDay, isBiWeekly, offset).filter(
+      (d) => d >= period.startDay && d <= period.endDay,
+    );
+    if (paydays.length === 0) continue;
+    let override: O | null = null;
+    let payDate = payDateKey(year, month, paydays[0]);
+    for (const d of paydays) {
+      const key = payDateKey(year, month, d);
+      const found = findIncomeOverride(overrides, income.id, key);
+      if (found) {
+        override = found;
+        payDate = key;
+        break;
+      }
+    }
+    payments.push({
+      source: income,
+      amount: override ? Number(override.amount) : Number(income.amount) || 0,
+      payDate,
+      override,
+    });
+  }
+  return payments;
+}
+
 /**
  * Income landing in each pay period, in integer cents, aligned with `periods`.
  * Each source is rounded to cents individually before summing (matches the
  * original inline loops bit-for-bit). A source counts once per period even if
- * two of its paydays fall in the same period.
+ * two of its paydays fall in the same period. `overrides` (IncomeOverride
+ * rows) replace single paychecks — see getIncomePaymentsForPeriod; without
+ * them the result is what it always was.
  */
 export function computeIncomePerPeriodCents(
   sources: IncomeSourceLike[],
@@ -1597,13 +1711,101 @@ export function computeIncomePerPeriodCents(
   year: number,
   month: number,
   defaults: IncomeDefaults,
+  overrides?: readonly IncomeOverrideLike[] | null,
 ): number[] {
   return periods.map((period) =>
-    getIncomeSourcesForPeriod(sources, period, year, month, defaults).reduce(
-      (total, income) => total + Math.round((Number(income.amount) || 0) * 100),
+    getIncomePaymentsForPeriod(sources, period, year, month, defaults, overrides).reduce(
+      (total, payment) => total + Math.round(payment.amount * 100),
       0,
     ),
   );
+}
+
+/** One upcoming (or current) paycheck of an income — a row of the Income page's per-week editor. */
+export interface IncomePaycheck {
+  /** payDateKey of the payday: the key an override for it is saved under. */
+  payDate: number;
+  /** The payday (local midnight). */
+  start: Date;
+  /** Last day this paycheck covers: the day before the income's next payday. */
+  end: Date;
+  /**
+   * The days whose HOURS this paycheck pays for: the pay period just before
+   * the payday (previous payday … the day before this one). Pay is a period
+   * in arrears — the hours worked Nov 11–17 arrive in the Nov 18 paycheck
+   * (how the user is paid, Nov 10 2026). Display only: it tells the user
+   * which paycheck to edit for a given work week; nothing is planned on it.
+   */
+  workStart: Date;
+  workEnd: Date;
+  /** 1-based position among this income's paydays in its month ("Week 3"). */
+  weekOfMonth: number;
+  /** Today falls inside [start, end]. */
+  isCurrent: boolean;
+}
+
+/**
+ * An income's paychecks from the one covering `today` onward (`count` of
+ * them), each with the date range it covers. Uses getIncomePaydays, the
+ * same payday rule the planner uses, so the date an override is saved under
+ * here is the date the planner looks it up by. Before the income's very
+ * first payday of the scan the list simply starts at the next one.
+ */
+export function listIncomePaychecks(
+  income: IncomeSourceLike,
+  defaults: IncomeDefaults,
+  today: Date,
+  count: number,
+): IncomePaycheck[] {
+  const payDay = Number(income.payDay ?? defaults.payDay);
+  const isBiWeekly = (income.paymentCycle ?? defaults.paymentCycle) === "BI_WEEKLY";
+  const offset = Number(income.payWeekOffset ?? 0);
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  // Every payday from last month on, until `count` of them start after today
+  // (+1 so the last listed paycheck still knows where it ends). The month cap
+  // only guards against an income that never pays (a weekday that can't occur).
+  const paydays: { date: Date; weekOfMonth: number }[] = [];
+  let future = 0;
+  for (let i = -1; future < count + 1 && i < count * 2 + 6; i++) {
+    const first = new Date(today.getFullYear(), today.getMonth() + i, 1);
+    const y = first.getFullYear();
+    const m = first.getMonth();
+    getIncomePaydays(y, m, payDay, isBiWeekly, offset).forEach((d, idx) => {
+      const date = new Date(y, m, d);
+      paydays.push({ date, weekOfMonth: idx + 1 });
+      if (date > todayStart) future++;
+    });
+  }
+
+  // Start at the paycheck covering today: the last payday on or before it.
+  let startIdx = 0;
+  for (let i = 0; i < paydays.length; i++) {
+    if (paydays[i].date <= todayStart) startIdx = i;
+  }
+  const out: IncomePaycheck[] = [];
+  for (let i = startIdx; i < paydays.length - 1 && out.length < count; i++) {
+    const start = paydays[i].date;
+    const next = paydays[i + 1].date;
+    const end = new Date(next.getFullYear(), next.getMonth(), next.getDate() - 1);
+    // The work period it pays for: from the previous payday to the day before
+    // this one. The scan starts a month back, so there is a previous payday
+    // in practice; if not, assume a period as long as this one.
+    const periodDays = Math.round((next.getTime() - start.getTime()) / 86_400_000);
+    const workStart =
+      i > 0 ? paydays[i - 1].date : new Date(start.getFullYear(), start.getMonth(), start.getDate() - periodDays);
+    const workEnd = new Date(start.getFullYear(), start.getMonth(), start.getDate() - 1);
+    out.push({
+      payDate: payDateKeyOf(start),
+      start,
+      end,
+      workStart,
+      workEnd,
+      weekOfMonth: paydays[i].weekOfMonth,
+      isCurrent: start <= todayStart && todayStart <= end,
+    });
+  }
+  return out;
 }
 
 /**
