@@ -14,6 +14,12 @@
 // the pictures are identical on every run. One item of each kind is entered
 // through the real UI forms (so the tour shows the form); the rest go in
 // through the same REST API the forms use.
+//
+// Optimize runs BY ITSELF since 0.5.0 (renderer/lib/auto-optimize.tsx): about
+// a second after a save made in the UI, and on every page load whose plan is
+// out of date — which is how rows this script posts straight to the API get
+// planned. So the tour never clicks Optimize; it calls `waitForPlan()` and
+// takes its picture once the plan matches the data.
 import path from "node:path";
 import fs from "node:fs";
 import { execSync, spawn, spawnSync } from "node:child_process";
@@ -37,6 +43,14 @@ const SYNC_TOKEN_SHOWN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.alex-demo-token";
 
 // ── Fake data ────────────────────────────────────────────────────────────
 const INCOME = { name: "Paycheck", amount: 1150, paymentCycle: "WEEKLY", payDay: 5 }; // Fridays
+// The optional "When your hours change" numbers on the income, as if read off
+// a regular pay stub: $1,375 gross − $210 taxes − $15 dues = the $1,150
+// take-home above, for 40 hours. They let the short-week step enter a week
+// by its hours. (Made up, like everything else here.)
+const PAY_STUB = { hours: 40, taxes: 210, dues: 15 };
+// The short week: Alex works 32 hours Nov 6 – Nov 12, paid on Friday Nov 13.
+// 32 of 40 hours → $1,100 gross − $168 taxes − $15 dues = $917.
+const SHORT_WEEK = { hours: 32, paycheck: "Nov 13 – Nov 19" };
 const BILLS = [
   // [name, amount, due day] — the first one is typed into the UI form.
   ["Rent", 1400, 1],
@@ -80,6 +94,62 @@ async function api(method, resource, body) {
   return res.json();
 }
 const post = (r, b) => api("POST", r, b);
+
+// "Today" on the story's frozen clock — kept beside page.setClock so
+// waitForPlan knows which month the 36-month horizon ends in.
+let storyNow = null;
+async function setStoryClock(page, isoLocal) {
+  storyNow = new Date(isoLocal);
+  await page.setClock(isoLocal);
+}
+
+/**
+ * Is the automatic re-plan done for the data as it is right now? True when
+ * the baseline the last successful run saved (`AppSettings.optimizedInputsSig`)
+ * equals the signature of the current inputs AND the last month of the
+ * horizon has rows. The signature mirrors `computeInputSignatures` in
+ * renderer/lib/optimize-run.ts (this file is plain .mjs and cannot import
+ * it); if the two ever drift, `waitForPlan` times out loudly rather than
+ * taking a picture of a half-planned Overview.
+ */
+async function planIsCurrent() {
+  const [bills, incomes, overrides, personals, splits] = await Promise.all(
+    ["Bill", "Income", "IncomeOverride", "Personal", "BillSplit"].map((r) => api("GET", r)),
+  );
+  let settings = null;
+  try {
+    settings = await api("GET", "AppSettings/global");
+  } catch {} // no settings row yet
+  const incomeBase = incomes.map((i) => `${i.id}:${i.amount}:${i.payDay}:${i.paymentCycle}:${i.payWeekOffset ?? 0}`).sort().join(",");
+  const expected = JSON.stringify({
+    bills: bills.map((b) => `${b.id}:${b.amount}:${b.dueDate}:${b.neverSplit ? 1 : 0}`).sort().join(","),
+    incomes: overrides.length
+      ? `${incomeBase}|${overrides.map((o) => `${o.incomeId}@${o.payDate}:${o.amount}`).sort().join(",")}`
+      : incomeBase,
+    personals: personals.map((p) => `${p.id}:${p.amount}:${p.dueDate}:${p.repeatWeekly ? 1 : 0}:${p.weekOfMonth ?? ""}`).sort().join(","),
+    surplusTarget: Number(settings?.wifeWeeklyTargetCents ?? 30000),
+  });
+  if (settings?.optimizedInputsSig !== expected) return false;
+  if (bills.length === 0) return true;
+  const last = new Date(storyNow.getFullYear(), storyNow.getMonth() + 35, 1); // OPTIMIZE_HORIZON_MONTHS - 1
+  const lastMonthKey = `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, "0")}`;
+  return splits.some((s) => s.monthKey === lastMonthKey);
+}
+
+/**
+ * Wait until the app has re-planned by itself, then let the open page catch
+ * up (the run refetches the BillSplit lists and the settings).
+ */
+async function waitForPlan(page, maxMs = 180000) {
+  const start = Date.now();
+  while (!(await planIsCurrent())) {
+    if (Date.now() - start > maxMs) throw new Error("timed out waiting for the automatic re-plan");
+    await page.sleep(500);
+  }
+  await page.settle();
+  await waitForNoText(page, /were added or updated|re-plan failed|Optimize failed/, 30000);
+  await page.sleep(1200);
+}
 
 let shotNo = 0;
 async function shot(page, name) {
@@ -178,7 +248,7 @@ const page = await launch({ width: 1920, height: 1080 });
 let syncMock = null;
 try {
   // Day 0: Thursday Oct 1 2026, the day Alex installs the app.
-  await page.setClock("2026-10-01T09:00:00");
+  await setStoryClock(page, "2026-10-01T09:00:00");
 
   console.log("Step 1 · a brand-new, empty app");
   await page.goto("/Overview");
@@ -191,6 +261,11 @@ try {
   await page.fill("Amount per period", INCOME.amount);
   await page.clickText("Weekly", "[role=dialog] button");
   await page.clickText("Fri", "[role=dialog] button");
+  // Optional, from a pay stub: lets a single week be entered by its hours
+  // later on (the short-week step).
+  await page.fill("Regular hours", PAY_STUB.hours);
+  await page.fill("Taxes taken out", PAY_STUB.taxes);
+  await page.fill("Dues & fixed deductions", PAY_STUB.dues);
   await shot(page, "income-form");
   await page.click(".MuiDialogActions-root button:last-child");
   await shot(page, "income-list");
@@ -230,15 +305,12 @@ try {
   await page.goto("/YearlyCosts");
   await shot(page, "yearly-list");
 
-  console.log("Step 6 · Overview + Optimize");
+  console.log("Step 6 · the Overview, planned by itself");
+  // Nothing to click: the app re-plans the next 36 months on its own after
+  // the data changes. (Until 0.5.0 this step showed an un-optimized Overview
+  // first and then clicked Optimize; that state no longer exists.)
   await page.goto("/Overview");
-  await shot(page, "overview-before-optimize");
-  await page.clickText("Optimize");
-  // Optimize plans 36 months and writes a few hundred rows; its success toast
-  // only lives 3 s, so wait for the writes to finish and the alert to clear.
-  await page.settle(2000, 180000);
-  await waitForNoText(page, /Bills were added or updated|Optimize failed/, 60000);
-  await page.sleep(3500); // let the success toast fade out of the picture
+  await waitForPlan(page);
   await shot(page, "overview-optimized");
   await scrollMain(page, 1000);
   await shot(page, "overview-bills");
@@ -302,7 +374,7 @@ try {
   for (const payday of ["2026-10-02", "2026-10-09", "2026-10-16", "2026-10-23", "2026-10-30"]) {
     console.log(`Step 9 · payday ${payday}`);
     for (const t of SPENDING[payday] ?? []) await txn(...t);
-    await page.setClock(`${payday}T09:00:00`);
+    await setStoryClock(page, `${payday}T09:00:00`);
     const first = payday === "2026-10-02";
     if (first) {
       // The first paycheck goes in through the real Cash form so the tour can
@@ -343,7 +415,7 @@ try {
   }
 
   console.log("Step 10 · end of the month");
-  await page.setClock("2026-10-30T18:00:00");
+  await setStoryClock(page, "2026-10-30T18:00:00");
   await page.goto("/Plan");
   await shot(page, "plan-month-end");
   await page.goto(`/Cash?id=${checking.id}`);
@@ -351,7 +423,27 @@ try {
   await page.goto("/Overview");
   await shot(page, "overview-month-end");
 
-  console.log("Step 11 · what if? (sandbox)");
+  console.log("Step 11 · a short week");
+  // Alex is told the week of Nov 6 – Nov 12 will be 32 hours. That work week
+  // is paid on Friday Nov 13, so it is the "Nov 13 – Nov 19" paycheck on the
+  // Income page. Typing the hours fills in the take-home from the pay-stub
+  // numbers entered in step 2; saving re-plans that one week by itself.
+  await page.goto("/Income");
+  await page.clickText(`Change the paycheck for ${SHORT_WEEK.paycheck}`);
+  await page.fill("Hours worked", SHORT_WEEK.hours);
+  await shot(page, "short-week-form");
+  await page.click(".MuiDialogActions-root button:last-child");
+  await waitForPlan(page);
+  await shot(page, "income-paychecks");
+  // November is where it shows: Pay Week 2 has the smaller paycheck and
+  // fewer bills, every other week is as it was.
+  await page.goto("/Overview");
+  await page.click('button:has(svg[data-testid="NavigateNextIcon"])');
+  await page.sleep(800);
+  await page.settle();
+  await shot(page, "overview-short-week");
+
+  console.log("Step 12 · what if? (sandbox)");
   // Alex wonders what cancelling the gym would do to next month. Try it on a
   // COPY of the data: "Try a sandbox" (Settings -> Data) copies the database
   // and reloads the page with the amber banner; the real data is untouched
@@ -365,13 +457,13 @@ try {
   await waitForText(page, /You're working on a copy/);
   const gym = (await api("GET", "Bill")).find((b) => b.name === "Gym Membership");
   await api("DELETE", `Bill/${gym.id}`);
+  // Loading the Overview is enough: the plan no longer matches the data, so
+  // the app re-plans the copy by itself.
   await page.goto("/Overview");
-  await waitForText(page, /Bills were added or updated/);
-  await page.clickText("Optimize");
-  await page.settle(2000, 180000);
-  await waitForNoText(page, /Bills were added or updated|Optimize failed/, 60000);
-  await page.sleep(3500);
-  // November is where the change shows (October's weeks are all locked).
+  await waitForPlan(page);
+  // Flip to November (October's weeks are all locked). The pay-week cards
+  // barely move there — the gym's next payment is on Dec 5 — so the visible
+  // change is the Bills total at the top, which docs/index.html quotes.
   await page.click('button:has(svg[data-testid="NavigateNextIcon"])');
   await page.sleep(800);
   await page.settle();
@@ -386,13 +478,14 @@ try {
   await page.goto("/Overview");
   await waitForNoText(page, /You're working on a copy/);
 
+  console.log("Step 13 · look back");
   await page.goto("/Statistics");
   await page.clickText("Month-to-Month");
   await shot(page, "statistics-month");
   await page.clickText("Yearly Overview");
   await shot(page, "statistics-year");
 
-  console.log("Step 12 · sync across devices");
+  console.log("Step 14 · sync across devices");
   // The Settings form, filled with a made-up Turso URL and token (not
   // submitted: the picture is what matters).
   await page.goto("/Settings?tab=sync");
