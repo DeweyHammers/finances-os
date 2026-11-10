@@ -46,16 +46,32 @@ export interface InputSignatures {
 export interface SignatureInputs {
   bills: any[];
   incomes: any[];
+  /** IncomeOverride rows (per-week paychecks). Optional: none = regular paychecks only. */
+  incomeOverrides?: any[];
   personalBills: any[];
   /** AppSettings.wifeWeeklyTargetCents (the "Surplus Target"), default $300. */
   targetSurplusCents: number;
 }
 
+/**
+ * The incomes signature. Per-week overrides are part of the income inputs, so
+ * they are folded into the same string — appended after a `|`, and ONLY when
+ * there are any: with no overrides the string is exactly what it was before
+ * Nov 2026, so a baseline saved by an older build still matches and the
+ * upgrade itself starts no re-plan. `hours` is display-only and left out.
+ */
+function incomesSignature(incomes: any[], incomeOverrides: any[]): string {
+  const base = incomes.map((i: any) => `${i.id}:${i.amount}:${i.payDay}:${i.paymentCycle}:${i.payWeekOffset ?? 0}`).sort().join(",");
+  if (incomeOverrides.length === 0) return base;
+  const overrides = incomeOverrides.map((o: any) => `${o.incomeId}@${o.payDate}:${o.amount}`).sort().join(",");
+  return `${base}|${overrides}`;
+}
+
 /** Signatures of every Optimize input — the Overview's rule, unchanged. */
-export function computeInputSignatures({ bills, incomes, personalBills, targetSurplusCents }: SignatureInputs): InputSignatures {
+export function computeInputSignatures({ bills, incomes, incomeOverrides = [], personalBills, targetSurplusCents }: SignatureInputs): InputSignatures {
   return {
     bills: bills.map((b: any) => `${b.id}:${b.amount}:${b.dueDate}:${b.neverSplit ? 1 : 0}`).sort().join(","),
-    incomes: incomes.map((i: any) => `${i.id}:${i.amount}:${i.payDay}:${i.paymentCycle}:${i.payWeekOffset ?? 0}`).sort().join(","),
+    incomes: incomesSignature(incomes, incomeOverrides),
     personals: personalBills.map((p: any) => `${p.id}:${p.amount}:${p.dueDate}:${p.repeatWeekly ? 1 : 0}:${p.weekOfMonth ?? ""}`).sort().join(","),
     surplusTarget: targetSurplusCents,
   };

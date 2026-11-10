@@ -23,6 +23,7 @@
 import { cuid } from "./cuid";
 import { fromStorage, toStorage, transformBody } from "./coerce";
 import { DataError } from "./errors";
+import { migrationStatements } from "./migrations";
 import { SCHEMA_SQL } from "./schema-sql";
 import { MODELS, SCHEMA_VERSION, resolveModel, type Column, type Model } from "./schema";
 import {
@@ -86,23 +87,45 @@ export async function getSchemaVersion(db: SqlExecutor): Promise<number> {
 }
 
 /**
- * Bring a database that predates the data layer (a dev.db / PROD file that
- * Prisma created) up to the current bookkeeping: the SchemaVersion table and
- * its stamp. Idempotent. Future schema versions add their migration here.
+ * Bring an existing database up to this build: one that predates the data
+ * layer (a dev.db / PROD file that Prisma created — it gets the SchemaVersion
+ * table), and one made by an older build (it gets the missing columns and
+ * tables, migrations.ts). Idempotent, and all or nothing: the DDL and the
+ * version stamp share one transaction, so a failure halfway leaves the file
+ * exactly as it was and the next first use tries again.
+ *
+ * On a synced copy these are ordinary local writes — the next sync pushes
+ * them to the cloud, which is how the user's cloud database gets the new
+ * shape. A database NEWER than this build is left alone (the schema gate in
+ * main/sync.ts refuses to write to it).
  */
 export async function ensureSchemaVersion(db: SqlExecutor): Promise<number> {
   const current = await getSchemaVersion(db);
   if (current >= SCHEMA_VERSION) return current;
-  if (current === 0) {
-    const create = splitStatements(SCHEMA_SQL).find((s) => s.includes('CREATE TABLE "SchemaVersion"'));
-    if (!create) throw new Error("schema.sql has no SchemaVersion table");
-    await db.exec(create.replace('CREATE TABLE "SchemaVersion"', 'CREATE TABLE IF NOT EXISTS "SchemaVersion"'));
+  await db.exec("BEGIN");
+  try {
+    if (current === 0) {
+      const create = splitStatements(SCHEMA_SQL).find((s) => s.includes('CREATE TABLE "SchemaVersion"'));
+      if (!create) throw new Error("schema.sql has no SchemaVersion table");
+      await db.exec(create.replace('CREATE TABLE "SchemaVersion"', 'CREATE TABLE IF NOT EXISTS "SchemaVersion"'));
+    }
+    // Whatever this file is missing compared with this build's shape. The
+    // steps look at the file itself, not at `current`, so a file that already
+    // has the shape (dev.db after `prisma db push`) gets only the stamp.
+    for (const statement of await migrationStatements(db)) await db.exec(statement);
+    await db.exec('INSERT INTO "SchemaVersion" ("version", "appliedAt") VALUES (?, ?)', [
+      SCHEMA_VERSION,
+      Date.now(),
+    ]);
+    await db.exec("COMMIT");
+  } catch (e) {
+    try {
+      await db.exec("ROLLBACK");
+    } catch {
+      /* the original error matters more */
+    }
+    throw e;
   }
-  // Versions > 1 will run their migration steps here before stamping.
-  await db.exec('INSERT INTO "SchemaVersion" ("version", "appliedAt") VALUES (?, ?)', [
-    SCHEMA_VERSION,
-    Date.now(),
-  ]);
   return SCHEMA_VERSION;
 }
 

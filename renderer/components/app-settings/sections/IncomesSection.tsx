@@ -7,6 +7,11 @@
  * add/edit. Mounted inside the AppSettingsModal AND as the standalone /Income
  * route. Exactly one income must be marked Primary — the Primary income's
  * paymentCycle + payDay drive bill grouping and the Plan/Overview pay periods.
+ *
+ * Under each income sits its per-week editor (IncomePaychecks.tsx, Nov 2026):
+ * the upcoming paychecks, any of which can be set to different hours / a
+ * different amount for that one week. "Regular hours" in the income's own
+ * form is what lets a week be entered as hours.
  */
 
 import SavingsIcon from "@mui/icons-material/Savings";
@@ -35,6 +40,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import StarIcon from "@mui/icons-material/Star";
 import { useList, useCreate, useUpdate, useDelete } from "@refinedev/core";
 import { CancelButton } from "../../shared/CancelButton";
+import { IncomePaychecks } from "./IncomePaychecks";
 
 // ── Constants ──
 // Weekday values match JS Date.getDay() convention (0=Sun … 6=Sat). Weekend
@@ -61,9 +67,16 @@ const CYCLE_OPTIONS = [
 // Local form state — `amount` is stored as string so the raw TextField input
 // survives editing (empty, partial decimals, etc.) and is coerced on save.
 // `payWeekOffset` only matters for BI_WEEKLY (0 = 1st & 3rd week, 1 = 2nd & 4th).
+// `baseHours`, `baseTaxes` and `baseFlatDeductions` (all optional, "" = not
+// set) describe the regular paycheck: the hours `amount` is paid for and what
+// came out of it. They only feed the per-week editor's estimate
+// (lib/paycheck-estimate.ts), never the plan.
 interface IncomeFormState {
   name: string;
   amount: string;
+  baseHours: string;
+  baseTaxes: string;
+  baseFlatDeductions: string;
   paymentCycle: string;
   payDay: number;
   payWeekOffset: number;
@@ -75,11 +88,17 @@ interface IncomeFormState {
 const DEFAULT_FORM: IncomeFormState = {
   name: "",
   amount: "",
+  baseHours: "",
+  baseTaxes: "",
+  baseFlatDeductions: "",
   paymentCycle: "WEEKLY",
   payDay: 3,
   payWeekOffset: 0,
   isPrimary: false,
 };
+
+/** "" → null (not set), otherwise the number typed. */
+const optionalNumber = (text: string): number | null => (text.trim() === "" ? null : Number(text));
 
 export const IncomesSection = () => {
   // ── Local UI state ──
@@ -96,6 +115,14 @@ export const IncomesSection = () => {
     pagination: { mode: "off" },
     sorters: [{ field: "isPrimary", order: "desc" }],
   });
+  // Per-week paychecks of every income; each row's editor picks its own.
+  const { query: overridesQuery } = useList({
+    resource: "IncomeOverride",
+    pagination: { mode: "off" },
+    successNotification: false,
+    errorNotification: false,
+  });
+  const incomeOverrides = (overridesQuery.data?.data as any[]) ?? [];
   const { mutate: createIncome } = useCreate();
   const { mutate: updateIncome } = useUpdate();
   const { mutate: deleteIncome } = useDelete();
@@ -130,6 +157,9 @@ export const IncomesSection = () => {
     setForm({
       name: income.name,
       amount: String(income.amount),
+      baseHours: income.baseHours != null ? String(income.baseHours) : "",
+      baseTaxes: income.baseTaxes != null ? String(income.baseTaxes) : "",
+      baseFlatDeductions: income.baseFlatDeductions != null ? String(income.baseFlatDeductions) : "",
       paymentCycle: income.paymentCycle ?? "WEEKLY",
       payDay: Number(income.payDay ?? 3),
       payWeekOffset: Number(income.payWeekOffset ?? 0),
@@ -144,6 +174,10 @@ export const IncomesSection = () => {
     const values = {
       name: form.name.trim(),
       amount: Number(form.amount),
+      // Empty = not set (null). Sent as numbers: the columns are Floats.
+      baseHours: optionalNumber(form.baseHours),
+      baseTaxes: optionalNumber(form.baseTaxes),
+      baseFlatDeductions: optionalNumber(form.baseFlatDeductions),
       paymentCycle: form.paymentCycle,
       payDay: form.payDay,
       payWeekOffset: form.paymentCycle === "BI_WEEKLY" ? form.payWeekOffset : 0,
@@ -240,11 +274,10 @@ export const IncomesSection = () => {
                 bgcolor: income.isPrimary
                   ? "rgba(129, 140, 248, 0.07)"
                   : "rgba(255,255,255,0.02)",
-                display: "flex",
-                alignItems: "center",
-                gap: 2,
               }}
             >
+              {/* Top row: name + cadence on the left, edit / delete on the right. */}
+              <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Box
                   sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}
@@ -273,7 +306,9 @@ export const IncomesSection = () => {
                 <Box
                   sx={{
                     display: "flex",
-                    gap: 1.5,
+                    columnGap: 1.5,
+                    // On a phone the cadence wraps as whole pieces ("40 hrs" never splits).
+                    flexWrap: "wrap",
                     alignItems: "center",
                   }}
                 >
@@ -295,6 +330,17 @@ export const IncomesSection = () => {
                   <Typography variant="caption" sx={{ color: "text.secondary" }}>
                     {PAY_DAY_LABEL[Number(income.payDay)] ?? `Day ${income.payDay}`}
                   </Typography>
+                  {/* The hours the regular amount is for, when the user set them. */}
+                  {income.baseHours != null && (
+                    <>
+                      <Typography variant="caption" sx={{ color: "text.disabled" }}>
+                        ·
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
+                        {Number(income.baseHours)} hrs
+                      </Typography>
+                    </>
+                  )}
                 </Box>
               </Box>
               <Box sx={{ display: "flex", gap: 0.5, flexShrink: 0 }}>
@@ -315,6 +361,9 @@ export const IncomesSection = () => {
                   </IconButton>
                 )}
               </Box>
+              </Box>
+              {/* This income's upcoming paychecks — click one to change that week only. */}
+              <IncomePaychecks income={income} overrides={incomeOverrides} />
             </Box>
           ))}
         </Box>
@@ -364,8 +413,64 @@ export const IncomesSection = () => {
                 setForm((f) => ({ ...f, amount: e.target.value }))
               }
               fullWidth
+              helperText="Your take-home pay: what lands in your account, after taxes and deductions."
               slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
             />
+            {/* Optional: the regular paycheck's hours and what comes out of
+                it. With hours set, a single week can be entered as hours on
+                the Income page ("32 this week") and its amount is estimated
+                like a pay stub: taxes shrink with the hours, flat deductions
+                (union dues) don't. */}
+            <Box>
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: 700, color: "text.secondary", letterSpacing: 0.5, display: "block" }}
+              >
+                WHEN YOUR HOURS CHANGE (OPTIONAL)
+              </Typography>
+              <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mb: 2 }}>
+                Used to work out a week&apos;s paycheck from its hours. Take the numbers from a regular pay stub.
+              </Typography>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
+                <TextField
+                  label="Regular hours"
+                  type="number"
+                  value={form.baseHours}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, baseHours: e.target.value }))
+                  }
+                  fullWidth
+                  placeholder="e.g. 40"
+                  helperText="The hours the amount above is for."
+                  slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal", min: 0, step: "any" } }}
+                />
+                {/* Side by side on a desktop dialog, stacked on a phone. */}
+                <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "repeat(2, minmax(0, 1fr))" }, gap: 2.5 }}>
+                  <TextField
+                    label="Taxes taken out"
+                    type="number"
+                    value={form.baseTaxes}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, baseTaxes: e.target.value }))
+                    }
+                    fullWidth
+                    helperText="Per regular paycheck. Shrinks with a shorter week."
+                    slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal", min: 0, step: "any" } }}
+                  />
+                  <TextField
+                    label="Dues & fixed deductions"
+                    type="number"
+                    value={form.baseFlatDeductions}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, baseFlatDeductions: e.target.value }))
+                    }
+                    fullWidth
+                    helperText="Same every paycheck, whatever the hours."
+                    slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal", min: 0, step: "any" } }}
+                  />
+                </Box>
+              </Box>
+            </Box>
 
             <Box>
               <Typography

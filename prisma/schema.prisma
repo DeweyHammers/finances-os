@@ -15,6 +15,36 @@ model Income {
   payDay        Int     @default(3)
   payWeekOffset Int     @default(0)  // bi-weekly only: 0 = 1st & 3rd paydays, 1 = 2nd & 4th paydays
   isPrimary     Boolean @default(false)
+  // Hours behind `amount` (e.g. 40). Optional: when set, a per-week override
+  // can be entered as hours and its amount is filled in proportionally.
+  // Added LAST on purpose: the schema-version-2 migration appends the column
+  // with ALTER TABLE, so a migrated database and a fresh one have the same
+  // column order (shared/data/migrations.ts).
+  baseHours     Float?
+  // What comes out of the regular paycheck, so a week entered as hours can be
+  // estimated the way a pay stub works (`amount` above is TAKE-HOME, after
+  // both): taxes shrink with the hours, flat deductions (union dues) do not.
+  // Gross is never stored — it is amount + baseTaxes + baseFlatDeductions.
+  // Both optional, and only used to fill in a week's amount on the Income
+  // page (renderer/lib/paycheck-estimate.ts) — never in the plan itself.
+  baseTaxes          Float?
+  baseFlatDeductions Float?
+  overrides     IncomeOverride[]
+}
+
+// One paycheck that differs from the income's regular amount (Nov 2026):
+// "the Nov 18 paycheck is 32 hours". Keyed by income + the PAYDAY's calendar
+// date, so it changes exactly one pay week and never "every week 3". No row =
+// the regular `Income.amount`. See CLAUDE.md → "Per-week income overrides".
+model IncomeOverride {
+  id       String @id @default(cuid())
+  incomeId String
+  income   Income @relation(fields: [incomeId], references: [id], onDelete: Cascade)
+  payDate  Int    // YYYYMMDD (20261118) — local calendar date of the payday this row replaces. An Int, not a "YYYY-MM-DD" string: the API's body normaliser turns such strings into Dates (shared/data/coerce.ts)
+  amount   Float  // the paycheck for that payday (0 = no paycheck that week)
+  hours    Float? // hours behind it — shown in the UI, never used in the math
+
+  @@unique([incomeId, payDate])
 }
 
 model AppSettings {

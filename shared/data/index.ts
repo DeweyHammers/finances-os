@@ -12,6 +12,7 @@ export { splitStatements, quoteIdent } from "./sql";
 export type { Row, SqlConnection, SqlExecutor, SqlValue, SyncOptions, SyncResult } from "./sql";
 export { transformBody, toStorage, fromStorage } from "./coerce";
 export { DataError } from "./errors";
+export { migrationStatements } from "./migrations";
 export {
   copyDatabase,
   countDataRows,

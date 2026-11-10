@@ -46,6 +46,8 @@ interface PersonalOverviewProps {
   personalBills: PersonalBill[];
   bills?: any[];
   incomes?: any[];
+  /** IncomeOverride rows: a week with one has that paycheck as its income (room for split personals). */
+  incomeOverrides?: any[];
   settings: any;
   viewYear?: number;
   viewMonth?: number;
@@ -56,6 +58,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   personalBills,
   bills = [],
   incomes = [],
+  incomeOverrides = [],
   settings,
   viewYear,
   viewMonth,
@@ -85,10 +88,14 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   // obligations in each week and keep the surplus target satisfied.
   // Income: shared helper; sources without their own cadence inherit the
   // (primary-income-derived) settings cadence. No legacy w2 fallback here.
-  const incomePerPeriodCents = computeIncomePerPeriodCents(incomes, periods, year, month, {
-    payDay: payWeekday,
-    paymentCycle: settings.paymentCycle,
-  });
+  const incomePerPeriodCents = computeIncomePerPeriodCents(
+    incomes,
+    periods,
+    year,
+    month,
+    { payDay: payWeekday, paymentCycle: settings.paymentCycle },
+    incomeOverrides,
+  );
 
   const billsPerPeriodCents = periods.map((period) =>
     bills.reduce(
