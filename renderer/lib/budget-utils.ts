@@ -513,6 +513,43 @@ export function hasPaycheckForPeriod(params: {
   });
 }
 
+// ── What one bill payment counts for on the Plan page ─────────────────────
+
+/**
+ * How many cents ONE occurrence of a bill is credited with as "already taken
+ * care of" on the Plan page — the per-window piece of
+ * `activityInBillGraceWindowCents`, which the ⚠ badge, Sync Plan and
+ * Auto-assign all subtract from the plan's target.
+ *
+ *  - Paid (any net outflow inside the grace window) → the occurrence's full
+ *    PLANNED amount, whatever was really charged ("paid occurrence =
+ *    settled", see BudgetPage's enrich pass).
+ *  - Marked NOT CHARGED (a `BillNoCharge` row for that due date — the vendor
+ *    gave a free month, Nov 12 2026) → the same: the full planned amount, as
+ *    if it had been paid. The Plan then stops expecting money for it, so an
+ *    empty envelope is in sync and money still sitting in it flags as
+ *    over-funded (the nudge to move it). Plan page only: the Overview and
+ *    Optimize keep planning the bill as usual.
+ *  - Otherwise the raw window activity: 0 when unpaid, negative for a refund.
+ *
+ * `plannedCents` is undefined when the plan has no amount for the occurrence;
+ * the raw activity is all there is to go on then.
+ */
+export function creditBillOccurrenceCents(params: {
+  /** Net outflow (outflow − inflow) of the envelope inside the grace window. */
+  windowActivityCents: number;
+  /** The occurrence's planned amount (its BillSplit rows, or the bill's amount). */
+  plannedCents: number | undefined;
+  /** The user marked this payment as not being charged. */
+  notCharged: boolean;
+}): number {
+  const { windowActivityCents, plannedCents, notCharged } = params;
+  if (plannedCents == null) return windowActivityCents;
+  if (notCharged) return plannedCents;
+  // Only snap real payments (positive net outflow) to the plan.
+  return windowActivityCents > 0 ? plannedCents : windowActivityCents;
+}
+
 // ── Plan sync evaluation (out-of-sync badge + Sync Plan button) ───────────
 
 export interface PlanSyncInput {

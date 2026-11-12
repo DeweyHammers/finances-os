@@ -36,13 +36,14 @@ import {
   TooltipTitle,
   tooltipStyleProps,
 } from "../../lib/tooltip-styles";
-import { useList, useOne, useCreate, useUpdate } from "@refinedev/core";
+import { useList, useOne, useCreate, useUpdate, useDelete } from "@refinedev/core";
 import { ReadyToAssignPill } from "./ReadyToAssignPill";
 import {
   BudgetTable,
   BudgetGroup,
   BudgetItem,
   BudgetSubsection,
+  BillPaymentRef,
 } from "./BudgetTable";
 import { AddGroupModal } from "./AddGroupModal";
 import { AddItemModal } from "./AddItemModal";
@@ -60,6 +61,7 @@ import {
   computeActivity,
   computeAvailable,
   evaluatePlanSync,
+  creditBillOccurrenceCents,
   hasPaycheckForPeriod,
   computeReadyToAssign,
   computeExpectedAssignedThroughPeriod,
@@ -191,6 +193,13 @@ export const BudgetPage = () => {
     resource: "IncomeOverride",
     pagination: { mode: "off" },
   });
+  // Bill payments the user marked "not charged" (a free month from the
+  // vendor). Plan page only: such a payment counts as settled here — see the
+  // enrich pass below and creditBillOccurrenceCents.
+  const { query: noChargesQuery } = useList({
+    resource: "BillNoCharge",
+    pagination: { mode: "off" },
+  });
   const { query: settingsQuery } = useOne({
     resource: "AppSettings",
     id: "global",
@@ -201,6 +210,8 @@ export const BudgetPage = () => {
 
   const { mutate: createBudgetMonth } = useCreate();
   const { mutate: updateBudgetMonth } = useUpdate();
+  const { mutate: createNoCharge } = useCreate();
+  const { mutate: deleteNoCharge } = useDelete();
 
   const allGroups = (groupsQuery.data?.data as any[]) || [];
   const allItems = (itemsQuery.data?.data as any[]) || [];
@@ -212,6 +223,14 @@ export const BudgetPage = () => {
   const splitRowsRaw = (splitsQuery.data?.data as any[]) || [];
   const incomes = (incomesQuery.data?.data as any[]) || [];
   const incomeOverrides = (incomeOverridesQuery.data?.data as any[]) || [];
+  // "<billId>:<dueDateKey>" → the BillNoCharge row's id, for every payment
+  // marked as not charged. The id is what un-marking deletes.
+  const noChargeRows = noChargesQuery.data?.data as any[] | undefined;
+  const noChargeIdByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of noChargeRows ?? []) map.set(`${r.billId}:${Number(r.dueDateKey)}`, String(r.id));
+    return map;
+  }, [noChargeRows]);
   const settings = (settingsQuery.data?.data as any) || {};
 
   const viewYear = month.getUTCFullYear();
@@ -532,10 +551,12 @@ export const BudgetPage = () => {
   // start excluded it and the underfunded badge would fire even though the
   // envelope was fully funded and paid).
   // Each window also carries its occurrence `coord` so the enrich pass can
-  // look up that occurrence's planned (split) amount.
+  // look up that occurrence's planned (split) amount, and `dueDateKey` — the
+  // real due date as a YYYYMMDD number, the key a "not charged" mark
+  // (BillNoCharge) is saved under.
   const graceWindowsPerBill: Record<
     string,
-    Array<{ start: string; end: string; coord: number }>
+    Array<{ start: string; end: string; coord: number; dueDateKey: number }>
   > = useMemo(() => {
     const daysInViewMonth = new Date(Date.UTC(viewYear, viewMonth + 1, 0)).getUTCDate();
     const toDateStr = (y: number, m: number, d: number): string => {
@@ -547,7 +568,7 @@ export const BudgetPage = () => {
       const dd = String(dt.getUTCDate()).padStart(2, "0");
       return `${yy}-${mm}-${dd}`;
     };
-    const result: Record<string, Array<{ start: string; end: string; coord: number }>> = {};
+    const result: Record<string, Array<{ start: string; end: string; coord: number; dueDateKey: number }>> = {};
     for (const bill of clampedBills) {
       const occurrences = getBillOccurrencesInView(Number(bill.dueDate), periods);
       result[bill.id] = occurrences.map((o) => {
@@ -557,10 +578,13 @@ export const BudgetPage = () => {
         const realYear = inNext && viewMonth === 11 ? viewYear + 1 : viewYear;
         const realMonth = inNext ? (viewMonth === 11 ? 0 : viewMonth + 1) : viewMonth;
         const realDay = inNext ? o.coord - daysInViewMonth : o.coord;
+        const start = toDateStr(realYear, realMonth, realDay);
         return {
-          start: toDateStr(realYear, realMonth, realDay),
+          start,
           end: toDateStr(realYear, realMonth, realDay + BILL_PAYMENT_GRACE_DAYS),
           coord: o.coord,
+          // "2026-11-20" → 20261120
+          dueDateKey: Number(start.replace(/-/g, "")),
         };
       });
     }
@@ -598,7 +622,15 @@ export const BudgetPage = () => {
       // The Sync-Plan target reflects the Overview plan verbatim; real
       // over/under charges are a checking-account matter, not envelope-level
       // bookkeeping.
+      //
+      // Not charged = settled too (Nov 12 2026): a payment the user marked as
+      // not being charged — a free month — is credited with its planned
+      // amount exactly like a paid one, so the badge, Sync Plan and
+      // Auto-assign all stop expecting money for it. The rule itself is
+      // creditBillOccurrenceCents (lib/budget-utils.ts).
       let activityInBillGraceWindowCents: number | undefined = undefined;
+      // This view's payments of the bill, for the row's "Not charged" menu.
+      let billPayments: BudgetItem["billPayments"] = undefined;
       if (it.sourceType === "BILL" && it.sourceBillId) {
         const windows = graceWindowsPerBill[it.sourceBillId] ?? [];
         const bill = clampedBills.find((b: any) => b.id === it.sourceBillId);
@@ -644,15 +676,29 @@ export const BudgetPage = () => {
               (s: number, t: any) => s + (t.outflowCents || 0) - (t.inflowCents || 0),
               0,
             );
-          // Only snap real payments (positive net outflow) to the plan.
-          // Zero (unpaid) and negative net (refunds > payments) pass through.
-          const plannedCents = plannedCentsByCoord.get(w.coord);
-          const credited =
-            rawWindowActivity > 0 && plannedCents != null
-              ? plannedCents
-              : rawWindowActivity;
-          return sum + credited;
+          // Only real payments (positive net outflow) and payments marked
+          // "not charged" snap to the plan. Zero (unpaid) and negative net
+          // (refunds > payments) pass through.
+          return (
+            sum +
+            creditBillOccurrenceCents({
+              windowActivityCents: rawWindowActivity,
+              plannedCents: plannedCentsByCoord.get(w.coord),
+              notCharged: noChargeIdByKey.has(`${it.sourceBillId}:${w.dueDateKey}`),
+            })
+          );
         }, 0);
+        billPayments = windows.map((w) => {
+          const [y, m, d] = w.start.split("-").map(Number);
+          const noChargeId = noChargeIdByKey.get(`${it.sourceBillId}:${w.dueDateKey}`);
+          return {
+            dueDateKey: w.dueDateKey,
+            // "Nov 20" — with the month, since a view can hold next month's firing too.
+            label: `${new Date(y, m - 1, d).toLocaleString("default", { month: "short" })} ${d}`,
+            notCharged: noChargeId !== undefined,
+            noChargeId,
+          };
+        });
       }
       // Compute expected cumulative through BOTH the current and previous
       // pay weeks. The previous-period value is what powers the payday-
@@ -693,6 +739,7 @@ export const BudgetPage = () => {
             throughPeriodIdx: currentPayWeekIdx - 1,
           }),
         activityInBillGraceWindowCents,
+        billPayments,
         paydayPending,
       };
     };
@@ -701,7 +748,7 @@ export const BudgetPage = () => {
       items: g.items.map(enrich),
       subsections: g.subsections.map((s) => ({ ...s, items: s.items.map(enrich) })),
     }));
-  }, [groups, autoAssignInputs, currentPayWeekIdx, periods, graceWindowsPerBill, allTxns, clampedBills, paydayPending]);
+  }, [groups, autoAssignInputs, currentPayWeekIdx, periods, graceWindowsPerBill, allTxns, clampedBills, paydayPending, noChargeIdByKey]);
 
   // Flatten every item (direct + subsectioned) for lookups by id — used by
   // handleMoveMoney, handleManualAssign, and handleAutoAssign.
@@ -746,6 +793,29 @@ export const BudgetPage = () => {
         },
       );
     }
+  };
+
+  // ── "Not charged this month" (a bill's free month) ──
+  // Marks / un-marks ONE payment of a bill as not being charged. A mark is a
+  // BillNoCharge row (bill + the payment's real due date); the enrich pass
+  // above then treats that payment as settled, so the ⚠ badge goes away and
+  // Sync Plan / Auto-assign stop funding it. Nothing else changes: the
+  // Overview and Optimize keep planning the bill (user decision, Nov 12
+  // 2026), and BillNoCharge is not an Optimize input, so no re-plan starts.
+  const handleToggleNotCharged = (item: BudgetItem, payment: BillPaymentRef) => {
+    if (!item.sourceBillId) return;
+    if (payment.noChargeId) {
+      deleteNoCharge({ resource: "BillNoCharge", id: payment.noChargeId, successNotification: false });
+      setToastMsg(`${item.name}: saving for the ${payment.label} payment again`);
+    } else {
+      createNoCharge({
+        resource: "BillNoCharge",
+        values: { billId: item.sourceBillId, dueDateKey: payment.dueDateKey },
+        successNotification: false,
+      });
+      setToastMsg(`${item.name}: ${payment.label} payment marked as not charged`);
+    }
+    setToastOpen(true);
   };
 
   // ── Auto-assign for a chosen pay week ──
@@ -1209,6 +1279,7 @@ export const BudgetPage = () => {
             onAddItem={(groupId) => setAddItemGroupId(groupId)}
             onAddSubsection={(group) => setAddSubsectionGroup(group)}
             onEditItem={(item) => setEditItem(item)}
+            onToggleNotCharged={handleToggleNotCharged}
           />
         </Paper>
       )}

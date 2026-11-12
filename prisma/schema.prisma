@@ -29,6 +29,13 @@ model Income {
   // page (renderer/lib/paycheck-estimate.ts) — never in the plan itself.
   baseTaxes          Float?
   baseFlatDeductions Float?
+  // Weekday the WORK week starts on (0 = Sun … 6 = Sat), when it is not the
+  // pay week: e.g. work Sunday–Saturday, paid the Wednesday after. Null = the
+  // work week runs payday to payday (the behaviour before this column).
+  // Display only — it decides the "Worked Nov 8 – Nov 14" dates on the Income
+  // page's paycheck tiles; nothing is planned on it. Schema version 3, added
+  // LAST for the same ALTER TABLE reason as baseHours above.
+  workWeekStart      Int?
   overrides     IncomeOverride[]
 }
 
@@ -139,6 +146,7 @@ model Bill {
   isAutoPay       Boolean  @default(true)
   neverSplit      Boolean  @default(false) // when true, auto-balance never splits this bill across pay weeks
   splits          BillSplit[]
+  noCharges       BillNoCharge[]
 }
 
 model BillSplit {
@@ -151,6 +159,23 @@ model BillSplit {
   occurrenceCoord Int    @default(0) // day-of-current-month coord for this occurrence (in-month = D, next-month = D+daysInMonth); distinguishes bills that fire twice in one view
 
   @@unique([billId, monthKey, weekIndex, occurrenceCoord])
+}
+
+// One payment of a bill that is NOT being charged (a free month from the
+// vendor, a waived fee), marked on the Plan page. Schema version 3.
+// PLAN PAGE ONLY (user decision, Nov 12 2026): the Plan treats that payment
+// as settled — no "out of sync" warning, Sync Plan and Auto-assign stop
+// funding it — while the Overview and Optimize keep planning the bill as
+// usual. Not to be confused with the optimizer's "skipped" occurrences
+// (BalanceResult.skipped, the $0 marker rows): those are bills added after
+// their pay week started.
+model BillNoCharge {
+  id         String @id @default(cuid())
+  billId     String
+  bill       Bill   @relation(fields: [billId], references: [id], onDelete: Cascade)
+  dueDateKey Int    // YYYYMMDD (20261120) — the real calendar date that payment is due. An Int for the same reason as IncomeOverride.payDate
+
+  @@unique([billId, dueDateKey])
 }
 
 model Personal {

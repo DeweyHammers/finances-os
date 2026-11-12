@@ -41,6 +41,7 @@ import StarIcon from "@mui/icons-material/Star";
 import { useList, useCreate, useUpdate, useDelete } from "@refinedev/core";
 import { CancelButton } from "../../shared/CancelButton";
 import { IncomePaychecks } from "./IncomePaychecks";
+import { normalizeWorkWeekStart } from "../../../lib/pay-period-utils";
 
 // ── Constants ──
 // Weekday values match JS Date.getDay() convention (0=Sun … 6=Sat). Weekend
@@ -59,6 +60,21 @@ const PAY_DAY_LABEL: Record<number, string> = Object.fromEntries(
   PAY_DAY_OPTIONS.map((o) => [o.value, o.label]),
 );
 
+// Work-week start, every weekday (people do work weekends). Same 0=Sun … 6=Sat
+// numbering. `long` is used to spell the week out under the picker.
+const WORK_WEEK_OPTIONS = [
+  { value: 0, label: "Sun", long: "Sunday" },
+  { value: 1, label: "Mon", long: "Monday" },
+  { value: 2, label: "Tue", long: "Tuesday" },
+  { value: 3, label: "Wed", long: "Wednesday" },
+  { value: 4, label: "Thu", long: "Thursday" },
+  { value: 5, label: "Fri", long: "Friday" },
+  { value: 6, label: "Sat", long: "Saturday" },
+];
+/** "Sunday – Saturday" for a work week that starts on `startDay`. */
+const workWeekRange = (startDay: number) =>
+  `${WORK_WEEK_OPTIONS[startDay].long} – ${WORK_WEEK_OPTIONS[(startDay + 6) % 7].long}`;
+
 const CYCLE_OPTIONS = [
   { value: "WEEKLY", label: "Weekly" },
   { value: "BI_WEEKLY", label: "Bi-Weekly" },
@@ -71,6 +87,9 @@ const CYCLE_OPTIONS = [
 // set) describe the regular paycheck: the hours `amount` is paid for and what
 // came out of it. They only feed the per-week editor's estimate
 // (lib/paycheck-estimate.ts), never the plan.
+// `workWeekStart` (null = not set) is the weekday the work week starts on when
+// it is not the pay week; it only moves the "Worked …" dates on the paycheck
+// tiles (lib/pay-period-utils.ts → listIncomePaychecks).
 interface IncomeFormState {
   name: string;
   amount: string;
@@ -80,6 +99,7 @@ interface IncomeFormState {
   paymentCycle: string;
   payDay: number;
   payWeekOffset: number;
+  workWeekStart: number | null;
   isPrimary: boolean;
 }
 
@@ -94,6 +114,7 @@ const DEFAULT_FORM: IncomeFormState = {
   paymentCycle: "WEEKLY",
   payDay: 3,
   payWeekOffset: 0,
+  workWeekStart: null,
   isPrimary: false,
 };
 
@@ -163,6 +184,8 @@ export const IncomesSection = () => {
       paymentCycle: income.paymentCycle ?? "WEEKLY",
       payDay: Number(income.payDay ?? 3),
       payWeekOffset: Number(income.payWeekOffset ?? 0),
+      // Checked before converting: Number(null) would be 0 = Sunday.
+      workWeekStart: normalizeWorkWeekStart(income.workWeekStart),
       isPrimary: Boolean(income.isPrimary),
     });
     setModalOpen(true);
@@ -181,6 +204,8 @@ export const IncomesSection = () => {
       paymentCycle: form.paymentCycle,
       payDay: form.payDay,
       payWeekOffset: form.paymentCycle === "BI_WEEKLY" ? form.payWeekOffset : 0,
+      // null = not set: the work week is the pay week.
+      workWeekStart: form.workWeekStart,
       isPrimary: form.isPrimary,
     };
     // Notifications suppressed because IncomesSection can be mounted twice
@@ -338,6 +363,18 @@ export const IncomesSection = () => {
                       </Typography>
                       <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
                         {Number(income.baseHours)} hrs
+                      </Typography>
+                    </>
+                  )}
+                  {/* Its own work week, when one is set ("Works Sun – Sat"). */}
+                  {normalizeWorkWeekStart(income.workWeekStart) !== null && (
+                    <>
+                      <Typography variant="caption" sx={{ color: "text.disabled" }}>
+                        ·
+                      </Typography>
+                      <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
+                        Works {WORK_WEEK_OPTIONS[normalizeWorkWeekStart(income.workWeekStart)!].label} –{" "}
+                        {WORK_WEEK_OPTIONS[(normalizeWorkWeekStart(income.workWeekStart)! + 6) % 7].label}
                       </Typography>
                     </>
                   )}
@@ -601,6 +638,61 @@ export const IncomesSection = () => {
                 </ToggleButtonGroup>
               </Box>
             )}
+
+            {/* Optional: the weekday the WORK week starts on, when it is not
+                the pay week (e.g. work Sunday–Saturday, paid on Wednesday).
+                Clicking the selected day again clears it. It only changes the
+                "Worked …" dates on the paycheck tiles — which paycheck a
+                given week's hours land in — never the plan. */}
+            <Box>
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: 700, color: "text.secondary", letterSpacing: 0.5, display: "block" }}
+              >
+                WORK WEEK STARTS ON (OPTIONAL)
+              </Typography>
+              <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mb: 1 }}>
+                The first day of the week your hours are counted in, if it isn&apos;t your payday.
+              </Typography>
+              <ToggleButtonGroup
+                value={form.workWeekStart}
+                exclusive
+                // `v` is null when the selected day is clicked again: not set.
+                onChange={(_, v) => setForm((f) => ({ ...f, workWeekStart: v }))}
+                aria-label="Work week starts on"
+                sx={{
+                  display: "flex",
+                  gap: 0.75,
+                  "& .MuiToggleButton-root": {
+                    flex: 1,
+                    // Seven buttons in a phone-width dialog: let them shrink.
+                    minWidth: 0,
+                    px: 0.5,
+                    border: "1px solid rgba(129,140,248,0.2)",
+                    borderRadius: 2,
+                    fontWeight: 700,
+                    textTransform: "none",
+                    color: "text.secondary",
+                    "&.Mui-selected": {
+                      bgcolor: "rgba(129,140,248,0.15)",
+                      borderColor: "primary.light",
+                      color: "white",
+                    },
+                  },
+                }}
+              >
+                {WORK_WEEK_OPTIONS.map((o) => (
+                  <ToggleButton key={o.value} value={o.value}>
+                    {o.label}
+                  </ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+              <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 1 }}>
+                {form.workWeekStart === null
+                  ? "Not set: each paycheck is for the days from the payday before it up to the day before its own."
+                  : `Work week: ${workWeekRange(form.workWeekStart)}. Each paycheck is for the last full work week before its payday.`}
+              </Typography>
+            </Box>
 
             <Box>
               <FormControlLabel

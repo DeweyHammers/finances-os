@@ -82,6 +82,37 @@ function version2Statements(catalogue: Map<string, string>): string[] {
   return statements;
 }
 
+// ── Version 3 (Nov 2026): work week + a bill payment that is not charged ────
+// Income.workWeekStart (the weekday the work week starts on, when it is not
+// the pay week — it only moves the "Worked …" dates on the Income page) and
+// BillNoCharge (one payment of a bill the vendor is not charging, e.g. a free
+// month; the Plan page treats it as settled). See CLAUDE.md → "Work week" and
+// "A bill payment that is not charged".
+
+const V3_CREATE_BILL_NO_CHARGE = `CREATE TABLE "BillNoCharge" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "billId" TEXT NOT NULL,
+    "dueDateKey" INTEGER NOT NULL,
+    CONSTRAINT "BillNoCharge_billId_fkey" FOREIGN KEY ("billId") REFERENCES "Bill" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+)`;
+
+const V3_INDEX_NAME = "BillNoCharge_billId_dueDateKey_key";
+const V3_CREATE_BILL_NO_CHARGE_INDEX = `CREATE UNIQUE INDEX "${V3_INDEX_NAME}" ON "BillNoCharge"("billId", "dueDateKey")`;
+
+function version3Statements(catalogue: Map<string, string>): string[] {
+  const statements: string[] = [];
+  // After version 2's columns, so the order matches a fresh database's
+  // (ALTER TABLE appends). `catalogue` is read before any step runs, so the
+  // check is against the table as the old build left it.
+  const income = catalogue.get("Income");
+  if (income !== undefined && !income.includes('"workWeekStart"')) {
+    statements.push('ALTER TABLE "Income" ADD COLUMN "workWeekStart" INTEGER');
+  }
+  if (!catalogue.has("BillNoCharge")) statements.push(V3_CREATE_BILL_NO_CHARGE);
+  if (!catalogue.has(V3_INDEX_NAME)) statements.push(V3_CREATE_BILL_NO_CHARGE_INDEX);
+  return statements;
+}
+
 /**
  * The DDL that takes `db` — a database that already HAS the app's tables, at
  * any older version — to this build's shape. Empty when nothing is missing.
@@ -93,5 +124,5 @@ export async function migrationStatements(db: SqlExecutor): Promise<string[]> {
   // No app tables at all (a brand-new file or cloud database): nothing to
   // migrate — it gets the whole current schema from schema.sql instead.
   if (!catalogue.has("Income")) return [];
-  return [...version2Statements(catalogue)];
+  return [...version2Statements(catalogue), ...version3Statements(catalogue)];
 }

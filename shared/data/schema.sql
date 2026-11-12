@@ -2,7 +2,7 @@
 -- Regenerate with: npx tsx scripts/generate-schema-sql.ts
 --
 -- Creates every table of an EMPTY Finances OS database and stamps it with
--- schema version 2 (shared/data/schema.ts → SCHEMA_VERSION).
+-- schema version 3 (shared/data/schema.ts → SCHEMA_VERSION).
 
 -- CreateTable
 CREATE TABLE "Income" (
@@ -15,7 +15,8 @@ CREATE TABLE "Income" (
     "isPrimary" BOOLEAN NOT NULL DEFAULT false,
     "baseHours" REAL,
     "baseTaxes" REAL,
-    "baseFlatDeductions" REAL
+    "baseFlatDeductions" REAL,
+    "workWeekStart" INTEGER
 );
 
 -- CreateTable
@@ -137,6 +138,14 @@ CREATE TABLE "BillSplit" (
 );
 
 -- CreateTable
+CREATE TABLE "BillNoCharge" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "billId" TEXT NOT NULL,
+    "dueDateKey" INTEGER NOT NULL,
+    CONSTRAINT "BillNoCharge_billId_fkey" FOREIGN KEY ("billId") REFERENCES "Bill" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
 CREATE TABLE "Personal" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "name" TEXT NOT NULL,
@@ -251,6 +260,9 @@ CREATE UNIQUE INDEX "IncomeOverride_incomeId_payDate_key" ON "IncomeOverride"("i
 CREATE UNIQUE INDEX "BillSplit_billId_monthKey_weekIndex_occurrenceCoord_key" ON "BillSplit"("billId", "monthKey", "weekIndex", "occurrenceCoord");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "BillNoCharge_billId_dueDateKey_key" ON "BillNoCharge"("billId", "dueDateKey");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "Payee_name_key" ON "Payee"("name");
 
 -- CreateIndex
@@ -258,4 +270,4 @@ CREATE UNIQUE INDEX "BudgetMonth_month_categoryItemId_key" ON "BudgetMonth"("mon
 
 -- SchemaVersion stamp (appliedAt = Unix milliseconds, the DateTime storage
 -- format shared with Prisma).
-INSERT INTO "SchemaVersion" ("version", "appliedAt") VALUES (2, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+INSERT INTO "SchemaVersion" ("version", "appliedAt") VALUES (3, CAST(strftime('%s', 'now') AS INTEGER) * 1000);

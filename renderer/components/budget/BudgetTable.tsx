@@ -23,6 +23,8 @@ import {
   Button,
   Collapse,
   Tooltip,
+  Menu,
+  MenuItem,
 } from "@mui/material";
 import { ConfirmDeleteDialog } from "../shared/ConfirmDeleteDialog";
 import { EditSubsectionModal } from "./EditSubsectionModal";
@@ -33,6 +35,9 @@ import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import MoneyOffIcon from "@mui/icons-material/MoneyOff";
+import CheckBoxIcon from "@mui/icons-material/CheckBox";
+import CheckBoxOutlineBlankIcon from "@mui/icons-material/CheckBoxOutlineBlank";
 import {
   DndContext,
   closestCorners,
@@ -65,6 +70,18 @@ import {
   TooltipTitle,
   tooltipStyleProps,
 } from "../../lib/tooltip-styles";
+
+/** One payment (occurrence) of a bill inside the Plan's current view. */
+export interface BillPaymentRef {
+  /** The payment's real due date as a YYYYMMDD number — the BillNoCharge key. */
+  dueDateKey: number;
+  /** "Nov 20" */
+  label: string;
+  /** The user marked it as not being charged (a free month). */
+  notCharged: boolean;
+  /** Id of the BillNoCharge row when marked — what un-marking deletes. */
+  noChargeId?: string;
+}
 
 export interface BudgetItem {
   id: string;
@@ -99,6 +116,10 @@ export interface BudgetItem {
    * occurrence that happens to land in this calendar month is excluded.
    * Undefined for non-BILL envelopes (they fall back to `activityCents`). */
   activityInBillGraceWindowCents?: number;
+  /** For BILL envelopes: the bill's payments in this view, each with whether
+   * it is marked "not charged". Feeds the row's MoneyOff menu. A marked
+   * payment is already credited inside `activityInBillGraceWindowCents`. */
+  billPayments?: BillPaymentRef[];
   /** True when today's pay week has started but its paycheck ("Income"
    * memo) hasn't been recorded yet. Under-funding is then only judged
    * against the previous pay week's target. See `evaluatePlanSync`. */
@@ -144,6 +165,8 @@ interface BudgetTableProps {
   onAddItem: (groupId: string) => void;
   onAddSubsection?: (group: { id: string; name: string }) => void;
   onEditItem?: (item: BudgetItem) => void;
+  /** Mark / un-mark one payment of a bill as "not charged" (a free month). */
+  onToggleNotCharged?: (item: BudgetItem, payment: BillPaymentRef) => void;
 }
 
 // ── Drag-and-drop id helpers ──
@@ -330,6 +353,7 @@ export const BudgetTable = ({
   onAddItem,
   onAddSubsection,
   onEditItem,
+  onToggleNotCharged,
 }: BudgetTableProps) => {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -855,6 +879,7 @@ export const BudgetTable = ({
                               onAvailableClick={onAvailableClick}
                               onDelete={() => setPendingDeleteItem(item)}
                               onEdit={onEditItem}
+                onToggleNotCharged={onToggleNotCharged}
                             />
                           );
                         }
@@ -885,6 +910,7 @@ export const BudgetTable = ({
                             }
                             onEditSubsection={() => setEditSubsection(sub)}
                             onEditItem={onEditItem}
+                            onToggleNotCharged={onToggleNotCharged}
                           />
                         );
                       })}
@@ -968,6 +994,8 @@ interface SubsectionBlockProps {
   onDeleteSubsection: () => void;
   onEditSubsection: () => void;
   onEditItem?: (item: BudgetItem) => void;
+  /** Mark / un-mark one payment of a bill as "not charged" (a free month). */
+  onToggleNotCharged?: (item: BudgetItem, payment: BillPaymentRef) => void;
 }
 
 // ── SubsectionBlock ──
@@ -986,6 +1014,7 @@ const SubsectionBlock = ({
   onDeleteSubsection,
   onEditSubsection,
   onEditItem,
+  onToggleNotCharged,
 }: SubsectionBlockProps) => {
   const {
     attributes,
@@ -1147,6 +1176,7 @@ const SubsectionBlock = ({
                 onAvailableClick={onAvailableClick}
                 onDelete={() => onDeleteItem(item)}
                 onEdit={onEditItem}
+                onToggleNotCharged={onToggleNotCharged}
               />
             ))}
         </Box>
@@ -1154,6 +1184,9 @@ const SubsectionBlock = ({
     </Box>
   );
 };
+
+/** Teal: "this payment is not charged" — calm, unlike the amber of a warning. */
+const NO_CHARGE_COLOR = "#2dd4bf";
 
 interface BudgetItemRowProps {
   item: BudgetItem;
@@ -1163,6 +1196,7 @@ interface BudgetItemRowProps {
   onAvailableClick: (item: BudgetItem, anchor: HTMLElement) => void;
   onDelete: () => void;
   onEdit?: (item: BudgetItem) => void;
+  onToggleNotCharged?: (item: BudgetItem, payment: BillPaymentRef) => void;
 }
 
 const formatItemDisplay = (
@@ -1186,7 +1220,20 @@ const BudgetItemRow = ({
   onAvailableClick,
   onDelete,
   onEdit,
+  onToggleNotCharged,
 }: BudgetItemRowProps) => {
+  // ── "Not charged" menu (BILL envelopes) ──
+  // A bill's payment the vendor is not charging this time (a free month) can
+  // be marked here; the Plan then treats it as settled — see
+  // creditBillOccurrenceCents and BudgetPage.handleToggleNotCharged. The
+  // MoneyOff button is hover-revealed like the row actions, and stays visible
+  // (teal) while a payment in this view is marked, so the mark is never
+  // invisible.
+  const [noChargeAnchor, setNoChargeAnchor] = useState<HTMLElement | null>(null);
+  const billPayments = item.billPayments ?? [];
+  const markedPayments = billPayments.filter((p) => p.notCharged);
+  const showNoChargeButton = Boolean(onToggleNotCharged) && billPayments.length > 0;
+
   const {
     attributes,
     listeners,
@@ -1348,6 +1395,86 @@ const BudgetItemRow = ({
               }}
             />
           </Tooltip>
+        )}
+        {showNoChargeButton && (
+          <>
+            <Tooltip
+              placement="top"
+              arrow
+              {...tooltipStyleProps(NO_CHARGE_COLOR)}
+              title={
+                markedPayments.length > 0 ? (
+                  <>
+                    <TooltipTitle color={NO_CHARGE_COLOR}>
+                      Not charged · {markedPayments.map((p) => p.label).join(", ")}
+                    </TooltipTitle>
+                    <TooltipBody>
+                      Marked as a payment you are not being charged for, so the plan is not saving for it. Click to change.
+                    </TooltipBody>
+                  </>
+                ) : (
+                  <>
+                    <TooltipTitle color={NO_CHARGE_COLOR}>Not being charged?</TooltipTitle>
+                    <TooltipBody>
+                      Mark a payment you won&apos;t be charged for (a free month), so the plan stops saving for it.
+                    </TooltipBody>
+                  </>
+                )
+              }
+            >
+              <IconButton
+                size="small"
+                aria-label={`Payments of ${displayName} that are not charged`}
+                // Hover-revealed with the row actions unless something is marked.
+                className={markedPayments.length > 0 ? undefined : "item-actions"}
+                onClick={(e) => setNoChargeAnchor(e.currentTarget)}
+                sx={{
+                  p: 0.25,
+                  flexShrink: 0,
+                  color: markedPayments.length > 0 ? NO_CHARGE_COLOR : "text.secondary",
+                  opacity: markedPayments.length > 0 ? 1 : 0,
+                  transition: "opacity 120ms",
+                  // Touch screens have no hover to reveal it: always visible there.
+                  "@media (hover: none)": { opacity: 1 },
+                }}
+              >
+                <MoneyOffIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Tooltip>
+            <Menu
+              anchorEl={noChargeAnchor}
+              open={Boolean(noChargeAnchor)}
+              onClose={() => setNoChargeAnchor(null)}
+              slotProps={{
+                paper: { sx: { borderRadius: 2, backgroundImage: "none", maxWidth: "min(300px, calc(100vw - 32px))" } },
+              }}
+            >
+              <Box sx={{ px: 2, pt: 0.5, pb: 1 }}>
+                <Typography sx={{ fontWeight: 800, fontSize: "0.85rem" }}>Not charged</Typography>
+                <Typography variant="caption" sx={{ color: "text.secondary", display: "block", lineHeight: 1.4 }}>
+                  Tick a payment you won&apos;t be charged for, like a free month. The plan stops saving for it. The
+                  Overview still shows the bill.
+                </Typography>
+              </Box>
+              {billPayments.map((p) => (
+                <MenuItem
+                  key={p.dueDateKey}
+                  onClick={() => {
+                    onToggleNotCharged?.(item, p);
+                    setNoChargeAnchor(null);
+                  }}
+                  sx={{ gap: 1, fontSize: "0.9rem" }}
+                >
+                  {p.notCharged ? (
+                    <CheckBoxIcon sx={{ fontSize: 18, color: NO_CHARGE_COLOR }} />
+                  ) : (
+                    <CheckBoxOutlineBlankIcon sx={{ fontSize: 18, color: "text.secondary" }} />
+                  )}
+                  Due {p.label}
+                </MenuItem>
+              ))}
+            </Menu>
+          </>
         )}
       </Box>
       <Box sx={{ display: "flex", justifyContent: "flex-end" }}>

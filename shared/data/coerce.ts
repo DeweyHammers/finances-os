@@ -32,6 +32,8 @@ const NUMERIC_KEYS = new Set([
   "payDay",
   "payWeekOffset",
   "weekOfMonth",
+  "workWeekStart",
+  "dueDateKey",
 ]);
 
 /**
