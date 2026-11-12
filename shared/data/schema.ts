@@ -29,8 +29,11 @@
  *   1  the Prisma-era shape (Oct 2026)
  *   2  Income.baseHours / baseTaxes / baseFlatDeductions + the IncomeOverride
  *      table (per-week income, Nov 2026)
+ *   3  Income.workWeekStart (the weekday a work week starts on) + the
+ *      BillNoCharge table (a bill payment that is not charged, e.g. a free
+ *      month — Plan page only; Nov 2026)
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export type ScalarType = "String" | "Int" | "Float" | "Boolean" | "DateTime";
 
@@ -97,6 +100,9 @@ export const MODELS: readonly Model[] = [
     "baseHours Float?",
     "baseTaxes Float?",
     "baseFlatDeductions Float?",
+    // Schema version 3, appended for the same reason. 0 = Sun … 6 = Sat;
+    // null = the work week runs payday to payday. Display only.
+    "workWeekStart Int?",
   ]),
   // Schema version 2: one paycheck that differs from Income.amount, keyed by
   // income + the payday's date as a YYYYMMDD number (unique together).
@@ -175,6 +181,14 @@ export const MODELS: readonly Model[] = [
     "weekIndex Int",
     "amountCents Int",
     "occurrenceCoord Int",
+  ]),
+  // Schema version 3: one payment of a bill that is not being charged (a free
+  // month), keyed by bill + the payment's real due date as a YYYYMMDD number
+  // (unique together). Read by the Plan page only.
+  model("BillNoCharge", [
+    "id String cuid",
+    "billId String",
+    "dueDateKey Int", // YYYYMMDD, e.g. 20261120
   ]),
   model("Personal", [
     "id String cuid",

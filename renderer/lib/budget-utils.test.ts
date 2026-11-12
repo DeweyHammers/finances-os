@@ -14,6 +14,7 @@ import {
   moveMoney,
   buildBalanceAdjustment,
   evaluatePlanSync,
+  creditBillOccurrenceCents,
   hasPaycheckForPeriod,
 } from "./budget-utils";
 import { getPayPeriodsForMonth, getBillAllocationsForBill } from "./pay-period-utils";
@@ -1094,5 +1095,89 @@ describe("Pre-saving — Plan page agrees with the Overview", () => {
     expect(
       resolveAutoAssignAmountForPeriod({ item, periodKey: "P1", periods: novPeriods, bills: [bill], personals: [], splits: onlyOct, monthKey: "2026-11" }),
     ).toBe(13000);
+  });
+});
+
+// ── A bill payment that is not charged (a free month, Nov 12 2026) ──────────
+// Generic data: a $15 "Game pass" due the 20th. The vendor gives a free month,
+// so the user moves the $15 somewhere else and marks the payment as not
+// charged on the Plan page. That payment then counts as settled — exactly
+// like a paid one — for the badge, Sync Plan and Auto-assign.
+describe("creditBillOccurrenceCents — what one bill payment counts for", () => {
+  it("unpaid and not marked: nothing credited", () => {
+    expect(creditBillOccurrenceCents({ windowActivityCents: 0, plannedCents: 1500, notCharged: false })).toBe(0);
+  });
+
+  it("paid: the full planned amount, whatever was really charged (unchanged rule)", () => {
+    expect(creditBillOccurrenceCents({ windowActivityCents: 1566, plannedCents: 1500, notCharged: false })).toBe(1500);
+    expect(creditBillOccurrenceCents({ windowActivityCents: 1410, plannedCents: 1500, notCharged: false })).toBe(1500);
+  });
+
+  it("a refund passes through unchanged (unchanged rule)", () => {
+    expect(creditBillOccurrenceCents({ windowActivityCents: -500, plannedCents: 1500, notCharged: false })).toBe(-500);
+  });
+
+  it("marked not charged: the full planned amount with no payment at all", () => {
+    expect(creditBillOccurrenceCents({ windowActivityCents: 0, plannedCents: 1500, notCharged: true })).toBe(1500);
+    // …and no more than that if it was charged after all, or refunded.
+    expect(creditBillOccurrenceCents({ windowActivityCents: 1500, plannedCents: 1500, notCharged: true })).toBe(1500);
+    expect(creditBillOccurrenceCents({ windowActivityCents: -500, plannedCents: 1500, notCharged: true })).toBe(1500);
+  });
+
+  it("no planned amount known: the raw activity, marked or not", () => {
+    expect(creditBillOccurrenceCents({ windowActivityCents: 700, plannedCents: undefined, notCharged: false })).toBe(700);
+    expect(creditBillOccurrenceCents({ windowActivityCents: 0, plannedCents: undefined, notCharged: true })).toBe(0);
+  });
+});
+
+describe("evaluatePlanSync with a payment marked not charged", () => {
+  // The bill's pay week has started and its paycheck is in: the plan expects
+  // the $15 to be in the envelope by now.
+  const gamePass = {
+    sourceType: "BILL",
+    expectedFullCents: 1500,
+    expectedPreviousFullCents: 0,
+    activityCents: 0,
+    paydayPending: false,
+  };
+  const credit = (notCharged: boolean) =>
+    creditBillOccurrenceCents({ windowActivityCents: 0, plannedCents: 1500, notCharged });
+
+  it("the reported case: money moved out, not marked → out of sync (short $15)", () => {
+    const r = evaluatePlanSync({ ...gamePass, graceActivityCents: credit(false), availableCents: 0 });
+    expect(r.isUnderfunded).toBe(true);
+    expect(r.diffCents).toBe(-1500);
+  });
+
+  it("marked not charged with the envelope empty → in sync, nothing for Sync Plan to do", () => {
+    const r = evaluatePlanSync({ ...gamePass, graceActivityCents: credit(true), availableCents: 0 });
+    expect(r.isUnderfunded).toBe(false);
+    expect(r.isOverfunded).toBe(false);
+    expect(r.targetCents).toBe(0);
+    expect(r.needsSync).toBe(false);
+    expect(r.syncDeltaCents).toBe(0);
+  });
+
+  it("marked while the money is still in the envelope → over-funded: Sync Plan hands it back", () => {
+    const r = evaluatePlanSync({ ...gamePass, graceActivityCents: credit(true), availableCents: 1500 });
+    expect(r.isOverfunded).toBe(true);
+    expect(r.diffCents).toBe(1500);
+    expect(r.needsSync).toBe(true);
+    expect(r.syncDeltaCents).toBe(-1500);
+  });
+
+  it("a bill firing twice in the view: only the marked payment is settled", () => {
+    // $15 planned for each of two payments (the 2nd of this month and of the
+    // next); the first is free, the second still has to be saved for.
+    const twoFirings = { ...gamePass, expectedFullCents: 3000 };
+    const grace =
+      creditBillOccurrenceCents({ windowActivityCents: 0, plannedCents: 1500, notCharged: true }) +
+      creditBillOccurrenceCents({ windowActivityCents: 0, plannedCents: 1500, notCharged: false });
+    const empty = evaluatePlanSync({ ...twoFirings, graceActivityCents: grace, availableCents: 0 });
+    expect(empty.targetCents).toBe(1500);
+    expect(empty.isUnderfunded).toBe(true);
+    const funded = evaluatePlanSync({ ...twoFirings, graceActivityCents: grace, availableCents: 1500 });
+    expect(funded.isUnderfunded).toBe(false);
+    expect(funded.isOverfunded).toBe(false);
   });
 });

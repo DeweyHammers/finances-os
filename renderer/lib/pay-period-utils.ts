@@ -1532,6 +1532,24 @@ export interface IncomeSourceLike {
   paymentCycle?: string | null;
   /** Bi-weekly only: 0 = 1st/3rd/5th payday of the month, 1 = 2nd/4th. */
   payWeekOffset?: number | string | null;
+  /**
+   * Weekday the WORK week starts on, 0=Sun … 6=Sat, when it is not the pay
+   * week (Income.workWeekStart). Missing / null → the work week runs payday
+   * to payday. Display only: read by listIncomePaychecks for the "Worked …"
+   * dates, never by anything that plans money.
+   */
+  workWeekStart?: number | string | null;
+}
+
+/**
+ * Income.workWeekStart as a weekday number, or null when it is not set (or
+ * not a weekday). `Number(null)` is 0 = Sunday, so "not set" has to be
+ * checked before converting — Sunday is a real choice.
+ */
+export function normalizeWorkWeekStart(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const day = Number(value);
+  return Number.isInteger(day) && day >= 0 && day <= 6 ? day : null;
 }
 
 /**
@@ -1735,6 +1753,12 @@ export interface IncomePaycheck {
    * in arrears — the hours worked Nov 11–17 arrive in the Nov 18 paycheck
    * (how the user is paid, Nov 10 2026). Display only: it tells the user
    * which paycheck to edit for a given work week; nothing is planned on it.
+   *
+   * When the income names its own work week (`workWeekStart`, Nov 12 2026 —
+   * e.g. work Sunday–Saturday, paid on Wednesday), these are instead the last
+   * FULL work week that ended before the payday: Nov 8–14 for the Nov 18
+   * paycheck. A bi-weekly paycheck covers the work weeks since the previous
+   * paycheck's, so the ranges still follow each other without gaps.
    */
   workStart: Date;
   workEnd: Date;
@@ -1783,18 +1807,37 @@ export function listIncomePaychecks(
   for (let i = 0; i < paydays.length; i++) {
     if (paydays[i].date <= todayStart) startIdx = i;
   }
+  // Last day of the work period a payday pays for. Without a work week of
+  // its own that is simply the day before the payday. With one (workWeekStart)
+  // it is the last day of the latest work week that ended BEFORE the payday:
+  // step back from the day before the payday to the weekday the work week
+  // ends on (the day before it starts). A work week that starts on the payday
+  // weekday gives the same answer as "not set".
+  const workWeekStart = normalizeWorkWeekStart(income.workWeekStart);
+  const workEndFor = (payday: Date): Date => {
+    const dayBefore = new Date(payday.getFullYear(), payday.getMonth(), payday.getDate() - 1);
+    if (workWeekStart === null) return dayBefore;
+    const endWeekday = (workWeekStart + 6) % 7;
+    const back = (dayBefore.getDay() - endWeekday + 7) % 7;
+    return new Date(dayBefore.getFullYear(), dayBefore.getMonth(), dayBefore.getDate() - back);
+  };
+
   const out: IncomePaycheck[] = [];
   for (let i = startIdx; i < paydays.length - 1 && out.length < count; i++) {
     const start = paydays[i].date;
     const next = paydays[i + 1].date;
     const end = new Date(next.getFullYear(), next.getMonth(), next.getDate() - 1);
-    // The work period it pays for: from the previous payday to the day before
-    // this one. The scan starts a month back, so there is a previous payday
-    // in practice; if not, assume a period as long as this one.
+    // The work period it pays for runs from the day after the PREVIOUS
+    // paycheck's work period to the end of its own (not set: previous payday
+    // … the day before this one). The scan starts a month back, so there is
+    // a previous payday in practice; if not, assume a period as long as this
+    // one.
     const periodDays = Math.round((next.getTime() - start.getTime()) / 86_400_000);
-    const workStart =
-      i > 0 ? paydays[i - 1].date : new Date(start.getFullYear(), start.getMonth(), start.getDate() - periodDays);
-    const workEnd = new Date(start.getFullYear(), start.getMonth(), start.getDate() - 1);
+    const workEnd = workEndFor(start);
+    const previousWorkEnd = i > 0 ? workEndFor(paydays[i - 1].date) : null;
+    const workStart = previousWorkEnd
+      ? new Date(previousWorkEnd.getFullYear(), previousWorkEnd.getMonth(), previousWorkEnd.getDate() + 1)
+      : new Date(workEnd.getFullYear(), workEnd.getMonth(), workEnd.getDate() - periodDays + 1);
     out.push({
       payDate: payDateKeyOf(start),
       start,

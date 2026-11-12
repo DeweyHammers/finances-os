@@ -2,7 +2,7 @@
   "private": true,
   "name": "finances-os",
   "description": "Finances OS Desktop Application",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": "Richard Dewey Hammers",
   "license": "MIT",
   "main": "app/main.js",

@@ -160,6 +160,54 @@ describe("listIncomePaychecks — the weeks the Income page lets you edit", () =
     expect(`${label(list[4].start)}-${label(list[4].end)}`).toBe("12/30-1/5");
   });
 
+  // ── A work week of its own (Income.workWeekStart, Nov 12 2026) ──
+  // Work Sunday–Saturday, paid the Wednesday after: the Nov 18 paycheck is
+  // for Nov 8–14, not for the pay period Nov 11–17.
+  const workRanges = (source: any, count = 4, today = TODAY) =>
+    listIncomePaychecks(source, DEFAULTS, today, count).map((p) => `${label(p.workStart)}-${label(p.workEnd)}`);
+
+  it("a Sunday–Saturday work week: each paycheck is for the last full work week before its payday", () => {
+    const sunday = { ...income, workWeekStart: 0 };
+    expect(workRanges(sunday)).toEqual(["10/25-10/31", "11/1-11/7", "11/8-11/14", "11/15-11/21"]);
+    // Only the "Worked …" dates move: paydays, pay weeks and override keys don't.
+    const plain = listIncomePaychecks(income, DEFAULTS, TODAY, 4);
+    const moved = listIncomePaychecks(sunday, DEFAULTS, TODAY, 4);
+    const withoutWork = (list: typeof plain) => list.map(({ workStart, workEnd, ...rest }) => rest);
+    expect(withoutWork(moved)).toEqual(withoutWork(plain));
+  });
+
+  it("other work weeks: Saturday–Friday and Monday–Sunday", () => {
+    expect(workRanges({ ...income, workWeekStart: 6 }, 3)).toEqual(["10/24-10/30", "10/31-11/6", "11/7-11/13"]);
+    expect(workRanges({ ...income, workWeekStart: 1 }, 3)).toEqual(["10/26-11/1", "11/2-11/8", "11/9-11/15"]);
+  });
+
+  it("a work week that starts on the payday weekday, or none at all, is the pay period itself", () => {
+    const payPeriod = ["10/28-11/3", "11/4-11/10", "11/11-11/17", "11/18-11/24"];
+    expect(workRanges({ ...income, workWeekStart: WED })).toEqual(payPeriod);
+    expect(workRanges({ ...income, workWeekStart: null })).toEqual(payPeriod);
+    expect(workRanges({ ...income, workWeekStart: "" })).toEqual(payPeriod);
+    expect(workRanges({ ...income, workWeekStart: 9 })).toEqual(payPeriod); // not a weekday → ignored
+    // The API may hand the number over as text.
+    expect(workRanges({ ...income, workWeekStart: "0" }, 1)).toEqual(["10/25-10/31"]);
+  });
+
+  it("counts only a work week that is completely over on payday", () => {
+    // Whatever the payday: always the latest work week that has fully ended,
+    // including one that ended the day before.
+    const thursday = { ...income, payDay: 4, workWeekStart: 0 };
+    // Thursdays: Nov 5, 12, 19.
+    expect(workRanges(thursday, 3)).toEqual(["10/25-10/31", "11/1-11/7", "11/8-11/14"]);
+    const monday = { ...income, payDay: 1, workWeekStart: 1 }; // Mon–Sun, paid Monday
+    // Mondays: Nov 9, 16 → the week that ended the day before.
+    expect(workRanges(monday, 2)).toEqual(["11/2-11/8", "11/9-11/15"]);
+  });
+
+  it("bi-weekly with a Sunday–Saturday work week: the work weeks since the previous paycheck's, no gaps", () => {
+    const biWeekly = { ...income, paymentCycle: "BI_WEEKLY", payWeekOffset: 0, workWeekStart: 0 };
+    // Paydays Nov 4, 18 · Dec 2, 16, 30.
+    expect(workRanges(biWeekly, 4)).toEqual(["10/18-10/31", "11/1-11/14", "11/15-11/28", "11/29-12/12"]);
+  });
+
   it("returns exactly the number asked for, however many", () => {
     expect(listIncomePaychecks(income, DEFAULTS, TODAY, 1)).toHaveLength(1);
     expect(listIncomePaychecks(income, DEFAULTS, TODAY, 40)).toHaveLength(40);

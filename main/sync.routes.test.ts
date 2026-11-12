@@ -804,7 +804,8 @@ describe("while synced", () => {
     /** Put the CLOUD back into the version-1 shape, as the previous build left it. */
     async function downgradeCloud() {
       await cloud.exec('DROP TABLE "IncomeOverride"');
-      for (const column of ["baseFlatDeductions", "baseTaxes", "baseHours"]) {
+      await cloud.exec('DROP TABLE "BillNoCharge"'); // schema 3
+      for (const column of ["workWeekStart", "baseFlatDeductions", "baseTaxes", "baseHours"]) {
         await cloud.exec(`ALTER TABLE "Income" DROP COLUMN "${column}"`);
       }
       await cloud.exec('DELETE FROM "SchemaVersion"');
@@ -845,7 +846,8 @@ describe("while synced", () => {
       const synced = await api().post("/api/sync/now");
       expect(synced.body).toMatchObject({ state: "synced", conflict: null, schemaGate: null, pendingChanges: 0 });
       expect(await cloudTables()).toContain("IncomeOverride");
-      for (const column of ["baseHours", "baseTaxes", "baseFlatDeductions"]) expect(await cloudIncomeSql()).toContain(`"${column}"`);
+      expect(await cloudTables()).toContain("BillNoCharge");
+      for (const column of ["baseHours", "baseTaxes", "baseFlatDeductions", "workWeekStart"]) expect(await cloudIncomeSql()).toContain(`"${column}"`);
       expect(await cloudVersion()).toBe(SCHEMA_VERSION);
       expect(await cloudRows('SELECT "payDate", "amount", "hours" FROM "IncomeOverride"')).toEqual([{ payDate: 20261118, amount: 560, hours: 32 }]);
       expect(await billNames()).toEqual(["Seed"]);
@@ -869,6 +871,7 @@ describe("while synced", () => {
       expect(kept.status).toBe(200);
 
       expect(await cloudTables()).toContain("IncomeOverride");
+      expect(await cloudTables()).toContain("BillNoCharge");
       expect(await cloudVersion()).toBe(SCHEMA_VERSION);
       expect(await cloudRows('SELECT "name", "baseHours" FROM "Income"')).toEqual([{ name: "Paycheck", baseHours: 40 }]);
       expect(await billNames()).toEqual(["Kept", "Seed"]);
