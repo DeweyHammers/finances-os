@@ -38,6 +38,19 @@
  * (block_on on the JS thread), so a server on the same event loop could
  * never answer — `startSyncServerProcess` forks libsql-sync-server-child.ts
  * and drives it over IPC with the same API.
+ *
+ * The server's OWN databases (the temporary copy a Hrana session runs on, and
+ * the empty base file) are opened with Node's built-in SQLite (`node:sqlite`),
+ * not with libsql — since Nov 12 2026. With libsql 0.5.29 the native library
+ * crashed the whole process (Windows access violation, exit code 3221225477)
+ * now and then while tearing such a connection down: about once in a few
+ * thousand sessions, more often on a loaded machine, always right after a
+ * session that ran many statements (a schema load), and whichever way the
+ * handle was released (close() after a GC, close() alone, or left to the
+ * GC). When that happened in the child every later test failed with "sync
+ * server process exited". The file format and the WAL frames are plain
+ * SQLite's either way, so the libsql CLIENT — the thing under test — sees no
+ * difference; it is still the real one on the app's side.
  */
 import http from "http";
 import fs from "fs";
@@ -45,8 +58,7 @@ import os from "os";
 import path from "path";
 import { fork, type ChildProcess } from "child_process";
 import type { AddressInfo } from "net";
-import Database from "libsql";
-import { collectGarbage } from "../../shared/data/backends/libsql";
+import { DatabaseSync } from "node:sqlite";
 import type { Row, SqlValue, Statement } from "../../shared/data";
 
 export const PAGE_SIZE = 4096;
@@ -73,7 +85,7 @@ export interface SyncServerSnapshot {
 
 /** A temporary plain copy of the cloud's contents that statements run on. */
 interface OpenSession {
-  db: Database.Database;
+  db: DatabaseSync;
   file: string;
   /** Lets the next session start (see `openSession`). */
   release: () => void;
@@ -203,7 +215,7 @@ export class LibsqlSyncServer {
    * append the WAL frames it committed to the log. Sessions are serialised:
    * two at once would both start from the same frames.
    */
-  private async session<T>(fn: (db: Database.Database) => T): Promise<T> {
+  private async session<T>(fn: (db: DatabaseSync) => T): Promise<T> {
     const s = await this.openSession();
     let ok = false;
     try {
@@ -230,10 +242,10 @@ export class LibsqlSyncServer {
     this.sessionChain = before.then(() => mine);
     await before;
     const file = path.join(this.tmp, `session-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
-    let db: Database.Database | null = null;
+    let db: DatabaseSync | null = null;
     try {
       fs.writeFileSync(file, this.materialize());
-      db = new Database(file);
+      db = openPlainDatabase(file);
       db.exec("PRAGMA journal_mode = WAL");
       db.exec("PRAGMA wal_autocheckpoint = 0");
       db.exec("PRAGMA foreign_keys = ON");
@@ -253,18 +265,14 @@ export class LibsqlSyncServer {
   private async closeSession(s: OpenSession, harvest: boolean): Promise<void> {
     if (s.idle) clearTimeout(s.idle);
     try {
-      if (s.db.inTransaction) s.db.exec("ROLLBACK");
+      if (s.db.isTransaction) s.db.exec("ROLLBACK");
       // Before close(): closing the last connection checkpoints the WAL away.
       if (harvest) this.frames.push(...harvestFrames(`${s.file}-wal`));
     } finally {
-      // libsql frees its statements only when GC collects them, and the
-      // file stays open until then (see backends/libsql.ts → close); the
-      // temp files are swept at close() anyway, so a failed delete is fine.
-      collectGarbage();
-      await new Promise((r) => setImmediate(r));
+      // node:sqlite finalises the connection's statements itself when it
+      // closes, so the file is released at once (no GC dance as with libsql);
+      // the temp files are swept at close() anyway, so a failed delete is fine.
       s.db.close();
-      collectGarbage();
-      await new Promise((r) => setImmediate(r));
       for (const f of [s.file, `${s.file}-wal`, `${s.file}-shm`]) {
         try {
           fs.rmSync(f, { force: true });
@@ -286,13 +294,13 @@ export class LibsqlSyncServer {
   /** Run statements "in the cloud" inside one transaction and record the frames they produce. */
   batch(statements: Statement[]): Promise<Row[][]> {
     return this.session((db) => {
-      db.prepare("BEGIN").all();
+      db.exec("BEGIN");
       try {
         const results = statements.map((s) => db.prepare(s.sql).all(...(s.args as any[])) as Row[]);
-        db.prepare("COMMIT").all();
+        db.exec("COMMIT");
         return results;
       } catch (e) {
-        db.prepare("ROLLBACK").all();
+        db.exec("ROLLBACK");
         throw e;
       }
     });
@@ -528,7 +536,7 @@ export class LibsqlSyncServer {
     return { baton, base_url: null, results: response.results };
   }
 
-  private runPipeline(db: Database.Database, requests: any[], onClose: () => void): { results: unknown[] } {
+  private runPipeline(db: DatabaseSync, requests: any[], onClose: () => void): { results: unknown[] } {
     {
       const sqlOf = (stmt: any): string => {
         if (typeof stmt.sql === "string") return stmt.sql;
@@ -570,7 +578,7 @@ export class LibsqlSyncServer {
                 case "or":
                   return cond.conds.some(evaluate);
                 case "is_autocommit":
-                  return !db.inTransaction;
+                  return !db.isTransaction;
                 default:
                   throw new Error(`unknown batch condition ${cond.type}`);
               }
@@ -601,14 +609,28 @@ export class LibsqlSyncServer {
   }
 }
 
-/** Run one Hrana statement on a plain libsql connection and encode its result. */
-function runHranaStmt(db: Database.Database, sql: string, stmt: any): unknown {
+/**
+ * Open one of the server's own database files with Node's built-in SQLite
+ * (see the header for why not libsql). Double-quoted string literals stay
+ * allowed, as they were with libsql's SQLite build, so the mock accepts the
+ * same SQL it always did.
+ */
+function openPlainDatabase(file: string): DatabaseSync {
+  return new DatabaseSync(file, { enableDoubleQuotedStringLiterals: true });
+}
+
+/** Run one Hrana statement on a plain SQLite connection and encode its result. */
+function runHranaStmt(db: DatabaseSync, sql: string, stmt: any): unknown {
   const args = ((stmt.args ?? []) as any[]).map(decodeHranaValue);
   if (stmt.named_args?.length) throw new Error("named arguments are not supported by the mock");
   const prepared = db.prepare(sql);
   const columns = prepared.columns() as { name: string; type: string | null }[];
-  if (prepared.reader) {
-    const rows = prepared.raw(true).all(...args) as unknown[][];
+  // A statement that returns rows (SELECT, PRAGMA queries, … RETURNING) has
+  // result columns; one that only writes has none.
+  if (columns.length > 0) {
+    // Rows as arrays in column order (two columns may share a name).
+    prepared.setReturnArrays(true);
+    const rows = prepared.all(...args) as unknown as unknown[][];
     return {
       cols: columns.map((c) => ({ name: c.name, decltype: c.type ?? null })),
       rows: stmt.want_rows === false ? [] : rows.map((row) => row.map((v, i) => encodeHranaValue(v, columns[i]?.type))),
@@ -664,7 +686,7 @@ async function readBody(req: http.IncomingMessage): Promise<Buffer> {
 export function emptyWalDatabase(): Buffer {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "libsql-sync-base-"));
   const file = path.join(dir, "base.db");
-  const db = new Database(file);
+  const db = openPlainDatabase(file);
   try {
     db.exec("PRAGMA journal_mode = WAL");
     // A table that is created and dropped again leaves a real page 1 behind,
