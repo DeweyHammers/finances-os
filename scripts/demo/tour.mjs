@@ -51,6 +51,10 @@ const PAY_STUB = { hours: 40, taxes: 210, dues: 15 };
 // The short week: Alex works 32 hours Nov 6 – Nov 12, paid on Friday Nov 13.
 // 32 of 40 hours → $1,100 gross − $168 taxes − $15 dues = $917.
 const SHORT_WEEK = { hours: 32, paycheck: "Nov 13 – Nov 19" };
+// The free month: the gym waives Alex's November payment (due Nov 5, which the
+// Plan saves for out of October's pay weeks). Alex spends that $35 on
+// something else and marks the payment as not charged.
+const FREE_MONTH = { bill: "Gym Membership", payment: "Due Nov 5", movedTo: "Fun Money", cents: 3500 };
 const BILLS = [
   // [name, amount, due day] — the first one is typed into the UI form.
   ["Rent", 1400, 1],
@@ -443,7 +447,34 @@ try {
   await page.settle();
   await shot(page, "overview-short-week");
 
-  console.log("Step 12 · what if? (sandbox)");
+  console.log("Step 12 · a free month");
+  // The gym gives Alex November for free. The $35 saved for that payment is
+  // moved to Fun Money (through the API: Plan → Available → Move money does
+  // the same two writes), which leaves the gym's envelope short of the plan —
+  // the amber ⚠ beside its name. Then, on the Plan page, the crossed-out
+  // dollar button on that row lists the bill's payments in this view; ticking
+  // "Due Nov 5" marks that one payment as not charged, so the Plan stops
+  // expecting money for it and the warning goes away. Plan page only: the
+  // Overview keeps showing the bill, so no later picture changes.
+  {
+    const october = "2026-10-01T00:00:00.000Z";
+    const months = await api("GET", "BudgetMonth");
+    const rowOf = (name) => months.find((m) => m.categoryItemId === items[name].id && new Date(m.month).toISOString() === october);
+    const from = rowOf(FREE_MONTH.bill);
+    const to = rowOf(FREE_MONTH.movedTo);
+    await api("PATCH", `BudgetMonth/${from.id}`, { assignedCents: from.assignedCents - FREE_MONTH.cents });
+    await api("PATCH", `BudgetMonth/${to.id}`, { assignedCents: to.assignedCents + FREE_MONTH.cents });
+  }
+  await page.goto("/Plan");
+  await page.click(`button[aria-label^="Payments of ${FREE_MONTH.bill}"]`);
+  await page.sleep(500);
+  await shot(page, "plan-not-charged-menu");
+  await page.clickText(FREE_MONTH.payment);
+  await waitForText(page, /marked as not charged/);
+  await page.sleep(800);
+  await shot(page, "plan-not-charged");
+
+  console.log("Step 13 · what if? (sandbox)");
   // Alex wonders what cancelling the gym would do to next month. Try it on a
   // COPY of the data: "Try a sandbox" (Settings -> Data) copies the database
   // and reloads the page with the amber banner; the real data is untouched
@@ -478,14 +509,14 @@ try {
   await page.goto("/Overview");
   await waitForNoText(page, /You're working on a copy/);
 
-  console.log("Step 13 · look back");
+  console.log("Step 14 · look back");
   await page.goto("/Statistics");
   await page.clickText("Month-to-Month");
   await shot(page, "statistics-month");
   await page.clickText("Yearly Overview");
   await shot(page, "statistics-year");
 
-  console.log("Step 14 · sync across devices");
+  console.log("Step 15 · sync across devices");
   // The Settings form, filled with a made-up Turso URL and token (not
   // submitted: the picture is what matters).
   await page.goto("/Settings?tab=sync");
