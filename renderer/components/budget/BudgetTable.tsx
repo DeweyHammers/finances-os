@@ -110,8 +110,9 @@ export interface BudgetItem {
    * or unset, the suppression naturally applies and no warning fires. */
   expectedAssignedThroughPreviousCents?: number;
   /** For BILL envelopes: the subset of this month's activity that falls
-   * inside the bill's per-occurrence grace windows (`[dueDate, dueDate+5]`
-   * per occurrence). Used in place of raw `activityCents` when computing
+   * inside the bill's per-occurrence grace windows (due date through the day
+   * before the bill's next due date, `getBillPaymentWindow`). Used in place
+   * of raw `activityCents` when computing
    * whether the envelope is funded — a payment for the PREVIOUS month's
    * occurrence that happens to land in this calendar month is excluded.
    * Undefined for non-BILL envelopes (they fall back to `activityCents`). */

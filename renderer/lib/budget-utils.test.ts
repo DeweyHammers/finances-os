@@ -15,6 +15,7 @@ import {
   buildBalanceAdjustment,
   evaluatePlanSync,
   creditBillOccurrenceCents,
+  getBillPaymentWindow,
   hasPaycheckForPeriod,
 } from "./budget-utils";
 import { getPayPeriodsForMonth, getBillAllocationsForBill } from "./pay-period-utils";
@@ -1179,5 +1180,131 @@ describe("evaluatePlanSync with a payment marked not charged", () => {
     const funded = evaluatePlanSync({ ...twoFirings, graceActivityCents: grace, availableCents: 1500 });
     expect(funded.isUnderfunded).toBe(false);
     expect(funded.isOverfunded).toBe(false);
+  });
+});
+
+// ── A bill charged late (Nov 13 2026) ───────────────────────────────────────
+// Generic data: a $20 "Study app" due the 6th. A glitch on the vendor's side
+// charges it on the 13th instead. The payment still belongs to the Nov 6
+// occurrence, so the Plan page must treat that occurrence as paid — its
+// window runs from the due date to the day before the bill's next due date
+// (it used to end 5 days after the due date, on the 11th).
+describe("getBillPaymentWindow — which dates pay one bill occurrence", () => {
+  // November 2026 (viewMonth is 0-based: 10 = November).
+  const nov = { viewYear: 2026, viewMonth: 10 };
+
+  it("runs from the due date to the day before the next due date", () => {
+    expect(getBillPaymentWindow({ ...nov, billDueDay: 6, occurrenceCoord: 6 })).toEqual({
+      start: "2026-11-06",
+      end: "2026-12-05",
+      dueDateKey: 20261106,
+    });
+  });
+
+  it("a forward-extended occurrence (coord past the month's end) is next month's date", () => {
+    // Coord 34 in a 30-day November = Dec 4.
+    expect(getBillPaymentWindow({ ...nov, billDueDay: 4, occurrenceCoord: 34 })).toEqual({
+      start: "2026-12-04",
+      end: "2027-01-03",
+      dueDateKey: 20261204,
+    });
+  });
+
+  it("the two occurrences of a bill firing twice in a view never overlap", () => {
+    const first = getBillPaymentWindow({ ...nov, billDueDay: 4, occurrenceCoord: 4 });
+    const second = getBillPaymentWindow({ ...nov, billDueDay: 4, occurrenceCoord: 34 });
+    expect(first.end).toBe("2026-12-03");
+    expect(second.start).toBe("2026-12-04");
+  });
+
+  it("a bill due the 1st: the window is exactly its month", () => {
+    const w = getBillPaymentWindow({ ...nov, billDueDay: 1, occurrenceCoord: 1 });
+    expect(w.start).toBe("2026-11-01");
+    expect(w.end).toBe("2026-11-30");
+  });
+
+  it("a bill due the 31st in a 30-day month: fires the 30th, next due the 31st", () => {
+    // The view clamps the occurrence to Nov 30; the bill's own day is still 31.
+    const w = getBillPaymentWindow({ ...nov, billDueDay: 31, occurrenceCoord: 30 });
+    expect(w.start).toBe("2026-11-30");
+    expect(w.end).toBe("2026-12-30");
+  });
+
+  it("a bill due the 31st: January's window ends before Feb 28", () => {
+    const w = getBillPaymentWindow({ viewYear: 2027, viewMonth: 0, billDueDay: 31, occurrenceCoord: 31 });
+    expect(w.start).toBe("2027-01-31");
+    expect(w.end).toBe("2027-02-27");
+  });
+
+  it("crosses the year end, in-month and forward-extended", () => {
+    const dec = { viewYear: 2026, viewMonth: 11 };
+    expect(getBillPaymentWindow({ ...dec, billDueDay: 20, occurrenceCoord: 20 })).toEqual({
+      start: "2026-12-20",
+      end: "2027-01-19",
+      dueDateKey: 20261220,
+    });
+    // Coord 35 in a 31-day December = Jan 4 2027.
+    expect(getBillPaymentWindow({ ...dec, billDueDay: 4, occurrenceCoord: 35 })).toEqual({
+      start: "2027-01-04",
+      end: "2027-02-03",
+      dueDateKey: 20270104,
+    });
+  });
+
+  it("an unreadable due day falls back to the occurrence's own day", () => {
+    const w = getBillPaymentWindow({ ...nov, billDueDay: NaN, occurrenceCoord: 6 });
+    expect(w.end).toBe("2026-12-05");
+  });
+});
+
+describe("a bill charged a week late still settles its occurrence", () => {
+  // The Plan page's own steps, on generic data: sum the envelope's net
+  // outflow inside the occurrence's window, credit it, evaluate the envelope.
+  const window = getBillPaymentWindow({ viewYear: 2026, viewMonth: 10, billDueDay: 6, occurrenceCoord: 6 });
+  const netOutflowInWindow = (txns: Array<{ date: string; outflowCents: number; inflowCents: number }>) =>
+    txns
+      .filter((t) => t.date.slice(0, 10) >= window.start && t.date.slice(0, 10) <= window.end)
+      .reduce((s, t) => s + t.outflowCents - t.inflowCents, 0);
+  // The $20 was saved in the bill's pay week; paying it empties the envelope.
+  const studyApp = {
+    sourceType: "BILL",
+    expectedFullCents: 2000,
+    expectedPreviousFullCents: 2000,
+    activityCents: 2000,
+    availableCents: 0,
+    paydayPending: false,
+  };
+  const evaluate = (paidOn: string) =>
+    evaluatePlanSync({
+      ...studyApp,
+      graceActivityCents: creditBillOccurrenceCents({
+        windowActivityCents: netOutflowInWindow([{ date: paidOn, outflowCents: 2000, inflowCents: 0 }]),
+        plannedCents: 2000,
+        notCharged: false,
+      }),
+    });
+
+  it("the reported case: due the 6th, charged the 13th → in sync", () => {
+    const r = evaluate("2026-11-13T12:00:00.000Z");
+    expect(r.isUnderfunded).toBe(false);
+    expect(r.isOverfunded).toBe(false);
+    expect(r.needsSync).toBe(false);
+    expect(r.targetCents).toBe(0);
+  });
+
+  it("paid on time, or on the last day before the next due date → in sync", () => {
+    expect(evaluate("2026-11-06T12:00:00.000Z").isUnderfunded).toBe(false);
+    expect(evaluate("2026-12-05T12:00:00.000Z").isUnderfunded).toBe(false);
+  });
+
+  it("a payment dated before the due date is not this occurrence's (unchanged rule)", () => {
+    // Nov 5 belongs to the Oct 6 occurrence's window (Oct 6 – Nov 5).
+    const r = evaluate("2026-11-05T12:00:00.000Z");
+    expect(r.isUnderfunded).toBe(true);
+    expect(r.diffCents).toBe(-2000);
+  });
+
+  it("the next due date starts the next occurrence's window", () => {
+    expect(netOutflowInWindow([{ date: "2026-12-06T12:00:00.000Z", outflowCents: 2000, inflowCents: 0 }])).toBe(0);
   });
 });

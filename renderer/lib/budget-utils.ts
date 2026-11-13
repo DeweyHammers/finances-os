@@ -513,6 +513,75 @@ export function hasPaycheckForPeriod(params: {
   });
 }
 
+// ── Which dates count as paying one bill occurrence ───────────────────────
+
+/**
+ * The calendar window in which a transaction counts as the payment of ONE
+ * occurrence of a monthly bill on the Plan page: from the occurrence's due
+ * date through the day BEFORE the bill's next due date (both inclusive, as
+ * YYYY-MM-DD strings so membership is a plain string compare against the
+ * date part of a transaction's ISO date — no time zones involved).
+ *
+ * Until Nov 13 2026 the window ended 5 days after the due date (banks post a
+ * few days late). A vendor's glitch then charged a bill due the 6th on the
+ * 13th: the payment fell outside the window, the occurrence looked unpaid,
+ * and the emptied envelope showed "Out of sync with plan" for the rest of
+ * the month. A late payment is still THAT occurrence's payment, so the
+ * window now runs until the next occurrence takes over. Windows of
+ * consecutive occurrences never overlap, and a payment dated BEFORE the due
+ * date still belongs to the previous occurrence (a bill due Jul 31 paid
+ * Aug 1 is July's, not August's — the Aug 31 window starts on Aug 31).
+ *
+ * `occurrenceCoord` follows the view convention of `getBillOccurrencesInView`:
+ * up to the view month's length it is a day of the view month, above it a
+ * day of the NEXT calendar month (the forward extension).
+ *
+ * `billDueDay` is the bill's own due day (1–31), NOT clamped to the view's
+ * month: a bill due the 31st that fires Sep 30 is next due Oct 31, so its
+ * September window ends Oct 30.
+ *
+ * `dueDateKey` is the due date as a YYYYMMDD number — the key a "not
+ * charged" mark (`BillNoCharge`) is saved under.
+ */
+export function getBillPaymentWindow(params: {
+  billDueDay: number;
+  occurrenceCoord: number;
+  viewYear: number;
+  /** 0-based (0 = January), like `Date#getMonth`. */
+  viewMonth: number;
+}): { start: string; end: string; dueDateKey: number } {
+  const { billDueDay, occurrenceCoord, viewYear, viewMonth } = params;
+  // Date.UTC handles month/day overflow (month 12 → January of the next
+  // year, day 0 → last day of the previous month); reading the UTC parts
+  // back means no local-time shift can slip in.
+  const toDateStr = (y: number, m: number, d: number): string => {
+    const dt = new Date(Date.UTC(y, m, d));
+    const yy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getUTCDate()).padStart(2, "0");
+    return `${yy}-${mm}-${dd}`;
+  };
+  const daysInMonth = (y: number, m: number): number =>
+    new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+
+  const inNextMonth = occurrenceCoord > daysInMonth(viewYear, viewMonth);
+  // Month index of the due date, counted from the view's year (may be 12).
+  const dueMonth = viewMonth + (inNextMonth ? 1 : 0);
+  const dueDay = inNextMonth
+    ? occurrenceCoord - daysInMonth(viewYear, viewMonth)
+    : occurrenceCoord;
+  const start = toDateStr(viewYear, dueMonth, dueDay);
+
+  // The next occurrence: the bill's day in the following month, clamped to
+  // that month's length (the 31st → Feb 28). An unreadable due day falls
+  // back to this occurrence's own day.
+  const ownDay = Number.isFinite(billDueDay) && billDueDay >= 1 ? billDueDay : dueDay;
+  const nextDueDay = Math.min(ownDay, daysInMonth(viewYear, dueMonth + 1));
+  const end = toDateStr(viewYear, dueMonth + 1, nextDueDay - 1);
+
+  return { start, end, dueDateKey: Number(start.replace(/-/g, "")) };
+}
+
 // ── What one bill payment counts for on the Plan page ─────────────────────
 
 /**
@@ -521,9 +590,10 @@ export function hasPaycheckForPeriod(params: {
  * `activityInBillGraceWindowCents`, which the ⚠ badge, Sync Plan and
  * Auto-assign all subtract from the plan's target.
  *
- *  - Paid (any net outflow inside the grace window) → the occurrence's full
- *    PLANNED amount, whatever was really charged ("paid occurrence =
- *    settled", see BudgetPage's enrich pass).
+ *  - Paid (any net outflow inside the occurrence's payment window, see
+ *    `getBillPaymentWindow` — a late payment counts until the bill's next
+ *    due date) → the occurrence's full PLANNED amount, whatever was really
+ *    charged ("paid occurrence = settled", see BudgetPage's enrich pass).
  *  - Marked NOT CHARGED (a `BillNoCharge` row for that due date — the vendor
  *    gave a free month, Nov 12 2026) → the same: the full planned amount, as
  *    if it had been paid. The Plan then stops expecting money for it, so an
@@ -536,7 +606,7 @@ export function hasPaycheckForPeriod(params: {
  * the raw activity is all there is to go on then.
  */
 export function creditBillOccurrenceCents(params: {
-  /** Net outflow (outflow − inflow) of the envelope inside the grace window. */
+  /** Net outflow (outflow − inflow) of the envelope inside the payment window. */
   windowActivityCents: number;
   /** The occurrence's planned amount (its BillSplit rows, or the bill's amount). */
   plannedCents: number | undefined;
