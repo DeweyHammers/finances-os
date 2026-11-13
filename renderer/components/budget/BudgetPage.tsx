@@ -62,6 +62,7 @@ import {
   computeAvailable,
   evaluatePlanSync,
   creditBillOccurrenceCents,
+  getBillPaymentWindow,
   hasPaycheckForPeriod,
   computeReadyToAssign,
   computeExpectedAssignedThroughPeriod,
@@ -532,16 +533,19 @@ export const BudgetPage = () => {
 
   // ── Bill payment grace windows ──
   // For each bill, enumerate its occurrences in this view and compute a real-
-  // calendar window [dueDate, dueDate + BILL_PAYMENT_GRACE_DAYS] per occurrence.
-  // A transaction dated inside any of these windows is considered payment for
-  // that occurrence. Grace exists because banks post charges a few days after
-  // the vendor's stated due date — a Sep 1 charge for a bill due Aug 31 should
-  // still be attributed to Aug's envelope, not September's.
+  // calendar window per occurrence: [dueDate, day before the bill's NEXT due
+  // date] (getBillPaymentWindow in lib/budget-utils.ts). A transaction dated
+  // inside any of these windows is considered payment for that occurrence.
+  // The window exists because charges rarely post on the due date itself — a
+  // Sep 1 charge for a bill due Aug 31 should still be attributed to Aug's
+  // envelope, not September's. It ran only 5 days until Nov 13 2026, when a
+  // vendor's glitch charged a bill due the 6th on the 13th and the envelope
+  // showed "Out of sync with plan"; a late payment now counts for its
+  // occurrence until the next one is due.
   //
   // Windows are per-occurrence (a bill firing twice in a view gets two
   // separate windows), so multi-occurrence bills (e.g. one due the 1st in the Sept view)
   // (Sep 1 + Oct 1) attribute payments to the right occurrence.
-  const BILL_PAYMENT_GRACE_DAYS = 5;
   // Windows are stored as YYYY-MM-DD string ranges (inclusive) so grace-window
   // membership is a pure calendar-date comparison against the DATE PART of the
   // txn's ISO. Using local-time Date objects here + parsing txn.date with
@@ -558,38 +562,29 @@ export const BudgetPage = () => {
     string,
     Array<{ start: string; end: string; coord: number; dueDateKey: number }>
   > = useMemo(() => {
-    const daysInViewMonth = new Date(Date.UTC(viewYear, viewMonth + 1, 0)).getUTCDate();
-    const toDateStr = (y: number, m: number, d: number): string => {
-      // Date constructor handles month/day overflow (e.g. Aug 31 + 5 → Sep 5),
-      // then we read UTC components so no local-tz shift can slip in.
-      const dt = new Date(Date.UTC(y, m, d));
-      const yy = dt.getUTCFullYear();
-      const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
-      const dd = String(dt.getUTCDate()).padStart(2, "0");
-      return `${yy}-${mm}-${dd}`;
-    };
     const result: Record<string, Array<{ start: string; end: string; coord: number; dueDateKey: number }>> = {};
     for (const bill of clampedBills) {
       const occurrences = getBillOccurrencesInView(Number(bill.dueDate), periods);
-      result[bill.id] = occurrences.map((o) => {
-        // coord ≤ daysInMonth: real date is (viewYear, viewMonth, coord)
-        // coord > daysInMonth: real date is next calendar month, day (coord - daysInMonth)
-        const inNext = o.coord > daysInViewMonth;
-        const realYear = inNext && viewMonth === 11 ? viewYear + 1 : viewYear;
-        const realMonth = inNext ? (viewMonth === 11 ? 0 : viewMonth + 1) : viewMonth;
-        const realDay = inNext ? o.coord - daysInViewMonth : o.coord;
-        const start = toDateStr(realYear, realMonth, realDay);
-        return {
-          start,
-          end: toDateStr(realYear, realMonth, realDay + BILL_PAYMENT_GRACE_DAYS),
-          coord: o.coord,
-          // "2026-11-20" → 20261120
-          dueDateKey: Number(start.replace(/-/g, "")),
-        };
-      });
+      // The bill's own due day, before it was clamped to this view's month:
+      // the window's end depends on when the bill is due NEXT month (a bill
+      // due the 31st fires Sep 30 here but Oct 31 next).
+      const ownDueDay = Number(
+        bills.find((b: any) => b.id === bill.id)?.dueDate ?? bill.dueDate,
+      );
+      result[bill.id] = occurrences.map((o) => ({
+        // start = the real due date, end = the day before the next one,
+        // dueDateKey = the due date as a number ("2026-11-20" → 20261120).
+        ...getBillPaymentWindow({
+          billDueDay: ownDueDay,
+          occurrenceCoord: o.coord,
+          viewYear,
+          viewMonth,
+        }),
+        coord: o.coord,
+      }));
     }
     return result;
-  }, [clampedBills, periods, viewYear, viewMonth]);
+  }, [bills, clampedBills, periods, viewYear, viewMonth]);
 
   // ── Enrich items with expectedAssignedCents + activityInBillGraceWindowCents ──
   // Second pass over the group tree: for every item, compute (a) the plan's
