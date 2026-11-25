@@ -32,8 +32,10 @@
  *   3  Income.workWeekStart (the weekday a work week starts on) + the
  *      BillNoCharge table (a bill payment that is not charged, e.g. a free
  *      month — Plan page only; Nov 2026)
+ *   4  the BillOverride table (a bill's temporary amount for one month — a
+ *      plan input; Nov 2026)
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export type ScalarType = "String" | "Int" | "Float" | "Boolean" | "DateTime";
 
@@ -189,6 +191,16 @@ export const MODELS: readonly Model[] = [
     "id String cuid",
     "billId String",
     "dueDateKey Int", // YYYYMMDD, e.g. 20261120
+  ]),
+  // Schema version 4: one month in which a bill costs something other than
+  // Bill.amount (a temporary amount), keyed by bill + the calendar month the
+  // payment is due in as a YYYYMM number (unique together). A plan input:
+  // Optimize, the Overview and the Plan page all read it.
+  model("BillOverride", [
+    "id String cuid",
+    "billId String",
+    "dueMonth Int", // YYYYMM, e.g. 202612
+    "amount Float",
   ]),
   model("Personal", [
     "id String cuid",

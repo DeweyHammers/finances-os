@@ -113,6 +113,30 @@ function version3Statements(catalogue: Map<string, string>): string[] {
   return statements;
 }
 
+// ── Version 4 (Nov 2026): a bill's temporary amount ─────────────────────────
+// BillOverride (one month in which a bill costs something other than its
+// regular amount — "$50 for three months", or $0 for a free month). A plan
+// input: Optimize, the Overview and the Plan page read it. See CLAUDE.md →
+// "Temporary bill amounts".
+
+const V4_CREATE_BILL_OVERRIDE = `CREATE TABLE "BillOverride" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "billId" TEXT NOT NULL,
+    "dueMonth" INTEGER NOT NULL,
+    "amount" REAL NOT NULL,
+    CONSTRAINT "BillOverride_billId_fkey" FOREIGN KEY ("billId") REFERENCES "Bill" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+)`;
+
+const V4_INDEX_NAME = "BillOverride_billId_dueMonth_key";
+const V4_CREATE_BILL_OVERRIDE_INDEX = `CREATE UNIQUE INDEX "${V4_INDEX_NAME}" ON "BillOverride"("billId", "dueMonth")`;
+
+function version4Statements(catalogue: Map<string, string>): string[] {
+  const statements: string[] = [];
+  if (!catalogue.has("BillOverride")) statements.push(V4_CREATE_BILL_OVERRIDE);
+  if (!catalogue.has(V4_INDEX_NAME)) statements.push(V4_CREATE_BILL_OVERRIDE_INDEX);
+  return statements;
+}
+
 /**
  * The DDL that takes `db` — a database that already HAS the app's tables, at
  * any older version — to this build's shape. Empty when nothing is missing.
@@ -124,5 +148,5 @@ export async function migrationStatements(db: SqlExecutor): Promise<string[]> {
   // No app tables at all (a brand-new file or cloud database): nothing to
   // migrate — it gets the whole current schema from schema.sql instead.
   if (!catalogue.has("Income")) return [];
-  return [...version2Statements(catalogue), ...version3Statements(catalogue)];
+  return [...version2Statements(catalogue), ...version3Statements(catalogue), ...version4Statements(catalogue)];
 }

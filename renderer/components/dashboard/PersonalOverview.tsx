@@ -48,6 +48,8 @@ interface PersonalOverviewProps {
   incomes?: any[];
   /** IncomeOverride rows: a week with one has that paycheck as its income (room for split personals). */
   incomeOverrides?: any[];
+  /** BillOverride rows: a payment with a temporary amount counts at that amount (room for split personals). */
+  billOverrides?: any[];
   settings: any;
   viewYear?: number;
   viewMonth?: number;
@@ -59,6 +61,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
   bills = [],
   incomes = [],
   incomeOverrides = [],
+  billOverrides = [],
   settings,
   viewYear,
   viewMonth,
@@ -109,6 +112,7 @@ export const PersonalOverview: React.FC<PersonalOverviewProps> = ({
           monthKey,
           splits,
           period.key,
+          billOverrides,
         ),
       0,
     ),

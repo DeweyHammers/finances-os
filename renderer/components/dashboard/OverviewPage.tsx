@@ -57,6 +57,8 @@ import { SHORT_MONTHS } from "../../lib/constants";
 import { useRouter } from "next/navigation";
 import {
   getPayPeriodsForMonth,
+  billAmountForMonth,
+  billMonthKey,
   BillSplitRecord,
 } from "../../lib/pay-period-utils";
 // The horizon constant (the success toast reads it).
@@ -151,6 +153,14 @@ export function OverviewPage() {
   // simultaneously — duplicate Refine notification keys cause React key
   // warnings otherwise. See CLAUDE.md → "Refine notifications".
   const { query: billsQuery } = useList<BaseRecord>({ resource: "Bill", successNotification: false, errorNotification: false });
+  // Temporary bill amounts (the bill's edit form → "Temporary amount"): a
+  // payment due in a month that has one is shown and planned at that amount.
+  const { query: billOverridesQuery } = useList<BaseRecord>({
+    resource: "BillOverride",
+    pagination: { mode: "off" },
+    successNotification: false,
+    errorNotification: false,
+  });
   const { query: personalQuery } = useList<BaseRecord>({ resource: "Personal", successNotification: false, errorNotification: false });
   const { query: yearlyQuery } = useList<BaseRecord>({ resource: "YearlyCost", successNotification: false, errorNotification: false });
   const { query: settingsQuery } = useOne<BaseRecord>({
@@ -193,6 +203,7 @@ export function OverviewPage() {
   // query results (defaulting while loading) BEFORE any conditional return so
   // every useMemo/useEffect below sits above the loading + no-income guards.
   const bills = (billsQuery.data?.data || []) as any[];
+  const billOverrides = (billOverridesQuery.data?.data || []) as any[];
   const personalBills = (personalQuery.data?.data || []) as any[];
   const yearlyCosts = (yearlyQuery.data?.data || []) as any[];
   const settings = (settingsQuery.data?.data || {}) as any;
@@ -223,7 +234,9 @@ export function OverviewPage() {
   // ── Top-of-page summary totals ──
   // High-overview trio at the very top: how much money the user is committed
   // to across each cost bucket. Kept simple:
-  //   - Bills:    monthly obligation = sum of raw bill amounts.
+  //   - Bills:    monthly obligation = sum of bill amounts, each at what it
+  //     costs in the VIEWED month (a temporary amount there counts instead
+  //     of the regular one).
   //   - Personal: monthly obligation = one-shot amounts + repeatWeekly items
   //     scaled by the CURRENT view's pay-week count (matches PersonalOverview's
   //     header total so the top-of-page number and the section header agree).
@@ -236,8 +249,14 @@ export function OverviewPage() {
     return getPayPeriodsForMonth(viewYear, viewMonth, payWeekday, today, biWeekly).length;
   }, [primaryIncome, viewYear, viewMonth]);
   const summaryBillsMonthly = useMemo(
-    () => bills.reduce((acc: number, b: any) => acc + (Number(b.amount) || 0), 0),
-    [bills],
+    () => {
+      const viewedMonth = billMonthKey(viewYear, viewMonth);
+      return bills.reduce(
+        (acc: number, b: any) => acc + billAmountForMonth(String(b.id), Number(b.amount) || 0, viewedMonth, billOverrides),
+        0,
+      );
+    },
+    [bills, billOverrides, viewYear, viewMonth],
   );
   const summaryPersonalMonthly = useMemo(
     () =>
@@ -271,8 +290,8 @@ export function OverviewPage() {
   // plan's inputs must be reflected there, or edits to it won't raise the
   // alert or start an automatic run.
   const inputSigs: InputSignatures = useMemo(
-    () => computeInputSignatures({ bills, incomes, incomeOverrides, personalBills, targetSurplusCents }),
-    [bills, incomes, incomeOverrides, personalBills, targetSurplusCents],
+    () => computeInputSignatures({ bills, billOverrides, incomes, incomeOverrides, personalBills, targetSurplusCents }),
+    [bills, billOverrides, incomes, incomeOverrides, personalBills, targetSurplusCents],
   );
 
   // Persist the inputs (as their JSON) as the new "last optimized" baseline.
@@ -304,7 +323,7 @@ export function OverviewPage() {
   // alert on first load.
   useEffect(() => {
     const loading =
-      billsQuery.isLoading || personalQuery.isLoading ||
+      billsQuery.isLoading || billOverridesQuery.isLoading || personalQuery.isLoading ||
       settingsQuery.isLoading || incomesQuery.isLoading || incomeOverridesQuery.isLoading ||
       splitsQuery.isLoading;
     if (loading) return;
@@ -341,7 +360,7 @@ export function OverviewPage() {
       // (a failed automatic run has nothing left to re-plan either).
       setOptimizeAlert((prev) => (prev && (isInputChangeAlert(prev) || isAutoOptimizeFailureAlert(prev)) ? null : prev));
     }
-  }, [inputSigs, settings?.optimizedInputsSig, hasLegacySplits, autoOptimize.busy, billsQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading, incomeOverridesQuery.isLoading, splitsQuery.isLoading]);
+  }, [inputSigs, settings?.optimizedInputsSig, hasLegacySplits, autoOptimize.busy, billsQuery.isLoading, billOverridesQuery.isLoading, personalQuery.isLoading, settingsQuery.isLoading, incomesQuery.isLoading, incomeOverridesQuery.isLoading, splitsQuery.isLoading]);
 
   // ── Optimize action ──
   // The button's run: `runOptimize` (lib/optimize-run.ts) is PHASE A
@@ -358,6 +377,7 @@ export function OverviewPage() {
         {
           today,
           bills,
+          billOverrides,
           personalBills,
           incomes,
           incomeOverrides,
@@ -790,12 +810,14 @@ export function OverviewPage() {
           personalBills={personalBills}
           incomes={incomes}
           incomeOverrides={incomeOverrides}
+          billOverrides={billOverrides}
           viewYear={viewYear}
           viewMonth={viewMonth}
           splits={splits}
         />
         <BillsOverview
           bills={bills}
+          billOverrides={billOverrides}
           settings={effectiveSettings}
           viewYear={viewYear}
           viewMonth={viewMonth}
@@ -806,6 +828,7 @@ export function OverviewPage() {
           bills={bills}
           incomes={incomes}
           incomeOverrides={incomeOverrides}
+          billOverrides={billOverrides}
           settings={effectiveSettings}
           viewYear={viewYear}
           viewMonth={viewMonth}

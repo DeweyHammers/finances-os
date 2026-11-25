@@ -45,6 +45,8 @@ export interface InputSignatures {
 /** The raw rows a signature is computed from (the same resources the Overview reads). */
 export interface SignatureInputs {
   bills: any[];
+  /** BillOverride rows (temporary bill amounts). Optional: none = regular amounts only. */
+  billOverrides?: any[];
   incomes: any[];
   /** IncomeOverride rows (per-week paychecks). Optional: none = regular paychecks only. */
   incomeOverrides?: any[];
@@ -67,10 +69,25 @@ function incomesSignature(incomes: any[], incomeOverrides: any[]): string {
   return `${base}|${overrides}`;
 }
 
+/**
+ * The bills signature. Temporary amounts are part of the bill inputs, so they
+ * are folded into the same string the way per-week paychecks are folded into
+ * the incomes one — appended after a `|`, and ONLY when there are any: with
+ * no BillOverride rows the string is exactly what it was before Nov 25 2026,
+ * so a baseline saved by an older build still matches and the upgrade itself
+ * starts no re-plan.
+ */
+function billsSignature(bills: any[], billOverrides: any[]): string {
+  const base = bills.map((b: any) => `${b.id}:${b.amount}:${b.dueDate}:${b.neverSplit ? 1 : 0}`).sort().join(",");
+  if (billOverrides.length === 0) return base;
+  const overrides = billOverrides.map((o: any) => `${o.billId}@${o.dueMonth}:${o.amount}`).sort().join(",");
+  return `${base}|${overrides}`;
+}
+
 /** Signatures of every Optimize input — the Overview's rule, unchanged. */
-export function computeInputSignatures({ bills, incomes, incomeOverrides = [], personalBills, targetSurplusCents }: SignatureInputs): InputSignatures {
+export function computeInputSignatures({ bills, billOverrides = [], incomes, incomeOverrides = [], personalBills, targetSurplusCents }: SignatureInputs): InputSignatures {
   return {
-    bills: bills.map((b: any) => `${b.id}:${b.amount}:${b.dueDate}:${b.neverSplit ? 1 : 0}`).sort().join(","),
+    bills: billsSignature(bills, billOverrides),
     incomes: incomesSignature(incomes, incomeOverrides),
     personals: personalBills.map((p: any) => `${p.id}:${p.amount}:${p.dueDate}:${p.repeatWeekly ? 1 : 0}:${p.weekOfMonth ?? ""}`).sort().join(","),
     surplusTarget: targetSurplusCents,

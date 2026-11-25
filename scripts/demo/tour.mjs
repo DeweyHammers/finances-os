@@ -117,16 +117,20 @@ async function setStoryClock(page, isoLocal) {
  * taking a picture of a half-planned Overview.
  */
 async function planIsCurrent() {
-  const [bills, incomes, overrides, personals, splits] = await Promise.all(
-    ["Bill", "Income", "IncomeOverride", "Personal", "BillSplit"].map((r) => api("GET", r)),
+  const [bills, billOverrides, incomes, overrides, personals, splits] = await Promise.all(
+    ["Bill", "BillOverride", "Income", "IncomeOverride", "Personal", "BillSplit"].map((r) => api("GET", r)),
   );
   let settings = null;
   try {
     settings = await api("GET", "AppSettings/global");
   } catch {} // no settings row yet
   const incomeBase = incomes.map((i) => `${i.id}:${i.amount}:${i.payDay}:${i.paymentCycle}:${i.payWeekOffset ?? 0}`).sort().join(",");
+  const billBase = bills.map((b) => `${b.id}:${b.amount}:${b.dueDate}:${b.neverSplit ? 1 : 0}`).sort().join(",");
   const expected = JSON.stringify({
-    bills: bills.map((b) => `${b.id}:${b.amount}:${b.dueDate}:${b.neverSplit ? 1 : 0}`).sort().join(","),
+    // Temporary bill amounts (BillOverride) are appended only when there are any.
+    bills: billOverrides.length
+      ? `${billBase}|${billOverrides.map((o) => `${o.billId}@${o.dueMonth}:${o.amount}`).sort().join(",")}`
+      : billBase,
     incomes: overrides.length
       ? `${incomeBase}|${overrides.map((o) => `${o.incomeId}@${o.payDate}:${o.amount}`).sort().join(",")}`
       : incomeBase,

@@ -219,6 +219,7 @@ import {
   getBillPeriodKey,
   getBillAllocationsForBill,
   BillSplitRecord,
+  BillOverrideLike,
 } from "./pay-period-utils";
 
 export const resolveAutoAssignAmountForPeriod = (params: {
@@ -230,6 +231,9 @@ export const resolveAutoAssignAmountForPeriod = (params: {
   splits?: BillSplitRecord[];
   monthKey?: string;
   splitAllocationsByPersonalName?: Record<string, number>;
+  /** BillOverride rows: a payment due in a month with a temporary amount is
+   * targeted at that amount (so a $0 month asks for nothing). */
+  billOverrides?: readonly BillOverrideLike[];
 }): number => {
   const {
     item,
@@ -240,6 +244,7 @@ export const resolveAutoAssignAmountForPeriod = (params: {
     splits,
     monthKey,
     splitAllocationsByPersonalName,
+    billOverrides,
   } = params;
 
   if (item.sourceType === "BILL") {
@@ -256,6 +261,7 @@ export const resolveAutoAssignAmountForPeriod = (params: {
         periods,
         monthKey,
         splits,
+        billOverrides,
       );
       if (allocs.length === 0) return 0;
       // Split bills fund their target cumulatively across pay weeks — hitting
@@ -354,6 +360,8 @@ export const computeExpectedAssignedThroughPeriod = (params: {
   splits?: BillSplitRecord[];
   monthKey?: string;
   splitAllocationsByPersonalNameThroughPeriod?: Record<string, number[]>;
+  /** BillOverride rows (temporary bill amounts), passed on to the resolver. */
+  billOverrides?: readonly BillOverrideLike[];
 }): number => {
   const {
     item,
@@ -364,6 +372,7 @@ export const computeExpectedAssignedThroughPeriod = (params: {
     splits,
     monthKey,
     splitAllocationsByPersonalNameThroughPeriod,
+    billOverrides,
   } = params;
 
   if (throughPeriodIdx < 0) return 0;
@@ -405,6 +414,7 @@ export const computeExpectedAssignedThroughPeriod = (params: {
       splits,
       monthKey,
       splitAllocationsByPersonalName,
+      billOverrides,
     });
     if (isRepeating) expected += target;
     else expected = Math.max(expected, target);
@@ -516,21 +526,44 @@ export function hasPaycheckForPeriod(params: {
 // ── Which dates count as paying one bill occurrence ───────────────────────
 
 /**
+ * How many days BEFORE its due date a payment still counts for that due date
+ * (see `getBillPaymentWindow`). Vendors charge early around holidays and
+ * weekends — on Nov 24 2026 a bill due the 26th (Thanksgiving) was charged two
+ * days ahead. A week covers that with room to spare, and also a bill paid by
+ * hand on payday for a due date later in the same weekly pay week. It is kept
+ * short on purpose: every day added here is a day taken from how LATE the
+ * previous payment may be and still count for its own due date.
+ */
+export const BILL_EARLY_PAYMENT_DAYS = 7;
+
+/**
  * The calendar window in which a transaction counts as the payment of ONE
- * occurrence of a monthly bill on the Plan page: from the occurrence's due
- * date through the day BEFORE the bill's next due date (both inclusive, as
- * YYYY-MM-DD strings so membership is a plain string compare against the
- * date part of a transaction's ISO date — no time zones involved).
+ * occurrence of a monthly bill on the Plan page: from
+ * `BILL_EARLY_PAYMENT_DAYS` before the occurrence's due date through the day
+ * before the NEXT occurrence's window opens (both inclusive, as YYYY-MM-DD
+ * strings so membership is a plain string compare against the date part of a
+ * transaction's ISO date — no time zones involved). For a bill due the 26th:
+ * Nov 19 – Dec 18 pays the Nov 26 occurrence.
  *
- * Until Nov 13 2026 the window ended 5 days after the due date (banks post a
- * few days late). A vendor's glitch then charged a bill due the 6th on the
- * 13th: the payment fell outside the window, the occurrence looked unpaid,
- * and the emptied envelope showed "Out of sync with plan" for the rest of
- * the month. A late payment is still THAT occurrence's payment, so the
- * window now runs until the next occurrence takes over. Windows of
- * consecutive occurrences never overlap, and a payment dated BEFORE the due
- * date still belongs to the previous occurrence (a bill due Jul 31 paid
- * Aug 1 is July's, not August's — the Aug 31 window starts on Aug 31).
+ * History of the rule:
+ *  - Until Nov 13 2026 the window was [due date, due date + 5] (banks post a
+ *    few days late). A vendor's glitch then charged a bill due the 6th on the
+ *    13th: the payment fell outside the window, the occurrence looked unpaid,
+ *    and the emptied envelope showed "Out of sync with plan" for the rest of
+ *    the month. A late payment is still THAT occurrence's payment, so the
+ *    window was stretched until the next occurrence takes over.
+ *  - Until Nov 25 2026 the window opened ON the due date, so a payment dated
+ *    even one day early was credited to the PREVIOUS month's occurrence. A
+ *    bill due Nov 26 was charged on Nov 24 (Thanksgiving): the Nov 26
+ *    occurrence looked unpaid, Auto-assign funded the bill a second time on
+ *    payday (the hole the payment left PLUS the full amount again), and once
+ *    the extra was moved away the envelope showed "Out of sync with plan".
+ *    The whole window now opens a week earlier.
+ *
+ * Windows of consecutive occurrences never overlap and leave no gap: each
+ * one ends the day before the next one opens. A payment made more than
+ * `BILL_EARLY_PAYMENT_DAYS` before a due date still belongs to the previous
+ * occurrence (it reads as a late payment of that one).
  *
  * `occurrenceCoord` follows the view convention of `getBillOccurrencesInView`:
  * up to the view month's length it is a day of the view month, above it a
@@ -538,10 +571,14 @@ export function hasPaycheckForPeriod(params: {
  *
  * `billDueDay` is the bill's own due day (1–31), NOT clamped to the view's
  * month: a bill due the 31st that fires Sep 30 is next due Oct 31, so its
- * September window ends Oct 30.
+ * September window ends a week before Oct 31.
  *
- * `dueDateKey` is the due date as a YYYYMMDD number — the key a "not
- * charged" mark (`BillNoCharge`) is saved under.
+ * Returned besides `start` / `end`:
+ *  - `dueDate` — the occurrence's real due date (YYYY-MM-DD). The window no
+ *    longer starts on it, so anything that shows or keys the due date must
+ *    read this field, never `start`.
+ *  - `dueDateKey` — the same date as a YYYYMMDD number, the key a "not
+ *    charged" mark (`BillNoCharge`) is saved under.
  */
 export function getBillPaymentWindow(params: {
   billDueDay: number;
@@ -549,11 +586,12 @@ export function getBillPaymentWindow(params: {
   viewYear: number;
   /** 0-based (0 = January), like `Date#getMonth`. */
   viewMonth: number;
-}): { start: string; end: string; dueDateKey: number } {
+}): { start: string; end: string; dueDate: string; dueDateKey: number } {
   const { billDueDay, occurrenceCoord, viewYear, viewMonth } = params;
-  // Date.UTC handles month/day overflow (month 12 → January of the next
-  // year, day 0 → last day of the previous month); reading the UTC parts
-  // back means no local-time shift can slip in.
+  // Date.UTC handles month/day overflow and underflow (month 12 → January of
+  // the next year, day 0 → last day of the previous month, day -3 → four days
+  // before the 1st); reading the UTC parts back means no local-time shift can
+  // slip in.
   const toDateStr = (y: number, m: number, d: number): string => {
     const dt = new Date(Date.UTC(y, m, d));
     const yy = dt.getUTCFullYear();
@@ -570,16 +608,19 @@ export function getBillPaymentWindow(params: {
   const dueDay = inNextMonth
     ? occurrenceCoord - daysInMonth(viewYear, viewMonth)
     : occurrenceCoord;
-  const start = toDateStr(viewYear, dueMonth, dueDay);
+  const dueDate = toDateStr(viewYear, dueMonth, dueDay);
+  // The window opens a few days BEFORE the due date (an early charge).
+  const start = toDateStr(viewYear, dueMonth, dueDay - BILL_EARLY_PAYMENT_DAYS);
 
   // The next occurrence: the bill's day in the following month, clamped to
   // that month's length (the 31st → Feb 28). An unreadable due day falls
-  // back to this occurrence's own day.
+  // back to this occurrence's own day. This window ends the day before the
+  // next occurrence's window opens — the same lead before ITS due date.
   const ownDay = Number.isFinite(billDueDay) && billDueDay >= 1 ? billDueDay : dueDay;
   const nextDueDay = Math.min(ownDay, daysInMonth(viewYear, dueMonth + 1));
-  const end = toDateStr(viewYear, dueMonth + 1, nextDueDay - 1);
+  const end = toDateStr(viewYear, dueMonth + 1, nextDueDay - BILL_EARLY_PAYMENT_DAYS - 1);
 
-  return { start, end, dueDateKey: Number(start.replace(/-/g, "")) };
+  return { start, end, dueDate, dueDateKey: Number(dueDate.replace(/-/g, "")) };
 }
 
 // ── What one bill payment counts for on the Plan page ─────────────────────
@@ -591,8 +632,9 @@ export function getBillPaymentWindow(params: {
  * Auto-assign all subtract from the plan's target.
  *
  *  - Paid (any net outflow inside the occurrence's payment window, see
- *    `getBillPaymentWindow` — a late payment counts until the bill's next
- *    due date) → the occurrence's full PLANNED amount, whatever was really
+ *    `getBillPaymentWindow` — a payment up to a week early counts, and a
+ *    late one until the next occurrence's window opens) → the occurrence's
+ *    full PLANNED amount, whatever was really
  *    charged ("paid occurrence = settled", see BudgetPage's enrich pass).
  *  - Marked NOT CHARGED (a `BillNoCharge` row for that due date — the vendor
  *    gave a free month, Nov 12 2026) → the same: the full planned amount, as

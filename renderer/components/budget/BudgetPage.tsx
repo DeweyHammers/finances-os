@@ -82,6 +82,8 @@ import {
   getBillAllocationsForBill,
   getBillOccurrencesInView,
   getBillPeriodKey,
+  billAmountForMonth,
+  billMonthKey,
   monthKeyOf,
   computeIncomePerPeriodCents,
   withLegacyIncomeFallback,
@@ -194,6 +196,13 @@ export const BudgetPage = () => {
     resource: "IncomeOverride",
     pagination: { mode: "off" },
   });
+  // Temporary bill amounts (the bill's edit form): a payment due in a month
+  // that has one is planned at that amount, so the Plan must target it too —
+  // the same rows the Overview and Optimize read.
+  const { query: billOverridesQuery } = useList({
+    resource: "BillOverride",
+    pagination: { mode: "off" },
+  });
   // Bill payments the user marked "not charged" (a free month from the
   // vendor). Plan page only: such a payment counts as settled here — see the
   // enrich pass below and creditBillOccurrenceCents.
@@ -224,6 +233,7 @@ export const BudgetPage = () => {
   const splitRowsRaw = (splitsQuery.data?.data as any[]) || [];
   const incomes = (incomesQuery.data?.data as any[]) || [];
   const incomeOverrides = (incomeOverridesQuery.data?.data as any[]) || [];
+  const billOverrides = (billOverridesQuery.data?.data as any[]) || [];
   // "<billId>:<dueDateKey>" → the BillNoCharge row's id, for every payment
   // marked as not charged. The id is what un-marking deletes.
   const noChargeRows = noChargesQuery.data?.data as any[] | undefined;
@@ -242,6 +252,17 @@ export const BudgetPage = () => {
   const clampedBills = bills.map((b: any) => ({
     ...b,
     dueDate: clampDayToMonth(Number(b.dueDate), viewYear, viewMonth),
+  }));
+
+  // The same bills for LABELS only ("Car loan ($50.00 - 5th)"): each at what
+  // it costs in the viewed month, so a month with a temporary amount does not
+  // show the regular one beside a smaller target. Never used for the math —
+  // that needs the regular amount plus the override rows (a view can also hold
+  // next month's payment, which may cost something else again).
+  const viewedBillMonth = billMonthKey(viewYear, viewMonth);
+  const displayBills = clampedBills.map((b: any) => ({
+    ...b,
+    amount: billAmountForMonth(String(b.id), Number(b.amount), viewedBillMonth, billOverrides),
   }));
 
   const monthIso = month.toISOString();
@@ -450,6 +471,7 @@ export const BudgetPage = () => {
             mk,
             splits,
             p.key,
+            billOverrides,
           ),
         0,
       ),
@@ -480,6 +502,7 @@ export const BudgetPage = () => {
       splits,
       monthKey: mk,
       splitAllocationsByPersonalNameThroughPeriod,
+      billOverrides,
     };
   }, [
     clampedBills,
@@ -488,6 +511,7 @@ export const BudgetPage = () => {
     periods,
     incomes,
     incomeOverrides,
+    billOverrides,
     settings,
     viewYear,
     viewMonth,
@@ -533,15 +557,19 @@ export const BudgetPage = () => {
 
   // ── Bill payment grace windows ──
   // For each bill, enumerate its occurrences in this view and compute a real-
-  // calendar window per occurrence: [dueDate, day before the bill's NEXT due
-  // date] (getBillPaymentWindow in lib/budget-utils.ts). A transaction dated
+  // calendar window per occurrence: from a week BEFORE the due date
+  // (BILL_EARLY_PAYMENT_DAYS) until the next occurrence's window opens
+  // (getBillPaymentWindow in lib/budget-utils.ts). A transaction dated
   // inside any of these windows is considered payment for that occurrence.
   // The window exists because charges rarely post on the due date itself — a
   // Sep 1 charge for a bill due Aug 31 should still be attributed to Aug's
   // envelope, not September's. It ran only 5 days until Nov 13 2026, when a
   // vendor's glitch charged a bill due the 6th on the 13th and the envelope
   // showed "Out of sync with plan"; a late payment now counts for its
-  // occurrence until the next one is due.
+  // occurrence until the next one takes over. And it opened ON the due date
+  // until Nov 25 2026, when a bill due the 26th (Thanksgiving) was charged on
+  // the 24th: the payment counted for October's occurrence, so Auto-assign
+  // funded November's a second time and the envelope then read out of sync.
   //
   // Windows are per-occurrence (a bill firing twice in a view gets two
   // separate windows), so multi-occurrence bills (e.g. one due the 1st in the Sept view)
@@ -555,14 +583,13 @@ export const BudgetPage = () => {
   // start excluded it and the underfunded badge would fire even though the
   // envelope was fully funded and paid).
   // Each window also carries its occurrence `coord` so the enrich pass can
-  // look up that occurrence's planned (split) amount, and `dueDateKey` — the
-  // real due date as a YYYYMMDD number, the key a "not charged" mark
+  // look up that occurrence's planned (split) amount, `dueDate` — the real
+  // due date, which is NOT the window's start any more — and `dueDateKey`,
+  // the same date as a YYYYMMDD number, the key a "not charged" mark
   // (BillNoCharge) is saved under.
-  const graceWindowsPerBill: Record<
-    string,
-    Array<{ start: string; end: string; coord: number; dueDateKey: number }>
-  > = useMemo(() => {
-    const result: Record<string, Array<{ start: string; end: string; coord: number; dueDateKey: number }>> = {};
+  type BillPaymentWindow = { start: string; end: string; dueDate: string; coord: number; dueDateKey: number };
+  const graceWindowsPerBill: Record<string, BillPaymentWindow[]> = useMemo(() => {
+    const result: Record<string, BillPaymentWindow[]> = {};
     for (const bill of clampedBills) {
       const occurrences = getBillOccurrencesInView(Number(bill.dueDate), periods);
       // The bill's own due day, before it was clamped to this view's month:
@@ -572,8 +599,9 @@ export const BudgetPage = () => {
         bills.find((b: any) => b.id === bill.id)?.dueDate ?? bill.dueDate,
       );
       result[bill.id] = occurrences.map((o) => ({
-        // start = the real due date, end = the day before the next one,
-        // dueDateKey = the due date as a number ("2026-11-20" → 20261120).
+        // start = a week before the real due date, end = the day before the
+        // next occurrence's window opens, dueDate = the real due date and
+        // dueDateKey = that date as a number ("2026-11-20" → 20261120).
         ...getBillPaymentWindow({
           billDueDay: ownDueDay,
           occurrenceCoord: o.coord,
@@ -640,6 +668,9 @@ export const BudgetPage = () => {
             periods,
             autoAssignInputs.monthKey,
             autoAssignInputs.splits,
+            // A payment with a temporary amount is planned — and so credited
+            // when paid — at that amount.
+            autoAssignInputs.billOverrides,
           )) {
             // A first-week occurrence's plan includes what the previous
             // month pre-saved for it (same envelope), so a paid firing is
@@ -684,7 +715,8 @@ export const BudgetPage = () => {
           );
         }, 0);
         billPayments = windows.map((w) => {
-          const [y, m, d] = w.start.split("-").map(Number);
+          // The DUE date, not the window's start (which is a week earlier).
+          const [y, m, d] = w.dueDate.split("-").map(Number);
           const noChargeId = noChargeIdByKey.get(`${it.sourceBillId}:${w.dueDateKey}`);
           return {
             dueDateKey: w.dueDateKey,
@@ -717,6 +749,7 @@ export const BudgetPage = () => {
         monthKey: autoAssignInputs.monthKey,
         splitAllocationsByPersonalNameThroughPeriod:
           autoAssignInputs.splitAllocationsByPersonalNameThroughPeriod,
+        billOverrides: autoAssignInputs.billOverrides,
       };
       return {
         ...it,
@@ -827,6 +860,7 @@ export const BudgetPage = () => {
       splits,
       monthKey,
       splitAllocationsByPersonalNameThroughPeriod,
+      billOverrides: overrideRows,
     } = autoAssignInputs;
     const targetPeriodIdx = periods.findIndex((p) => p.key === targetPeriod.key);
     // Cumulative allocation through the target period — the auto-assign
@@ -863,6 +897,7 @@ export const BudgetPage = () => {
         splits,
         monthKey,
         splitAllocationsByPersonalName,
+        billOverrides: overrideRows,
       });
       if (target <= 0) return;
       // Repeating items (custom cycle-null, personal repeatWeekly) get a fresh
@@ -955,7 +990,7 @@ export const BudgetPage = () => {
           sourcePersonalName: it.sourcePersonalName,
           customCycle: it.customCycle,
         },
-        clampedBills,
+        displayBills,
         personals,
       ).displayName;
     const result: MoveMoneyOption[] = [];
@@ -1004,7 +1039,7 @@ export const BudgetPage = () => {
       });
     });
     return result;
-  }, [groups, bills, personals]);
+  }, [groups, bills, personals, billOverrides, viewYear, viewMonth]);
 
   const assignOptions: AssignTargetOption[] = moveOptions;
 
@@ -1267,7 +1302,7 @@ export const BudgetPage = () => {
         >
           <BudgetTable
             groups={groupsWithExpected}
-            bills={clampedBills}
+            bills={displayBills}
             personals={personals}
             periods={periods}
             onAvailableClick={(item, el) => setMoveAnchor({ item, el })}

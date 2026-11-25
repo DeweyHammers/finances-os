@@ -2,7 +2,7 @@
 -- Regenerate with: npx tsx scripts/generate-schema-sql.ts
 --
 -- Creates every table of an EMPTY Finances OS database and stamps it with
--- schema version 3 (shared/data/schema.ts → SCHEMA_VERSION).
+-- schema version 4 (shared/data/schema.ts → SCHEMA_VERSION).
 
 -- CreateTable
 CREATE TABLE "Income" (
@@ -146,6 +146,15 @@ CREATE TABLE "BillNoCharge" (
 );
 
 -- CreateTable
+CREATE TABLE "BillOverride" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "billId" TEXT NOT NULL,
+    "dueMonth" INTEGER NOT NULL,
+    "amount" REAL NOT NULL,
+    CONSTRAINT "BillOverride_billId_fkey" FOREIGN KEY ("billId") REFERENCES "Bill" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
 CREATE TABLE "Personal" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "name" TEXT NOT NULL,
@@ -263,6 +272,9 @@ CREATE UNIQUE INDEX "BillSplit_billId_monthKey_weekIndex_occurrenceCoord_key" ON
 CREATE UNIQUE INDEX "BillNoCharge_billId_dueDateKey_key" ON "BillNoCharge"("billId", "dueDateKey");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "BillOverride_billId_dueMonth_key" ON "BillOverride"("billId", "dueMonth");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "Payee_name_key" ON "Payee"("name");
 
 -- CreateIndex
@@ -270,4 +282,4 @@ CREATE UNIQUE INDEX "BudgetMonth_month_categoryItemId_key" ON "BudgetMonth"("mon
 
 -- SchemaVersion stamp (appliedAt = Unix milliseconds, the DateTime storage
 -- format shared with Prisma).
-INSERT INTO "SchemaVersion" ("version", "appliedAt") VALUES (3, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+INSERT INTO "SchemaVersion" ("version", "appliedAt") VALUES (4, CAST(strftime('%s', 'now') AS INTEGER) * 1000);

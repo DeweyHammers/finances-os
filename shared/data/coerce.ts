@@ -34,6 +34,7 @@ const NUMERIC_KEYS = new Set([
   "weekOfMonth",
   "workWeekStart",
   "dueDateKey",
+  "dueMonth",
 ]);
 
 /**

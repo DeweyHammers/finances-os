@@ -48,15 +48,16 @@ import {
 } from "./optimize-run";
 
 // ── Fake API ──
-// A tiny in-memory copy of the six resources the runner reads. `fetch` is
+// A tiny in-memory copy of the seven resources the runner reads. `fetch` is
 // stubbed to answer GET /api/<resource> (and /AppSettings/global) from it.
 const TODAY = new Date(2026, 10, 6, 12); // Nov 6 2026
 const primaryIncome = { id: "inc1", amount: 700, payDay: 5, paymentCycle: "WEEKLY", payWeekOffset: 0, isPrimary: true };
-let db: { Bill: any[]; Personal: any[]; Income: any[]; IncomeOverride: any[]; BillSplit: any[]; AppSettings: any | null };
+let db: { Bill: any[]; BillOverride: any[]; Personal: any[]; Income: any[]; IncomeOverride: any[]; BillSplit: any[]; AppSettings: any | null };
 
 function sigsOf() {
   return computeInputSignatures({
     bills: db.Bill,
+    billOverrides: db.BillOverride,
     incomes: db.Income,
     incomeOverrides: db.IncomeOverride,
     personalBills: db.Personal,
@@ -126,6 +127,7 @@ beforeEach(() => {
   vi.spyOn(console, "info").mockImplementation(() => {});
   db = {
     Bill: [{ id: "b1", amount: 50, dueDate: 10, neverSplit: false }],
+    BillOverride: [],
     Personal: [{ id: "p1", amount: 20, dueDate: null, repeatWeekly: true, weekOfMonth: null }],
     Income: [primaryIncome],
     IncomeOverride: [],
@@ -151,6 +153,9 @@ describe("isOptimizeInputWrite — which writes schedule a re-plan", () => {
     // One week's paycheck (a 32-hour week) changes that week's income.
     expect(isOptimizeInputWrite("IncomeOverride", { incomeId: "inc1", payDate: 20261118, amount: 560 })).toBe(true);
     expect(isOptimizeInputWrite("incomeoverride", undefined)).toBe(true);
+    // A bill's temporary amount for one month changes that month's bills.
+    expect(isOptimizeInputWrite("BillOverride", { billId: "b1", dueMonth: 202612, amount: 20 })).toBe(true);
+    expect(isOptimizeInputWrite("billoverride", undefined)).toBe(true);
     expect(isOptimizeInputWrite("AppSettings", { wifeWeeklyTargetCents: 40000 })).toBe(true);
     expect(isOptimizeInputWrite("AppSettings", { paymentCycle: "BI_WEEKLY" })).toBe(true);
   });
@@ -227,7 +232,7 @@ describe("the debounced run", () => {
 
     // Inputs were fetched from the API, not a cache.
     const urls = fetchMock.mock.calls.map(([u]) => String(u).replace(/^.*\/api\//, "")).sort();
-    expect(urls).toEqual(["AppSettings/global", "Bill", "BillSplit", "Income", "IncomeOverride", "Personal"]);
+    expect(urls).toEqual(["AppSettings/global", "Bill", "BillOverride", "BillSplit", "Income", "IncomeOverride", "Personal"]);
 
     // The planner ran once with those inputs and today's date...
     expect(planOptimize).toHaveBeenCalledTimes(1);
@@ -295,6 +300,48 @@ describe("the debounced run", () => {
     expect(planOptimize).toHaveBeenCalledTimes(2);
     // Without overrides the signature is the pre-Nov-2026 string again.
     expect(JSON.parse(updateSettings.mock.calls.at(-1)![0].values.optimizedInputsSig).incomes).toBe("inc1:700:5:WEEKLY:0");
+  });
+
+  it("a bill's temporary amount re-plans, with the row handed to the planner and saved in the baseline", async () => {
+    mount();
+    // "The $50 bill is $20 in December": one BillOverride row was saved.
+    db.BillOverride = [{ id: "v1", billId: "b1", dueMonth: 202612, amount: 20 }];
+    act(() => {
+      notifyInputWrite();
+    });
+    await tick(1000);
+
+    expect(planOptimize).toHaveBeenCalledTimes(1);
+    expect(planOptimize.mock.calls[0][0].billOverrides).toEqual(db.BillOverride);
+    // The baseline now carries the temporary amount, so the same inputs are up to date…
+    const saved = JSON.parse(updateSettings.mock.calls[0][0].values.optimizedInputsSig);
+    expect(saved).toEqual(sigsOf());
+    expect(saved.bills).toBe("b1:50:10:0|b1@202612:20");
+    db.AppSettings.optimizedInputsSig = JSON.stringify(saved);
+    planOptimize.mockClear();
+    act(() => {
+      notifyInputWrite();
+    });
+    await tick(1000);
+    expect(planOptimize).not.toHaveBeenCalled();
+
+    // …and changing it to $0, or removing it, is a change again.
+    db.BillOverride[0].amount = 0;
+    act(() => {
+      notifyInputWrite();
+    });
+    await tick(1000);
+    expect(planOptimize).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(updateSettings.mock.calls.at(-1)![0].values.optimizedInputsSig).bills).toBe("b1:50:10:0|b1@202612:0");
+    db.AppSettings.optimizedInputsSig = updateSettings.mock.calls.at(-1)![0].values.optimizedInputsSig;
+    db.BillOverride = [];
+    act(() => {
+      notifyInputWrite();
+    });
+    await tick(1000);
+    expect(planOptimize).toHaveBeenCalledTimes(2);
+    // Without temporary amounts the signature is the string it always was.
+    expect(JSON.parse(updateSettings.mock.calls.at(-1)![0].values.optimizedInputsSig).bills).toBe("b1:50:10:0");
   });
 
   it("skips the planner when the inputs still match the baseline (and clears a stale failure alert)", async () => {

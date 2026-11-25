@@ -34,6 +34,7 @@ import {
   isPayWeekLocked,
   monthKeyOf,
   computeIncomePerPeriodCents,
+  billAmountsByCoord,
   PayPeriod,
 } from "./pay-period-utils";
 
@@ -76,6 +77,14 @@ export interface OptimizeInputs {
    * "Per-week income overrides". Omitted / empty = every paycheck is regular.
    */
   incomeOverrides?: any[];
+  /**
+   * Raw BillOverride rows from the API: months in which a bill costs
+   * something other than its regular amount ("$50 for three months", $0 for a
+   * free month). The payment due in such a month is planned at that amount —
+   * see pay-period-utils → "Temporary bill amounts". Omitted / empty = every
+   * payment costs `Bill.amount`.
+   */
+  billOverrides?: any[];
   /** The isPrimary income — its payDay/cycle drive the pay-week grid. */
   primaryIncome: any;
   /** Raw BillSplit rows from the API (all months). */
@@ -137,6 +146,7 @@ export function planOptimize(inputs: OptimizeInputs): MonthWritePlan[] {
     personalBills,
     incomes,
     incomeOverrides = [],
+    billOverrides = [],
     primaryIncome,
     splitRows,
     targetSurplusCents,
@@ -254,7 +264,20 @@ export function planOptimize(inputs: OptimizeInputs): MonthWritePlan[] {
       }));
 
     const result = balancePayWeeks({
-      bills: bills.map((b: any) => ({ id: b.id, amount: Number(b.amount), dueDate: Number(b.dueDate), neverSplit: Boolean(b.neverSplit) })),
+      // A payment due in a month with a temporary amount (BillOverride) is
+      // planned at THAT amount: the week it lands in simply has a smaller (or
+      // no) bill, so its surplus grows and the leveling has less to move.
+      // Only that month's payment changes — the override is keyed on the
+      // calendar month it is due in, whichever view plans it (its own month,
+      // the previous month's forward extension, or a pre-save slice). Rows in
+      // LOCKED weeks stay as they are, like after any other price change.
+      // `amountByCoord` is left off entirely for a bill without one, so with
+      // no overrides the balance gets exactly the objects it always did.
+      bills: bills.map((b: any) => {
+        const bill = { id: b.id, amount: Number(b.amount), dueDate: Number(b.dueDate), neverSplit: Boolean(b.neverSplit) };
+        const amountByCoord = billAmountsByCoord(String(b.id), Number(b.dueDate), periods, tYear, tMonth, billOverrides);
+        return amountByCoord ? { ...bill, amountByCoord } : bill;
+      }),
       periods,
       // A week whose paycheck has an override (a short week) simply has less
       // income here, so the balance moves bills out of it into the other
