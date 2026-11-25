@@ -805,6 +805,7 @@ describe("while synced", () => {
     async function downgradeCloud() {
       await cloud.exec('DROP TABLE "IncomeOverride"');
       await cloud.exec('DROP TABLE "BillNoCharge"'); // schema 3
+      await cloud.exec('DROP TABLE "BillOverride"'); // schema 4
       for (const column of ["workWeekStart", "baseFlatDeductions", "baseTaxes", "baseHours"]) {
         await cloud.exec(`ALTER TABLE "Income" DROP COLUMN "${column}"`);
       }
@@ -847,6 +848,7 @@ describe("while synced", () => {
       expect(synced.body).toMatchObject({ state: "synced", conflict: null, schemaGate: null, pendingChanges: 0 });
       expect(await cloudTables()).toContain("IncomeOverride");
       expect(await cloudTables()).toContain("BillNoCharge");
+      expect(await cloudTables()).toContain("BillOverride");
       for (const column of ["baseHours", "baseTaxes", "baseFlatDeductions", "workWeekStart"]) expect(await cloudIncomeSql()).toContain(`"${column}"`);
       expect(await cloudVersion()).toBe(SCHEMA_VERSION);
       expect(await cloudRows('SELECT "payDate", "amount", "hours" FROM "IncomeOverride"')).toEqual([{ payDate: 20261118, amount: 560, hours: 32 }]);
@@ -872,6 +874,7 @@ describe("while synced", () => {
 
       expect(await cloudTables()).toContain("IncomeOverride");
       expect(await cloudTables()).toContain("BillNoCharge");
+      expect(await cloudTables()).toContain("BillOverride");
       expect(await cloudVersion()).toBe(SCHEMA_VERSION);
       expect(await cloudRows('SELECT "name", "baseHours" FROM "Income"')).toEqual([{ name: "Paycheck", baseHours: 40 }]);
       expect(await billNames()).toEqual(["Kept", "Seed"]);

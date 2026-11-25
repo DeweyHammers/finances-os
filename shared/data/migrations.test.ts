@@ -9,7 +9,8 @@
  * same indexes — with every existing row untouched, and the step is safe to
  * repeat. `test-fixtures/schema-v1.sql` is the frozen version-1 schema.sql
  * (the shape of every database before Nov 2026); `schema-v2.sql` is version 2
- * (per-week income, the shape the installed app had until 0.7.0).
+ * (per-week income, the shape the installed app had until 0.7.0);
+ * `schema-v3.sql` is version 3 (work week + "not charged", until 0.8.0).
  */
 import { describe, it, expect, afterAll } from "vitest";
 import fs from "fs";
@@ -32,6 +33,7 @@ import { openLibsql } from "./backends/libsql";
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "finances-os-migrations-test-"));
 const V1_SQL = fs.readFileSync(path.join(__dirname, "test-fixtures", "schema-v1.sql"), "utf8");
 const V2_SQL = fs.readFileSync(path.join(__dirname, "test-fixtures", "schema-v2.sql"), "utf8");
+const V3_SQL = fs.readFileSync(path.join(__dirname, "test-fixtures", "schema-v3.sql"), "utf8");
 let fileCounter = 0;
 const newFile = () => path.join(tmpDir, `db-${++fileCounter}.db`);
 
@@ -58,6 +60,17 @@ async function createV2(db: SqlExecutor): Promise<void> {
   );
   await db.exec('INSERT INTO "IncomeOverride" ("id", "incomeId", "payDate", "amount", "hours") VALUES (?, ?, ?, ?, ?)', ["o1", "inc1", 20261118, 556, 32]);
   await db.exec('INSERT INTO "Bill" ("id", "name", "amount", "dueDate") VALUES (?, ?, ?, ?)', ["b1", "Game pass", 15, 20]);
+}
+
+/** A version-3 database (0.7.x) with an income, a bill and one payment marked not charged. */
+async function createV3(db: SqlExecutor): Promise<void> {
+  for (const statement of splitStatements(V3_SQL)) await db.exec(statement);
+  await db.exec(
+    'INSERT INTO "Income" ("id", "name", "amount", "paymentCycle", "payDay", "payWeekOffset", "isPrimary", "workWeekStart") VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ["inc1", "Paycheck", 700, "WEEKLY", 3, 0, 1, 0],
+  );
+  await db.exec('INSERT INTO "Bill" ("id", "name", "amount", "dueDate") VALUES (?, ?, ?, ?)', ["b1", "Car loan", 180, 5]);
+  await db.exec('INSERT INTO "BillNoCharge" ("id", "billId", "dueDateKey") VALUES (?, ?, ?)', ["n1", "b1", 20261105]);
 }
 
 /** Everything that defines a database's shape, in a comparable form. */
@@ -185,6 +198,9 @@ describe("migrating a version-1 database", () => {
       'ALTER TABLE "Income" ADD COLUMN "workWeekStart" INTEGER',
       expect.stringContaining('CREATE TABLE "BillNoCharge"'),
       expect.stringContaining("CREATE UNIQUE INDEX"),
+      // … and version 4's.
+      expect.stringContaining('CREATE TABLE "BillOverride"'),
+      expect.stringContaining("CREATE UNIQUE INDEX"),
     ]);
     const fresh = openLibsql(newFile());
     await createDatabase(fresh);
@@ -235,10 +251,12 @@ describe("migrating a version-2 database", () => {
 
     const old = openLibsql(newFile());
     await createV2(old);
-    // Only version 3's steps are needed.
+    // Only the steps of versions 3 and 4 are needed.
     expect(await migrationStatements(old)).toEqual([
       'ALTER TABLE "Income" ADD COLUMN "workWeekStart" INTEGER',
       expect.stringContaining('CREATE TABLE "BillNoCharge"'),
+      expect.stringContaining("CREATE UNIQUE INDEX"),
+      expect.stringContaining('CREATE TABLE "BillOverride"'),
       expect.stringContaining("CREATE UNIQUE INDEX"),
     ]);
     const store = new DataStore(old);
@@ -282,6 +300,64 @@ describe("migrating a version-2 database", () => {
   });
 });
 
+describe("migrating a version-3 database", () => {
+  it("the fixture really is the 0.7.x shape (BillNoCharge, no BillOverride)", async () => {
+    const db = openLibsql(newFile());
+    await createV3(db);
+    expect(await getSchemaVersion(db)).toBe(3);
+    const { tables } = await shapeOf(db);
+    expect(tables).toContain("BillNoCharge");
+    expect(tables).not.toContain("BillOverride");
+    await db.close();
+  });
+
+  it("first use brings it to exactly the shape of a brand-new database, rows untouched", async () => {
+    const fresh = openLibsql(newFile());
+    await createDatabase(fresh);
+
+    const old = openLibsql(newFile());
+    await createV3(old);
+    // Only version 4's steps are needed.
+    expect(await migrationStatements(old)).toEqual([
+      expect.stringContaining('CREATE TABLE "BillOverride"'),
+      'CREATE UNIQUE INDEX "BillOverride_billId_dueMonth_key" ON "BillOverride"("billId", "dueMonth")',
+    ]);
+    const store = new DataStore(old);
+    const bills = await store.list(getModelByName("Bill"), {});
+
+    expect(await shapeOf(old)).toEqual(await shapeOf(fresh));
+    expect(await store.schemaVersion()).toBe(SCHEMA_VERSION);
+    expect(bills.items).toEqual([expect.objectContaining({ id: "b1", name: "Car loan", amount: 180, dueDate: 5 })]);
+    expect((await store.list(getModelByName("BillNoCharge"), {})).items).toEqual([{ id: "n1", billId: "b1", dueDateKey: 20261105 }]);
+    expect((await store.list(getModelByName("Income"), {})).items[0]).toMatchObject({ name: "Paycheck", workWeekStart: 0 });
+    expect((await old.exec('SELECT "version" FROM "SchemaVersion" ORDER BY "version"')).map((r) => r.version)).toEqual([3, SCHEMA_VERSION]);
+    // A second look finds nothing left to do.
+    expect(await migrationStatements(old)).toEqual([]);
+
+    await store.close();
+    await fresh.close();
+  });
+
+  it("the new table works after the migration, cascade included", async () => {
+    const old = openLibsql(newFile());
+    await createV3(old);
+    const store = new DataStore(old);
+    const Override = getModelByName("BillOverride");
+
+    // $50 in December; the month and the amount arrive as strings from a form.
+    const row = await store.create(Override, { billId: "b1", dueMonth: "202612", amount: "50" });
+    expect(row).toMatchObject({ billId: "b1", dueMonth: 202612, amount: 50 });
+    // $0 is a real amount (a free month), not "unset".
+    expect(await store.create(Override, { billId: "b1", dueMonth: 202701, amount: 0 })).toMatchObject({ amount: 0 });
+    // One amount per bill + month.
+    await expect(store.create(Override, { billId: "b1", dueMonth: 202612, amount: 60 })).rejects.toThrow();
+    // Deleting the bill takes its temporary amounts with it.
+    await store.remove(getModelByName("Bill"), "b1");
+    expect((await store.list(Override, {})).total).toBe(0);
+    await store.close();
+  });
+});
+
 describe("moving data between versions (transfer.ts)", () => {
   it("dumps a version-1 source with this build's columns (new ones NULL) and loads it into a new file", async () => {
     const old = openLibsql(newFile());
@@ -294,6 +370,7 @@ describe("moving data between versions (transfer.ts)", () => {
     expect(income.rows).toEqual([["inc1", "Paycheck", 700, "WEEKLY", 3, 0, 1, null, null, null, null]]);
     expect(dump.tables.find((t) => t.table === "IncomeOverride")!.rows).toEqual([]);
     expect(dump.tables.find((t) => t.table === "BillNoCharge")!.rows).toEqual([]);
+    expect(dump.tables.find((t) => t.table === "BillOverride")!.rows).toEqual([]);
 
     // An old export imported by this build: the target gets this build's
     // tables, the old rows, and — on first use — this build's stamp.

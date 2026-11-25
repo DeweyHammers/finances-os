@@ -147,6 +147,7 @@ model Bill {
   neverSplit      Boolean  @default(false) // when true, auto-balance never splits this bill across pay weeks
   splits          BillSplit[]
   noCharges       BillNoCharge[]
+  overrides       BillOverride[]
 }
 
 model BillSplit {
@@ -176,6 +177,25 @@ model BillNoCharge {
   dueDateKey Int    // YYYYMMDD (20261120) — the real calendar date that payment is due. An Int for the same reason as IncomeOverride.payDate
 
   @@unique([billId, dueDateKey])
+}
+
+// One MONTH in which a bill costs something other than `Bill.amount` — a
+// temporary amount ("$50 for three months", or $0 for a free month), set in
+// the bill's edit form. Schema version 4. No row = the regular amount.
+// Unlike BillNoCharge this is a PLAN INPUT: Optimize, the Overview and the
+// Plan page all use the month's amount for the payment due in that month, and
+// the bill goes back to its regular amount by itself afterwards.
+// Keyed by the calendar MONTH of the payment's due date, not the full date,
+// so changing the bill's due day does not orphan the rows.
+// See CLAUDE.md → "Temporary bill amounts".
+model BillOverride {
+  id       String @id @default(cuid())
+  billId   String
+  bill     Bill   @relation(fields: [billId], references: [id], onDelete: Cascade)
+  dueMonth Int    // YYYYMM (202612 = December 2026) — the calendar month the payment is due in
+  amount   Float  // dollars for that month's payment; 0 = nothing is charged
+
+  @@unique([billId, dueMonth])
 }
 
 model Personal {

@@ -42,6 +42,8 @@ interface CashFlowOverviewProps {
   incomes?: any[];
   /** IncomeOverride rows: single paychecks that differ from their income's regular amount. */
   incomeOverrides?: any[];
+  /** BillOverride rows: months in which a bill has a temporary amount. */
+  billOverrides?: any[];
   viewYear?: number;
   viewMonth?: number;
   splits?: BillSplitRecord[];
@@ -61,6 +63,7 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
   personalBills,
   incomes = [],
   incomeOverrides = [],
+  billOverrides = [],
   viewYear,
   viewMonth,
   splits = [],
@@ -118,6 +121,8 @@ export const CashFlowOverview: FC<CashFlowOverviewProps> = ({
           monthKey,
           splits,
           period.key,
+          // A payment with a temporary amount counts at that amount.
+          billOverrides,
         ) /
           100,
       0,

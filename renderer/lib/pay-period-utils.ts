@@ -438,6 +438,116 @@ export function monthKeyOf(year: number, month: number): string {
   return `${year}-${String(month + 1).padStart(2, "0")}`;
 }
 
+// ── Temporary bill amounts (BillOverride) ──
+//
+// A bill can cost something else for a few months: "$50 for three months", or
+// $0 while the vendor charges nothing. Each such month is one BillOverride row
+// (billId + the calendar month the payment is due in + the amount for that
+// month's payment). No row = `Bill.amount`. Everything that needs a bill's
+// amount for ONE payment goes through the helpers below, so Optimize, the
+// Overview and the Plan page can never disagree about it. With no rows every
+// number is exactly what it was before the feature existed.
+// See CLAUDE.md → "Temporary bill amounts".
+
+/** A BillOverride row, as loosely typed as the API hands it over. */
+export interface BillOverrideLike {
+  billId?: string | null;
+  /** YYYYMM (202612 = December 2026): the calendar month the payment is due in. */
+  dueMonth?: number | string | null;
+  /** Dollars for that month's payment. 0 = nothing is charged. */
+  amount?: number | string | null;
+}
+
+/**
+ * The YYYYMM number of a calendar month. `month` is 0-based like
+ * `Date#getMonth` and may run over (12 → January of the next year, -1 →
+ * December of the previous one).
+ */
+export function billMonthKey(year: number, month: number): number {
+  const d = new Date(year, month, 1);
+  return d.getFullYear() * 100 + (d.getMonth() + 1);
+}
+
+/** "Dec 2026" for 202612 — how a month is shown wherever temporary amounts are listed. */
+export function formatBillMonth(dueMonth: number): string {
+  const d = new Date(Math.floor(dueMonth / 100), (dueMonth % 100) - 1, 1);
+  return `${d.toLocaleString("default", { month: "short" })} ${d.getFullYear()}`;
+}
+
+/**
+ * The calendar month (YYYYMM) in which the occurrence at `coord` of the view
+ * (viewYear, viewMonth) is really due. Coords follow the view convention of
+ * `getBillOccurrencesInView`: up to the month's length they are a day of the
+ * view month; anything above is a day of the NEXT month — the forward
+ * extension, an orphan, and a pre-save slice alike.
+ */
+export function occurrenceDueMonth(viewYear: number, viewMonth: number, coord: number): number {
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  return billMonthKey(viewYear, viewMonth + (coord > daysInMonth ? 1 : 0));
+}
+
+/**
+ * The temporary amount of one bill for one month, or null when that month is
+ * charged the regular amount. A row whose amount cannot be read (empty, not a
+ * number, negative) counts as no row, so a damaged row can never zero a bill.
+ */
+export function findBillOverride<O extends BillOverrideLike>(
+  overrides: readonly O[] | undefined | null,
+  billId: string,
+  dueMonth: number,
+): O | null {
+  if (!overrides || overrides.length === 0) return null;
+  for (const o of overrides) {
+    if (String(o.billId) !== String(billId)) continue;
+    if (Number(o.dueMonth) !== dueMonth) continue;
+    if (o.amount == null || o.amount === "") continue;
+    const amount = Number(o.amount);
+    if (!Number.isFinite(amount) || amount < 0) continue;
+    return o;
+  }
+  return null;
+}
+
+/** Dollars a bill costs in one calendar month: its temporary amount, else `regularAmount`. */
+export function billAmountForMonth(
+  billId: string,
+  regularAmount: number,
+  dueMonth: number,
+  overrides: readonly BillOverrideLike[] | undefined | null,
+): number {
+  const override = findBillOverride(overrides, billId, dueMonth);
+  return override ? Number(override.amount) : regularAmount;
+}
+
+/**
+ * Dollars per occurrence coord for the occurrences of one bill that have a
+ * temporary amount in this view — its firings here (`getBillOccurrencesInView`)
+ * and the next view's first-week firing it may save ahead for
+ * (`getPreSaveOccurrence`). Undefined when none of them has one, so a bill
+ * without temporary amounts is handed to `balancePayWeeks` exactly as before.
+ */
+export function billAmountsByCoord(
+  billId: string,
+  dueDate: number,
+  periods: PayPeriod[],
+  viewYear: number,
+  viewMonth: number,
+  overrides: readonly BillOverrideLike[] | undefined | null,
+): Record<number, number> | undefined {
+  if (!overrides || overrides.length === 0 || periods.length === 0) return undefined;
+  if (!overrides.some((o) => String(o.billId) === String(billId))) return undefined;
+  const coords = getBillOccurrencesInView(dueDate, periods).map((o) => o.coord);
+  const preSave = getPreSaveOccurrence(dueDate, periods);
+  if (preSave) coords.push(preSave.coord);
+  let result: Record<number, number> | undefined;
+  for (const coord of coords) {
+    const override = findBillOverride(overrides, billId, occurrenceDueMonth(viewYear, viewMonth, coord));
+    if (!override) continue;
+    (result ??= {})[coord] = Number(override.amount);
+  }
+  return result;
+}
+
 export interface BillSplitRecord {
   billId: string;
   monthKey: string;
@@ -467,6 +577,11 @@ export interface BillAllocation {
    * rows). Carried on the occurrence's FIRST row only, so summing rows'
    * `amountCents + priorViewSavedCents` never double-counts it. 0 elsewhere. */
   priorViewSavedCents: number;
+  /** Set ONLY when this occurrence has a temporary amount (a BillOverride row
+   * for the month it is due in): what that payment costs, in cents — the
+   * occurrence's total in place of the bill's regular amount. Absent for a
+   * regular payment, so results without temporary amounts are unchanged. */
+  temporaryAmountCents?: number;
 }
 
 /** "YYYY-MM" → the previous month's key and that month's length. */
@@ -514,6 +629,12 @@ export function getPriorViewSavedCents(
  * Legacy split rows (occurrenceCoord=0 or undefined) are matched to the
  * primary occurrence (next-month-preferred) so pre-fix data continues to
  * render correctly until the next Optimize Now run rewrites them.
+ *
+ * `overrides` (BillOverride rows, optional): an occurrence due in a month
+ * with a temporary amount uses THAT amount wherever the bill's amount matters
+ * here — the natural fallback (so a $0 month shows $0, not the regular
+ * amount, when it has no rows) and the prior-view cap — and its rows carry
+ * `temporaryAmountCents`. `amountDollars` stays the bill's REGULAR amount.
  */
 export function getBillAllocationsForBill(
   billId: string,
@@ -522,9 +643,19 @@ export function getBillAllocationsForBill(
   periods: PayPeriod[],
   monthKey: string,
   splits: BillSplitRecord[],
+  overrides?: readonly BillOverrideLike[] | null,
 ): BillAllocation[] {
   if (periods.length === 0) return [];
   const occurrences = getBillOccurrencesInView(dueDate, periods);
+  // The view's year / month, needed only to turn an occurrence coord into the
+  // calendar month its temporary amount is keyed by.
+  const hasOverrides = !!overrides && overrides.length > 0;
+  const [viewYear, viewMonth1] = monthKey.split("-").map(Number); // viewMonth1 is 1-based
+  const temporaryCentsFor = (coord: number): number | undefined => {
+    if (!hasOverrides) return undefined;
+    const override = findBillOverride(overrides, billId, occurrenceDueMonth(viewYear, viewMonth1 - 1, coord));
+    return override ? Math.round(Number(override.amount) * 100) : undefined;
+  };
 
   const forBill = splits.filter(
     (s) =>
@@ -538,10 +669,15 @@ export function getBillAllocationsForBill(
   // getBillPeriodKey precedence). Legacy split rows written before
   // occurrenceCoord existed are pinned to this occurrence for back-compat.
   const primaryOcc = occurrences.find((o) => o.inNextMonth) ?? occurrences[0];
-  const amountCents = Math.round(amountDollars * 100);
+  const regularAmountCents = Math.round(amountDollars * 100);
   const result: BillAllocation[] = [];
 
   for (const occ of occurrences) {
+    // What THIS payment costs: the month's temporary amount, else the bill's.
+    const temporaryAmountCents = temporaryCentsFor(occ.coord);
+    const amountCents = temporaryAmountCents ?? regularAmountCents;
+    // Spread into every row of the occurrence; adds nothing for a regular payment.
+    const temporary = temporaryAmountCents === undefined ? {} : { temporaryAmountCents };
     let occSplits = forBill.filter(
       (s) => (s.occurrenceCoord ?? 0) === occ.coord,
     );
@@ -585,6 +721,7 @@ export function getBillAllocationsForBill(
           occurrenceCoord: occ.coord,
           isPreSave: false,
           priorViewSavedCents: i === 0 ? priorViewSavedCents : 0,
+          ...temporary,
         });
       });
     } else {
@@ -600,6 +737,7 @@ export function getBillAllocationsForBill(
         occurrenceCoord: occ.coord,
         isPreSave: false,
         priorViewSavedCents,
+        ...temporary,
       });
     }
   }
@@ -614,6 +752,9 @@ export function getBillAllocationsForBill(
     const rows = preSaveRows
       .filter((s) => (s.occurrenceCoord ?? 0) === coord)
       .sort((a, b) => a.weekIndex - b.weekIndex);
+    // A slice saved ahead for a payment that has a temporary amount next month.
+    const temporaryAmountCents = temporaryCentsFor(coord);
+    const temporary = temporaryAmountCents === undefined ? {} : { temporaryAmountCents };
     for (const s of rows) {
       result.push({
         weekIndex: s.weekIndex,
@@ -623,6 +764,7 @@ export function getBillAllocationsForBill(
         occurrenceCoord: coord,
         isPreSave: true,
         priorViewSavedCents: 0,
+        ...temporary,
       });
     }
   }
@@ -677,6 +819,7 @@ export function getBillAllocationCentsForPeriod(
   monthKey: string,
   splits: BillSplitRecord[],
   periodKey: string,
+  overrides?: readonly BillOverrideLike[] | null,
 ): number {
   const allocs = getBillAllocationsForBill(
     billId,
@@ -685,6 +828,7 @@ export function getBillAllocationCentsForPeriod(
     periods,
     monthKey,
     splits,
+    overrides,
   );
   const hit = allocs.find((a) => a.periodKey === periodKey);
   return hit ? hit.amountCents : 0;
@@ -698,6 +842,11 @@ export interface BillForBalance {
   dueDate: number; // 1..31
   /** When true, auto-balance never splits this bill across pay weeks. */
   neverSplit?: boolean;
+  /** Dollars for the occurrences that have a TEMPORARY amount in this view,
+   * keyed by occurrence coord (see `billAmountsByCoord`). An occurrence that
+   * is not listed costs `amount`. 0 is a real amount: nothing is planned
+   * for that payment. Omitted = every occurrence costs `amount`. */
+  amountByCoord?: Record<number, number>;
 }
 
 export interface BalanceInputs {
@@ -1007,6 +1156,11 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
   const underfunded: string[] = [];
   const skipped: SkippedOccurrence[] = [];
 
+  // What ONE occurrence of a bill costs, in cents: its temporary amount when
+  // the month it is due in has one (`amountByCoord`), else the bill's amount.
+  const fullCentsOf = (b: BillForBalance, coord: number): number =>
+    Math.round((b.amountByCoord?.[coord] ?? b.amount) * 100);
+
   // Any week whose payday is on/before the bill's occurrence coord is
   // eligible for placement — but only the UNLOCKED subset (`splitEligible`)
   // ever receives cents. An occurrence whose eligible weeks are ALL locked is
@@ -1077,12 +1231,13 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       unplaced.push(b.id);
       continue;
     }
-    const fullCents = Math.round(b.amount * 100);
     for (const occ of occs) {
       const key = occKey(b.id, occ.coord);
       const lockedCents = lockedCentsPerOcc.get(key) ?? 0;
-      const remainingCents = fullCents - lockedCents;
-      if (remainingCents <= 0) continue; // fully funded by locked rows
+      const remainingCents = fullCentsOf(b, occ.coord) - lockedCents;
+      // Fully funded by locked rows — or a payment whose temporary amount is
+      // $0 (nothing to plan; display code shows it from the override).
+      if (remainingCents <= 0) continue;
       const eligible = eligibleWeeks(occ.coord);
       if (eligible.length === 0) {
         // Distinguish past-window (natural home locked, algorithm can't
@@ -1141,7 +1296,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       const pre = getPreSaveOccurrence(Number(b.dueDate), periods);
       if (!pre) continue;
       const key = occKey(b.id, pre.coord);
-      const remainingCents = Math.round(b.amount * 100) - (lockedCentsPerOcc.get(key) ?? 0);
+      const remainingCents = fullCentsOf(b, pre.coord) - (lockedCentsPerOcc.get(key) ?? 0);
       if (remainingCents <= 0) continue;
       const eligible: number[] = [];
       for (let i = 0; i < N; i++) eligible.push(i);
@@ -1301,7 +1456,6 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
   // historical data gaps the algorithm can't retroactively fill.
   for (const b of bills) {
     const occs = getBillOccurrencesInView(Number(b.dueDate), periods);
-    const fullCents = Math.round(b.amount * 100);
     for (const occ of occs) {
       const k = occKey(b.id, occ.coord);
       if (pastWindowOccs.has(k)) continue;
@@ -1309,7 +1463,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
       const placedRows = placement.get(k) ?? [];
       const placedCents = placedRows.reduce((s, r) => s + r.cents, 0);
       const lockedCents = lockedCentsPerOcc.get(k) ?? 0;
-      if (placedCents + lockedCents < fullCents) {
+      if (placedCents + lockedCents < fullCentsOf(b, occ.coord)) {
         underfunded.push(k);
       }
     }
@@ -1320,7 +1474,7 @@ export function balancePayWeeks(inputs: BalanceInputs): BalanceResult {
     if (!w.isPreSave) continue;
     const placedCents = (placement.get(w.key) ?? []).reduce((s, r) => s + r.cents, 0);
     const lockedCents = lockedCentsPerOcc.get(w.key) ?? 0;
-    if (placedCents + lockedCents < Math.round(w.bill.amount * 100)) {
+    if (placedCents + lockedCents < fullCentsOf(w.bill, w.coord)) {
       underfunded.push(w.key);
     }
   }

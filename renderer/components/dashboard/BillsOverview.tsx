@@ -11,6 +11,11 @@
  * "Saved X / Total Y" progress accumulated ONLY across splits for the same
  * occurrence, so a bill's Sep 4 split doesn't inflate its Oct 4 card.
  *
+ * A payment due in a month with a TEMPORARY amount (a BillOverride row — the
+ * bill's edit form) shows that amount, with "Usually $X" under
+ * its due date; a temporary $0 is a dimmed $0.00 card rather than a missing
+ * one. See CLAUDE.md → "Temporary bill amounts".
+ *
  * Read-only presenter: mutations happen in the Overview optimizer which
  * writes BillSplit rows this component then reads. Props: `bills` (raw list),
  * `settings` (payday / cycle), `viewYear`/`viewMonth` (period target),
@@ -48,6 +53,8 @@ interface Bill {
 
 interface BillsOverviewProps {
   bills: Bill[];
+  /** BillOverride rows: months in which a bill has a temporary amount. */
+  billOverrides?: any[];
   settings: any;
   viewYear?: number;
   viewMonth?: number;
@@ -71,10 +78,14 @@ interface AllocatedBill {
   isPreSave: boolean;
   /** Cents the PREVIOUS month already saved for this occurrence. */
   priorViewSavedCents: number;
+  /** What this payment costs when the month it is due in has a temporary
+   * amount, in cents; undefined for a regular payment. */
+  temporaryAmountCents?: number;
 }
 
 export const BillsOverview: React.FC<BillsOverviewProps> = ({
   bills,
+  billOverrides = [],
   settings,
   viewYear,
   viewMonth,
@@ -126,6 +137,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
         periods,
         monthKey,
         splits,
+        billOverrides,
       );
       for (const a of allocs) {
         if (a.periodKey !== period.key) continue;
@@ -153,6 +165,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
           cumulativeCents,
           isPreSave: a.isPreSave,
           priorViewSavedCents: sameOcc.reduce((s, x) => s + x.priorViewSavedCents, 0),
+          temporaryAmountCents: a.temporaryAmountCents,
         });
       }
     }
@@ -279,7 +292,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
           </Box>
 
           <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-            {periodBills.map(({ bill, amountCents, isSplit, occDay, occInNextMonth, coord, cumulativeCents, isPreSave, priorViewSavedCents }) => {
+            {periodBills.map(({ bill, amountCents, isSplit, occDay, occInNextMonth, coord, cumulativeCents, isPreSave, priorViewSavedCents, temporaryAmountCents }) => {
               const clampedDay = clampDayToMonth(occDay, year, month);
               // Only prefix the month abbreviation for NEXT-month (forward-
               // extended) occurrences — in the current view an in-month bill
@@ -288,7 +301,13 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
               const dateChunk = occInNextMonth
                 ? `${nextMonthAbbr} ${occDay}${getOrdinal(occDay)}`
                 : `${clampedDay}${getOrdinal(clampedDay)}`;
-              const totalDollars = Number(bill.amount) || 0;
+              // The bill's regular amount, and what THIS payment costs: the
+              // month's temporary amount when it has one.
+              const regularDollars = Number(bill.amount) || 0;
+              const isTemporary = temporaryAmountCents !== undefined;
+              const totalDollars = isTemporary ? temporaryAmountCents / 100 : regularDollars;
+              // Short on purpose: the cards are narrow in a five-pay-week month.
+              const temporaryNote = `Usually $${regularDollars.toFixed(2)}`;
               const cumulativeDollars = cumulativeCents / 100;
               // First-slice cards have cumulative === this-week's slice — the
               // card's headline amount already IS the saved number, so a
@@ -302,7 +321,11 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
               // already handed out (e.g. moved into the current week), so it
               // isn't planned this cycle. Dim the card and say why, rather
               // than show a bare "$0.00" that reads like a data bug.
-              const isSkipped = !isSplit && amountCents === 0;
+              // A $0 card whose payment has a temporary amount of $0 is NOT
+              // that marker: nothing is charged that month. It is dimmed the
+              // same way but says "Temporary" instead.
+              const isNoCharge = !isSplit && amountCents === 0 && temporaryAmountCents === 0;
+              const isSkipped = !isSplit && amountCents === 0 && !isNoCharge;
               const subtitle = isSkipped ? (
                 <Box>
                   <Box component="span" sx={{ display: "block" }}>
@@ -326,6 +349,16 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
                     </Box>
                   )}
                 </Box>
+              ) : isTemporary ? (
+                // Not split, temporary amount: say so, and what it usually is.
+                <Box>
+                  <Box component="span" sx={{ display: "block" }}>
+                    Due {dateChunk}
+                  </Box>
+                  <Box component="span" sx={{ display: "block", opacity: 0.85 }}>
+                    {temporaryNote}
+                  </Box>
+                </Box>
               ) : (
                 `Due ${dateChunk}`
               );
@@ -335,7 +368,7 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
                   // firing plus a slice saved ahead for next month (different
                   // occurrence coords), so the key carries the coord too.
                   key={`${bill.id}-${coord}-${period.key}`}
-                  sx={{ position: "relative", opacity: isSkipped ? 0.55 : 1 }}
+                  sx={{ position: "relative", opacity: isSkipped || isNoCharge ? 0.55 : 1 }}
                 >
                   <DashboardCard
                     name={bill.name}
@@ -361,6 +394,8 @@ export const BillsOverview: React.FC<BillsOverviewProps> = ({
                               : priorViewSavedCents > 0
                                 ? `Total $${totalDollars.toFixed(2)} — $${(priorViewSavedCents / 100).toFixed(2)} was saved ahead in last month's pay weeks.`
                                 : `Total $${totalDollars.toFixed(2)} auto-balanced across this month's pay weeks.`}
+                            {/* A split card has no room for the note on its face. */}
+                            {isTemporary ? ` Temporary amount — usually $${regularDollars.toFixed(2)}.` : ""}
                           </TooltipBody>
                         </>
                       }
