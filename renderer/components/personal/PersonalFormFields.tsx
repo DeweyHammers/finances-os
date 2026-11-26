@@ -13,13 +13,15 @@
  */
 
 import {
+  Box,
   TextField,
   Grid,
-  Typography,
   ToggleButtonGroup,
   ToggleButton,
 } from "@mui/material";
 import { UseFormReturn } from "react-hook-form";
+import { FieldLabel, FormSection, FormSectionNote } from "../shared/FormSection";
+import { getOrdinal } from "../../lib/date-utils";
 
 interface PersonalFormFieldsProps {
   formProps: UseFormReturn<any>;
@@ -93,6 +95,19 @@ export const PersonalFormFields = ({ formProps }: PersonalFormFieldsProps) => {
     }
   };
 
+  // What the picked cadence means, in words — shown in the card's strip.
+  const dayNumber = Number(dueDate);
+  const scheduleSentence =
+    cadence === "REPEAT"
+      ? "This amount comes out of every pay week."
+      : cadence === "SPLIT"
+        ? "The monthly total is spread across the month's pay weeks."
+        : weekOfMonth != null
+          ? `Once a month, in pay week ${weekOfMonth}.`
+          : Number.isInteger(dayNumber) && dayNumber >= 1 && dayNumber <= 31
+            ? `Once a month, on the ${dayNumber}${getOrdinal(dayNumber)}.`
+            : "Once a month, on the day you enter.";
+
   const toggleBtnSx = {
     flex: 1,
     color: "text.secondary",
@@ -140,72 +155,71 @@ export const PersonalFormFields = ({ formProps }: PersonalFormFieldsProps) => {
         />
       </Grid>
 
-      {/* Cadence picker: Fixed / Every Week / Split across weeks */}
+      {/* When it comes out: ONE card (shared/FormSection) for the cadence
+          picker, the week / day picker that belongs to "Fixed", and a strip
+          that says in words what the choice means. They were two loose
+          captions with toggles under the amount until Nov 25 2026. */}
       <Grid size={{ xs: 12 }}>
-        <Typography
-          variant="caption"
-          sx={{ color: "text.secondary", fontWeight: 700, display: "block", mb: 0.75 }}
+        <FormSection
+          title="WHEN IT COMES OUT"
+          description="Once a month, every pay week, or one monthly total spread over the pay weeks."
+          footer={<FormSectionNote>{scheduleSentence}</FormSectionNote>}
         >
-          Cadence
-        </Typography>
-        <ToggleButtonGroup
-          value={cadence}
-          exclusive
-          onChange={handleCadenceChange}
-          size="small"
-          fullWidth
-          sx={{ "& .MuiToggleButton-root": toggleBtnSx }}
-        >
-          <ToggleButton value="FIXED">Fixed Week / Day</ToggleButton>
-          <ToggleButton value="REPEAT">Every Pay Week</ToggleButton>
-          <ToggleButton value="SPLIT">Split Monthly</ToggleButton>
-        </ToggleButtonGroup>
-      </Grid>
-
-      {/* Schedule picker — only when Fixed cadence */}
-      {cadence === "FIXED" && (
-        <Grid size={{ xs: 12 }}>
-          <Typography
-            variant="caption"
-            sx={{ color: "text.secondary", fontWeight: 700, display: "block", mb: 0.75 }}
-          >
-            Schedule
-          </Typography>
+          <FieldLabel>CADENCE</FieldLabel>
           <ToggleButtonGroup
-            value={scheduleValue}
+            value={cadence}
             exclusive
-            onChange={handleScheduleChange}
+            onChange={handleCadenceChange}
             size="small"
             fullWidth
             sx={{ "& .MuiToggleButton-root": toggleBtnSx }}
           >
-            <ToggleButton value={1}>Week 1</ToggleButton>
-            <ToggleButton value={2}>Week 2</ToggleButton>
-            <ToggleButton value={3}>Week 3</ToggleButton>
-            <ToggleButton value={4}>Week 4</ToggleButton>
-            <ToggleButton value={DAY_MODE_SENTINEL}>Day</ToggleButton>
+            <ToggleButton value="FIXED">Fixed Week / Day</ToggleButton>
+            <ToggleButton value="REPEAT">Every Pay Week</ToggleButton>
+            <ToggleButton value="SPLIT">Split Monthly</ToggleButton>
           </ToggleButtonGroup>
 
-          {scheduleValue === DAY_MODE_SENTINEL && (
-            <TextField
-              {...register("dueDate", {
-                required: "Required",
-                valueAsNumber: true,
-                min: 1,
-                max: 31,
-              })}
-              label="Day of Month (1–31)"
-              type="number"
-              fullWidth
-              variant="outlined"
-              slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "numeric" } }}
-              error={!!errors.dueDate}
-              helperText={errors.dueDate?.message as any}
-              sx={{ mt: 1.5 }}
-            />
+          {/* Schedule picker — only when Fixed cadence */}
+          {cadence === "FIXED" && (
+            <Box sx={{ mt: 2 }}>
+              <FieldLabel>SCHEDULE</FieldLabel>
+              <ToggleButtonGroup
+                value={scheduleValue}
+                exclusive
+                onChange={handleScheduleChange}
+                size="small"
+                fullWidth
+                sx={{ "& .MuiToggleButton-root": toggleBtnSx }}
+              >
+                <ToggleButton value={1}>Week 1</ToggleButton>
+                <ToggleButton value={2}>Week 2</ToggleButton>
+                <ToggleButton value={3}>Week 3</ToggleButton>
+                <ToggleButton value={4}>Week 4</ToggleButton>
+                <ToggleButton value={DAY_MODE_SENTINEL}>Day</ToggleButton>
+              </ToggleButtonGroup>
+
+              {scheduleValue === DAY_MODE_SENTINEL && (
+                <TextField
+                  {...register("dueDate", {
+                    required: "Required",
+                    valueAsNumber: true,
+                    min: 1,
+                    max: 31,
+                  })}
+                  label="Day of Month (1–31)"
+                  type="number"
+                  fullWidth
+                  variant="outlined"
+                  slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "numeric" } }}
+                  error={!!errors.dueDate}
+                  helperText={errors.dueDate?.message as any}
+                  sx={{ mt: 2 }}
+                />
+              )}
+            </Box>
           )}
-        </Grid>
-      )}
+        </FormSection>
+      </Grid>
     </Grid>
   );
 };

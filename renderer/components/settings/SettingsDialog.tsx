@@ -30,7 +30,9 @@ export const SettingsDialog = () => {
             height: "min(calc(100vh - 96px), 820px)",
             maxWidth: "none",
             m: 0,
-            bgcolor: "#0f172a",
+            // The same surface as every other dialog; the tab column inside
+            // (SettingsPage, popup form) lays the darker band over it.
+            bgcolor: "background.paper",
             backgroundImage: "none",
             border: "1px solid rgba(129, 140, 248, 0.2)",
             borderRadius: 2,

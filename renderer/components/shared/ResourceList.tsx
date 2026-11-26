@@ -30,6 +30,14 @@ import {
 } from "@mui/material";
 import { ConfirmDeleteDialog } from "./ConfirmDeleteDialog";
 import { EmptyState, EmptyStateProps } from "./EmptyState";
+import {
+  PAGE_PANEL_HEIGHT,
+  pageCreateButtonSx,
+  pageHeaderRowSx,
+  pagePanelOuterSx,
+  pagePanelSx,
+  pageTitleSx,
+} from "./page-panel";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AddIcon from "@mui/icons-material/Add";
@@ -79,7 +87,7 @@ export const ResourceList: FC<ResourceListProps> = ({
   renderExtraFilters,
   // dvh (not vh): a phone browser's collapsing address bar changes the
   // visible height and vh would leave the pagination footer hidden under it.
-  height = "calc(100dvh - 120px)",
+  height = PAGE_PANEL_HEIGHT,
   searchField = "name",
   gridSx = {},
   emptyState,
@@ -279,55 +287,12 @@ export const ResourceList: FC<ResourceListProps> = ({
     );
 
   return (
-    <Box
-      sx={{
-        height: height,
-        p: 0,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        overflow: "hidden",
-      }}
-    >
-      <Box
-        sx={{
-          width: "100%",
-          maxWidth: 1600,
-          // minWidth 0: a flex item's default min-width is its content width,
-          // so the 400px search box used to push the whole card past the
-          // right edge of a phone screen.
-          minWidth: 0,
-          height: "100%",
-          display: "flex",
-          flexDirection: "column",
-          gap: 2,
-          p: { xs: 2, sm: 3 },
-          bgcolor: "#1e293b",
-          borderRadius: 2,
-          border: "1px solid rgba(129, 140, 248, 0.2)",
-          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
-          overflow: "hidden",
-        }}
-      >
-        <Box
-          sx={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            // Title and button wrap onto two rows when they can't share one
-            // (phone width) instead of the button's label breaking in half.
-            flexWrap: "wrap",
-            gap: 1.5,
-          }}
-        >
-          <Typography
-            variant="h4"
-            sx={{
-              fontWeight: 900,
-              color: "white",
-              fontSize: { xs: "1.75rem", sm: "2.125rem" },
-            }}
-          >
+    // The panel, its title and its button share their look with the Income
+    // page — the values live in ./page-panel.
+    <Box sx={pagePanelOuterSx(height)}>
+      <Box sx={pagePanelSx}>
+        <Box sx={pageHeaderRowSx}>
+          <Typography variant="h4" sx={pageTitleSx}>
             {title}
           </Typography>
           {/* "Create New <Singular>" — replace(/s$/) is a naive singularizer
@@ -338,21 +303,7 @@ export const ResourceList: FC<ResourceListProps> = ({
             disableElevation
             startIcon={<AddIcon />}
             onClick={() => showCreate()}
-            sx={{
-              px: { xs: 2.5, sm: 4 },
-              py: 1,
-              borderRadius: 2,
-              fontWeight: 800,
-              whiteSpace: "nowrap",
-              bgcolor: "primary.main",
-              boxShadow: "0 4px 12px 0 rgba(129, 140, 248, 0.3)",
-              "&:hover": {
-                bgcolor: "primary.dark",
-                boxShadow: "0 6px 16px 0 rgba(129, 140, 248, 0.4)",
-                transform: "translateY(-1px)",
-              },
-              transition: "all 0.2s",
-            }}
+            sx={pageCreateButtonSx}
           >
             Create New {title.replace(/s$/, "")}
           </Button>

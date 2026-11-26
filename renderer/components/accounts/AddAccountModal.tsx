@@ -135,7 +135,7 @@ export const AddAccountModal = ({
         New Account
       </DialogTitle>
       <DialogContent sx={{ px: 4, pb: 2 }}>
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 3, mt: 2 }}>
+        <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 0.75 }}>
           <Grid container spacing={2}>
             <Grid size={{ xs: 12 }}>
               <TextField

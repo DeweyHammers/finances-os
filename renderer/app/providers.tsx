@@ -45,7 +45,7 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import PieChartIcon from "@mui/icons-material/PieChart";
 import InsightsIcon from "@mui/icons-material/Insights";
 import StorefrontIcon from "@mui/icons-material/Storefront";
-import { COLORS } from "../lib/constants";
+import { COLORS, DIALOG_BAND_BG, DIALOG_BAND_BORDER } from "../lib/constants";
 import { API_URL } from "../lib/api-url";
 import { SandboxProvider } from "../components/sandbox/SandboxContext";
 import { SandboxBanner } from "../components/sandbox/SandboxBanner";
@@ -101,6 +101,49 @@ const theme = createTheme({
           // app uses sentence case.
           textTransform: "none",
           fontWeight: 600,
+        },
+      },
+    },
+    // ── Dialogs: the title and the buttons sit on their own bands ──
+    // (user request, Nov 25 2026). Every dialog in the app — the edit / create
+    // forms and the small confirm boxes alike — is built from DialogTitle +
+    // DialogContent + DialogActions, so styling those three HERE gives all of
+    // them the same look: a slightly darker header and footer with a hairline
+    // toward the body (DIALOG_BAND_* in lib/constants — the Settings popup's tab
+    // column uses the same pair), and the form itself on the dialog's own surface. In a
+    // tall form the fields now scroll between two fixed bands instead of
+    // running into the title and the buttons.
+    //
+    // The "&&" rules double the class on purpose: each dialog sets its own
+    // paddings through `sx` (`pt: 3`, `p: 4, pt: 1`, …) from the time the three
+    // parts flowed into each other, and `sx` beats a plain theme override. Only
+    // the VERTICAL paddings are forced; the side paddings stay each dialog's.
+    MuiDialogTitle: {
+      styleOverrides: {
+        root: {
+          backgroundColor: DIALOG_BAND_BG,
+          borderBottom: `1px solid ${DIALOG_BAND_BORDER}`,
+          "&&": { paddingTop: 18, paddingBottom: 16 },
+        },
+      },
+    },
+    MuiDialogContent: {
+      styleOverrides: {
+        root: {
+          // MUI removes the top padding of a body that follows a title
+          // (they used to share one surface); the band needs air below it.
+          "&&": { paddingTop: 20, paddingBottom: 24 },
+        },
+      },
+    },
+    MuiDialogActions: {
+      styleOverrides: {
+        root: {
+          backgroundColor: DIALOG_BAND_BG,
+          borderTop: `1px solid ${DIALOG_BAND_BORDER}`,
+          // The default for dialogs that set no padding of their own.
+          padding: "14px 24px",
+          "&&": { paddingTop: 14, paddingBottom: 14 },
         },
       },
     },

@@ -548,6 +548,64 @@ export function billAmountsByCoord(
   return result;
 }
 
+/**
+ * Dollars for a bill's LABEL in one view ("Storage unit ($50.00 - 1st)" on the Plan
+ * page): what the payment this view is still saving for costs — its first
+ * payment due `today` or later, else its last one (a month that is over).
+ *
+ * Not simply the viewed month's amount: a bill due the 1st has its December
+ * payment planned in NOVEMBER's last pay week (the forward extension), so in
+ * November the envelope collects for December's amount (user report, Nov 25
+ * 2026: a temporary amount starting in December still read the regular one).
+ * A bill with no payment in the view falls back to the viewed month's amount;
+ * a bill without temporary amounts is always `regularAmount`.
+ */
+export function billAmountInView(
+  billId: string,
+  dueDate: number,
+  regularAmount: number,
+  periods: PayPeriod[],
+  viewYear: number,
+  viewMonth: number,
+  overrides: readonly BillOverrideLike[] | undefined | null,
+  today: Date,
+): number {
+  if (!overrides || !overrides.some((o) => String(o.billId) === String(billId))) return regularAmount;
+  const occurrences = [...getBillOccurrencesInView(dueDate, periods)].sort((a, b) => a.coord - b.coord);
+  if (occurrences.length === 0) {
+    return billAmountForMonth(billId, regularAmount, billMonthKey(viewYear, viewMonth), overrides);
+  }
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  // A coord past the month's length is a day of the next month; `Date` rolls
+  // it over by itself (day 31 of November = December 1).
+  const upcoming =
+    occurrences.find((o) => new Date(viewYear, viewMonth, o.coord).getTime() >= todayStart) ??
+    occurrences[occurrences.length - 1];
+  return billAmountForMonth(billId, regularAmount, occurrenceDueMonth(viewYear, viewMonth, upcoming.coord), overrides);
+}
+
+/**
+ * Rows of ONE occurrence, in pay-week order, trimmed so they never add up to
+ * more than the payment's temporary amount: each row keeps what is still
+ * needed, the rest of the rows drop out. Used only when the saved rows exceed
+ * that amount — which happens when a temporary amount is set AFTER a pay week
+ * that saved for the payment has started: Optimize never rewrites a started
+ * week, so its row still holds the regular amount. Without the trim the
+ * Overview card and the Plan's target would keep asking for money the payment
+ * no longer needs. `keepOne` leaves a single $0 row when nothing is needed at
+ * all (a $0 month), so the Overview still shows the payment as not charged.
+ */
+function capRowsAtCents<R extends { amountCents: number }>(rows: R[], capCents: number, keepOne: boolean): R[] {
+  let left = Math.max(0, capCents);
+  const capped = rows.map((r) => {
+    const amountCents = Math.min(r.amountCents, left);
+    left -= amountCents;
+    return { ...r, amountCents };
+  });
+  const kept = capped.filter((r) => r.amountCents > 0);
+  return kept.length > 0 || !keepOne || capped.length === 0 ? kept : [capped[0]];
+}
+
 export interface BillSplitRecord {
   billId: string;
   monthKey: string;
@@ -710,7 +768,14 @@ export function getBillAllocationsForBill(
       // Split rows exist for this occurrence — honor them verbatim.
       // isSplit is per-occurrence: a bill with two occurrences that each
       // sit in a single week is NOT considered "split".
-      const sorted = [...occSplits].sort((a, b) => a.weekIndex - b.weekIndex);
+      const inOrder = [...occSplits].sort((a, b) => a.weekIndex - b.weekIndex);
+      // …except when the payment has a temporary amount SMALLER than what the
+      // rows hold (a started pay week saved the regular amount before the
+      // temporary one was set): then they are trimmed to it — capRowsAtCents.
+      const sorted =
+        temporaryAmountCents !== undefined && ownRowCents > temporaryAmountCents
+          ? capRowsAtCents(inOrder, temporaryAmountCents, true)
+          : inOrder;
       const isSplit = sorted.length > 1 || priorViewSavedCents > 0;
       sorted.forEach((s, i) => {
         result.push({
@@ -749,12 +814,20 @@ export function getBillAllocationsForBill(
   const preSaveRows = forBill.filter((s) => isPreSaveCoord(s.occurrenceCoord ?? 0, periods));
   const preSaveCoords = Array.from(new Set(preSaveRows.map((s) => s.occurrenceCoord ?? 0))).sort((a, b) => a - b);
   for (const coord of preSaveCoords) {
-    const rows = preSaveRows
+    const savedRows = preSaveRows
       .filter((s) => (s.occurrenceCoord ?? 0) === coord)
       .sort((a, b) => a.weekIndex - b.weekIndex);
     // A slice saved ahead for a payment that has a temporary amount next month.
     const temporaryAmountCents = temporaryCentsFor(coord);
     const temporary = temporaryAmountCents === undefined ? {} : { temporaryAmountCents };
+    // Slices saved in started weeks before the temporary amount was set may
+    // add up to more than the payment now costs: trimmed the same way (no $0
+    // row is kept — a pre-save slice has no card of its own to fall back to).
+    const rows =
+      temporaryAmountCents !== undefined &&
+      savedRows.reduce((sum, s) => sum + s.amountCents, 0) > temporaryAmountCents
+        ? capRowsAtCents(savedRows, temporaryAmountCents, false)
+        : savedRows;
     for (const s of rows) {
       result.push({
         weekIndex: s.weekIndex,

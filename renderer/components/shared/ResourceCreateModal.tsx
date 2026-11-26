@@ -74,7 +74,7 @@ export const ResourceCreateModal: FC<ResourceCreateModalProps> = ({
             through their JSX manually. */}
         <Box
           component="form"
-          sx={{ display: "flex", flexDirection: "column", gap: 3, mt: 2 }}
+          sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 0.75 }}
         >
           {typeof children === "function" ? children(register) : children}
         </Box>

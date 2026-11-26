@@ -18,8 +18,8 @@ import { billMonthKey, formatBillMonth, type BillOverrideLike } from "./pay-peri
 
 /** The longest run of months one "Add" can set. A longer change is a new regular amount. */
 export const BILL_OVERRIDE_MAX_MONTHS = 12;
-/** How many months ahead the "Starting" list offers (this month included). */
-export const BILL_OVERRIDE_START_CHOICES = 24;
+/** How many months ahead "Starting" can be moved (this month included): a year. */
+export const BILL_OVERRIDE_START_CHOICES = 12;
 
 /** `dueMonth` (YYYYMM) moved by `n` months; crosses year ends either way. */
 export function addBillMonths(dueMonth: number, n: number): number {
@@ -101,9 +101,15 @@ export function formatBillOverrideRange(range: Pick<BillOverrideRange, "fromMont
 /**
  * The writes that make `billId` cost `amount` in each of `months`, as ONE
  * batch (lib/batch-api.ts → one transaction, so a three-month change is never
- * half saved): any row a month already has is deleted, then the new one is
- * created. When `amount` equals the bill's regular amount there is nothing
- * temporary about it, so the months are only cleared — no no-op rows are
+ * half saved).
+ *
+ * A bill has ONE temporary amount at a time (user decision, Nov 25 2026 — the
+ * first build let several pile up on one bill): every row the bill has from
+ * `fromMonth` (the current month) on is deleted first, whichever months it
+ * covers, so the new run REPLACES whatever was set. Rows before `fromMonth`
+ * are history — they keep past months showing what was planned — and are
+ * never touched. When `amount` equals the bill's regular amount there is
+ * nothing temporary about it, so the bill is only cleared — no no-op rows are
  * stored (the same rule as a paycheck saved at its regular amount).
  */
 export function buildSetBillOverrideOperations(params: {
@@ -113,14 +119,17 @@ export function buildSetBillOverrideOperations(params: {
   amount: number;
   /** The bill's regular amount (`Bill.amount`), dollars. */
   regularAmount: number;
+  /** The current month (YYYYMM): the bill's rows from here on are replaced. */
+  fromMonth: number;
   /** Every BillOverride row currently stored (any bill). */
   existing: readonly (BillOverrideLike & { id?: string | null })[];
 }): BatchOperation[] {
-  const { billId, months, amount, regularAmount, existing } = params;
-  const wanted = new Set(months);
+  const { billId, months, amount, regularAmount, fromMonth, existing } = params;
   const operations: BatchOperation[] = [];
   for (const row of existing) {
-    if (String(row.billId) !== String(billId) || !wanted.has(Number(row.dueMonth)) || !row.id) continue;
+    if (String(row.billId) !== String(billId) || !row.id) continue;
+    const dueMonth = Number(row.dueMonth);
+    if (!Number.isFinite(dueMonth) || dueMonth < fromMonth) continue;
     operations.push({ op: "delete", resource: "BillOverride", id: String(row.id) });
   }
   const isRegular = Math.round(amount * 100) === Math.round(regularAmount * 100);

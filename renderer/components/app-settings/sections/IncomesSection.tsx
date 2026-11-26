@@ -16,6 +16,8 @@
 
 import SavingsIcon from "@mui/icons-material/Savings";
 import { EmptyState } from "../../shared/EmptyState";
+import { FieldLabel, FormSection, FormSectionNote } from "../../shared/FormSection";
+import { pageCreateButtonSx, pageHeaderRowSx, pageTitleSx } from "../../shared/page-panel";
 import { useState } from "react";
 import {
   Box,
@@ -32,7 +34,6 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Switch,
-  FormControlLabel,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
@@ -245,24 +246,19 @@ export const IncomesSection = () => {
   // ── Render ──
   return (
     <Box>
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          mb: 1,
-        }}
-      >
-        <Typography variant="h5" sx={{ fontWeight: 800 }}>
-          Income Sources
+      {/* The same header as Bills / Personal / Yearly Costs / Payees: the big
+          title and the filled button (shared/page-panel). It was a smaller
+          "Income Sources" with a text button until Nov 25 2026. */}
+      <Box sx={{ ...pageHeaderRowSx, mb: 1.5 }}>
+        <Typography variant="h4" sx={pageTitleSx}>
+          Income
         </Typography>
         <Button
-          startIcon={<AddIcon sx={{ fontSize: 16 }} />}
+          variant="contained"
+          disableElevation
+          startIcon={<AddIcon />}
           onClick={openAdd}
-          size="small"
-          // nowrap + flexShrink 0: on a phone the title wraps, the button never
-          // breaks into "Add" / "Income".
-          sx={{ fontWeight: 700, borderRadius: 2, whiteSpace: "nowrap", flexShrink: 0 }}
+          sx={pageCreateButtonSx}
         >
           Add Income
         </Button>
@@ -430,7 +426,7 @@ export const IncomesSection = () => {
         </DialogTitle>
         <DialogContent sx={{ px: 4, pb: 2 }}>
           <Box
-            sx={{ display: "flex", flexDirection: "column", gap: 3, mt: 2 }}
+            sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 0.75 }}
           >
             <TextField
               label="Name"
@@ -453,22 +449,126 @@ export const IncomesSection = () => {
               helperText="Your take-home pay: what lands in your account, after taxes and deductions."
               slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal" } }}
             />
+            {/* The rest of the form is four cards (shared/FormSection), one per
+                thing the user decides: when the income is paid, what a regular
+                paycheck is made of, which days it is for, and whether it is
+                the primary. They were loose "CAPS HEADING + caption +
+                controls" groups one under another until Nov 25 2026; the pay
+                schedule (needed for every income) now comes first and the two
+                optional groups after it. */}
+            <FormSection title="PAY SCHEDULE" description="How often this income is paid, and on which day.">
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <Box>
+                  <FieldLabel>PAYMENT CYCLE</FieldLabel>
+                  <ToggleButtonGroup
+                    value={form.paymentCycle}
+                    exclusive
+                    onChange={(_, v) =>
+                      v && setForm((f) => ({ ...f, paymentCycle: v }))
+                    }
+                    sx={{
+                      width: "100%",
+                      "& .MuiToggleButton-root": {
+                        flex: 1,
+                        border: "1px solid rgba(129,140,248,0.2)",
+                        fontWeight: 700,
+                        textTransform: "none",
+                        color: "text.secondary",
+                        "&.Mui-selected": {
+                          bgcolor: "rgba(129,140,248,0.15)",
+                          borderColor: "primary.light",
+                          color: "white",
+                        },
+                      },
+                    }}
+                  >
+                    {CYCLE_OPTIONS.map((o) => (
+                      <ToggleButton key={o.value} value={o.value}>
+                        {o.label}
+                      </ToggleButton>
+                    ))}
+                  </ToggleButtonGroup>
+                </Box>
+
+                <Box>
+                  <FieldLabel>PAY DAY</FieldLabel>
+                  <ToggleButtonGroup
+                    value={form.payDay}
+                    exclusive
+                    onChange={(_, v) =>
+                      v != null && setForm((f) => ({ ...f, payDay: v }))
+                    }
+                    sx={{
+                      display: "flex",
+                      gap: 1,
+                      "& .MuiToggleButton-root": {
+                        flex: 1,
+                        border: "1px solid rgba(129,140,248,0.2)",
+                        borderRadius: 2,
+                        fontWeight: 700,
+                        textTransform: "none",
+                        color: "text.secondary",
+                        "&.Mui-selected": {
+                          bgcolor: "rgba(129,140,248,0.15)",
+                          borderColor: "primary.light",
+                          color: "white",
+                        },
+                      },
+                    }}
+                  >
+                    {PAY_DAY_OPTIONS.map((o) => (
+                      <ToggleButton key={o.value} value={o.value}>
+                        {o.label}
+                      </ToggleButton>
+                    ))}
+                  </ToggleButtonGroup>
+                </Box>
+
+                {form.paymentCycle === "BI_WEEKLY" && (
+                  <Box>
+                    <FieldLabel>WHICH WEEKS</FieldLabel>
+                    <ToggleButtonGroup
+                      value={form.payWeekOffset}
+                      exclusive
+                      onChange={(_, v) =>
+                        v != null && setForm((f) => ({ ...f, payWeekOffset: v }))
+                      }
+                      sx={{
+                        width: "100%",
+                        "& .MuiToggleButton-root": {
+                          flex: 1,
+                          border: "1px solid rgba(129,140,248,0.2)",
+                          fontWeight: 700,
+                          textTransform: "none",
+                          color: "text.secondary",
+                          "&.Mui-selected": {
+                            bgcolor: "rgba(129,140,248,0.15)",
+                            borderColor: "primary.light",
+                            color: "white",
+                          },
+                        },
+                      }}
+                    >
+                      <ToggleButton value={0}>1st & 3rd</ToggleButton>
+                      <ToggleButton value={1}>2nd & 4th</ToggleButton>
+                    </ToggleButtonGroup>
+                  </Box>
+                )}
+              </Box>
+            </FormSection>
+
             {/* Optional: the regular paycheck's hours and what comes out of
                 it. With hours set, a single week can be entered as hours on
                 the Income page ("32 this week") and its amount is estimated
                 like a pay stub: taxes shrink with the hours, flat deductions
                 (union dues) don't. */}
-            <Box>
-              <Typography
-                variant="caption"
-                sx={{ fontWeight: 700, color: "text.secondary", letterSpacing: 0.5, display: "block" }}
-              >
-                WHEN YOUR HOURS CHANGE (OPTIONAL)
-              </Typography>
-              <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mb: 2 }}>
-                Used to work out a week&apos;s paycheck from its hours. Take the numbers from a regular pay stub.
-              </Typography>
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
+            <FormSection
+              title="WHEN YOUR HOURS CHANGE (OPTIONAL)"
+              description="Used to work out a week's paycheck from its hours. Take the numbers from a regular pay stub."
+              // A little more air above the first field's floating label.
+              bodySx={{ pt: 2.5 }}
+            >
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <TextField
                   label="Regular hours"
                   type="number"
@@ -482,7 +582,7 @@ export const IncomesSection = () => {
                   slotProps={{ inputLabel: { shrink: true }, htmlInput: { inputMode: "decimal", min: 0, step: "any" } }}
                 />
                 {/* Side by side on a desktop dialog, stacked on a phone. */}
-                <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "repeat(2, minmax(0, 1fr))" }, gap: 2.5 }}>
+                <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(0, 1fr)", sm: "repeat(2, minmax(0, 1fr))" }, gap: 2 }}>
                   <TextField
                     label="Taxes taken out"
                     type="number"
@@ -507,153 +607,25 @@ export const IncomesSection = () => {
                   />
                 </Box>
               </Box>
-            </Box>
-
-            <Box>
-              <Typography
-                variant="caption"
-                sx={{
-                  fontWeight: 700,
-                  color: "text.secondary",
-                  letterSpacing: 0.5,
-                  mb: 1,
-                  display: "block",
-                }}
-              >
-                PAYMENT CYCLE
-              </Typography>
-              <ToggleButtonGroup
-                value={form.paymentCycle}
-                exclusive
-                onChange={(_, v) =>
-                  v && setForm((f) => ({ ...f, paymentCycle: v }))
-                }
-                sx={{
-                  width: "100%",
-                  "& .MuiToggleButton-root": {
-                    flex: 1,
-                    border: "1px solid rgba(129,140,248,0.2)",
-                    fontWeight: 700,
-                    textTransform: "none",
-                    color: "text.secondary",
-                    "&.Mui-selected": {
-                      bgcolor: "rgba(129,140,248,0.15)",
-                      borderColor: "primary.light",
-                      color: "white",
-                    },
-                  },
-                }}
-              >
-                {CYCLE_OPTIONS.map((o) => (
-                  <ToggleButton key={o.value} value={o.value}>
-                    {o.label}
-                  </ToggleButton>
-                ))}
-              </ToggleButtonGroup>
-            </Box>
-
-            <Box>
-              <Typography
-                variant="caption"
-                sx={{
-                  fontWeight: 700,
-                  color: "text.secondary",
-                  letterSpacing: 0.5,
-                  mb: 1,
-                  display: "block",
-                }}
-              >
-                PAY DAY
-              </Typography>
-              <ToggleButtonGroup
-                value={form.payDay}
-                exclusive
-                onChange={(_, v) =>
-                  v != null && setForm((f) => ({ ...f, payDay: v }))
-                }
-                sx={{
-                  display: "flex",
-                  gap: 1,
-                  "& .MuiToggleButton-root": {
-                    flex: 1,
-                    border: "1px solid rgba(129,140,248,0.2)",
-                    borderRadius: 2,
-                    fontWeight: 700,
-                    textTransform: "none",
-                    color: "text.secondary",
-                    "&.Mui-selected": {
-                      bgcolor: "rgba(129,140,248,0.15)",
-                      borderColor: "primary.light",
-                      color: "white",
-                    },
-                  },
-                }}
-              >
-                {PAY_DAY_OPTIONS.map((o) => (
-                  <ToggleButton key={o.value} value={o.value}>
-                    {o.label}
-                  </ToggleButton>
-                ))}
-              </ToggleButtonGroup>
-            </Box>
-
-            {form.paymentCycle === "BI_WEEKLY" && (
-              <Box>
-                <Typography
-                  variant="caption"
-                  sx={{
-                    fontWeight: 700,
-                    color: "text.secondary",
-                    letterSpacing: 0.5,
-                    mb: 1,
-                    display: "block",
-                  }}
-                >
-                  WHICH WEEKS
-                </Typography>
-                <ToggleButtonGroup
-                  value={form.payWeekOffset}
-                  exclusive
-                  onChange={(_, v) =>
-                    v != null && setForm((f) => ({ ...f, payWeekOffset: v }))
-                  }
-                  sx={{
-                    width: "100%",
-                    "& .MuiToggleButton-root": {
-                      flex: 1,
-                      border: "1px solid rgba(129,140,248,0.2)",
-                      fontWeight: 700,
-                      textTransform: "none",
-                      color: "text.secondary",
-                      "&.Mui-selected": {
-                        bgcolor: "rgba(129,140,248,0.15)",
-                        borderColor: "primary.light",
-                        color: "white",
-                      },
-                    },
-                  }}
-                >
-                  <ToggleButton value={0}>1st & 3rd</ToggleButton>
-                  <ToggleButton value={1}>2nd & 4th</ToggleButton>
-                </ToggleButtonGroup>
-              </Box>
-            )}
+            </FormSection>
 
             {/* Optional: the weekday the WORK week starts on, when it is not
                 the pay week (e.g. work Sunday–Saturday, paid on Wednesday).
                 Clicking the selected day again clears it. It only changes the
                 "Worked …" dates on the paycheck tiles — which paycheck a
-                given week's hours land in — never the plan. */}
-            <Box>
-              <Typography
-                variant="caption"
-                sx={{ fontWeight: 700, color: "text.secondary", letterSpacing: 0.5, display: "block" }}
-              >
-                WORK WEEK STARTS ON (OPTIONAL)
-              </Typography>
-              <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mb: 1 }}>
-                The first day of the week your hours are counted in, if it isn&apos;t your payday.
-              </Typography>
+                given week's hours land in — never the plan. The card's strip
+                spells out what the choice means. */}
+            <FormSection
+              title="WORK WEEK STARTS ON (OPTIONAL)"
+              description="The first day of the week your hours are counted in, if it isn't your payday."
+              footer={
+                <FormSectionNote>
+                  {form.workWeekStart === null
+                    ? "Not set: each paycheck is for the days from the payday before it up to the day before its own."
+                    : `Work week: ${workWeekRange(form.workWeekStart)}. Each paycheck is for the last full work week before its payday.`}
+                </FormSectionNote>
+              }
+            >
               <ToggleButtonGroup
                 value={form.workWeekStart}
                 exclusive
@@ -687,46 +659,36 @@ export const IncomesSection = () => {
                   </ToggleButton>
                 ))}
               </ToggleButtonGroup>
-              <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 1 }}>
-                {form.workWeekStart === null
-                  ? "Not set: each paycheck is for the days from the payday before it up to the day before its own."
-                  : `Work week: ${workWeekRange(form.workWeekStart)}. Each paycheck is for the last full work week before its payday.`}
-              </Typography>
-            </Box>
+            </FormSection>
 
-            <Box>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={form.isPrimary}
-                    disabled={isPrimaryLocked}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, isPrimary: e.target.checked }))
-                    }
-                    color="primary"
-                  />
-                }
-                label={
-                  <Box sx={{ ml: 0.5 }}>
-                    <Typography sx={{ fontWeight: 700, fontSize: "0.9rem" }}>
-                      Set as Primary
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      sx={{ color: "text.secondary", display: "block" }}
-                    >
-                      {isPrimaryLocked
-                        ? "This income is the primary and cannot be unset. To change the primary, edit another income."
-                        : "This income's pay schedule drives bill grouping and the Plan."}
-                    </Typography>
-                  </Box>
-                }
-                sx={{ alignItems: "flex-start", mt: 0.5 }}
-              />
-              {showPrimaryWarning && (
+            {/* Primary: the same card as the others — heading and explanation
+                on the left, the switch at the right end, centred on them. (As
+                a switch with its label beside it, indented inside a card, it
+                looked like a stray row; user feedback, Nov 25 2026.) The
+                heads-up shows under it only when saving would move the
+                primary from another income. */}
+            <FormSection
+              title="PRIMARY INCOME"
+              description={
+                isPrimaryLocked
+                  ? "This income is the primary and cannot be unset. To change the primary, edit another income."
+                  : "The primary income's pay schedule drives bill grouping and the Plan."
+              }
+              action={
+                <Switch
+                  checked={form.isPrimary}
+                  disabled={isPrimaryLocked}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, isPrimary: e.target.checked }))
+                  }
+                  color="primary"
+                  slotProps={{ input: { "aria-label": "Set as Primary" } }}
+                />
+              }
+            >
+              {showPrimaryWarning ? (
                 <Box
                   sx={{
-                    mt: 1.5,
                     p: 1.5,
                     borderRadius: 2,
                     bgcolor: "rgba(251,191,36,0.08)",
@@ -737,8 +699,8 @@ export const IncomesSection = () => {
                     Heads up: saving will make this the new primary and remove primary status from "{currentPrimary?.name}".
                   </Typography>
                 </Box>
-              )}
-            </Box>
+              ) : null}
+            </FormSection>
           </Box>
         </DialogContent>
         <DialogActions sx={{ p: 4, pt: 1 }}>

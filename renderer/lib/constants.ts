@@ -14,6 +14,17 @@ export const COLORS = {
   hand: "#10b981", // Emerald — take-home / positive hand-cash indicator
 };
 
+// ── Dialog surfaces (Nov 25 2026) ──
+// Every dialog has two grounds: the form on the dialog's own surface (the
+// theme's `background.paper`), and a slightly darker BAND for what frames it —
+// the title and button rows of the form dialogs (theme override in
+// app/providers.tsx) and the tab column of the Settings popup
+// (components/settings). One pair of values so they can never drift apart:
+// the app canvas colour laid half-transparent over the surface, so it reads as
+// "a bit darker than the form" on any paper colour, and its hairline.
+export const DIALOG_BAND_BG = "rgba(15, 23, 42, 0.5)";
+export const DIALOG_BAND_BORDER = "rgba(148, 163, 184, 0.14)";
+
 export const MONTHS = [
   "January",
   "February",

@@ -120,7 +120,7 @@ export const EditTransactionModal = ({
             <CircularProgress />
           </Box>
         ) : (
-          <Box sx={{ mt: 2 }}>
+          <Box sx={{ mt: 0.75 }}>
             <TransactionFormFields
               accountId={accountId}
               state={state}

@@ -9,8 +9,9 @@
  * Validation: name/amount/dueDate required; dueDate clamped 1..31.
  */
 
-import { TextField, Grid, FormControlLabel, Checkbox } from "@mui/material";
+import { TextField, Grid, Switch } from "@mui/material";
 import { UseFormReturn, Controller } from "react-hook-form";
+import { FormSection } from "../shared/FormSection";
 
 interface BillFormFieldsProps {
   formProps: UseFormReturn<any>;
@@ -77,6 +78,10 @@ export const BillFormFields = ({ formProps }: BillFormFieldsProps) => {
         neverSplit tells the pay-week balancer this bill must fund from a single
         pay week (no BillSplit rows will be created for it). Useful for bills
         that clear immediately on autopay and can't be smoothed across paychecks.
+
+        One on / off choice = one card (shared/FormSection) with the switch at
+        the right end, the same as "PRIMARY INCOME" in the Income form. It was
+        a lone checkbox under the fields until Nov 25 2026.
       */}
       <Grid size={{ xs: 12 }}>
         <Controller
@@ -84,22 +89,17 @@ export const BillFormFields = ({ formProps }: BillFormFieldsProps) => {
           control={control}
           defaultValue={false}
           render={({ field }) => (
-            <FormControlLabel
-              control={
-                <Checkbox
+            <FormSection
+              title="NEVER SPLIT ACROSS PAY WEEKS"
+              description="The whole bill is saved from one pay week instead of being spread over several paychecks."
+              action={
+                <Switch
                   checked={!!field.value}
                   onChange={(e) => field.onChange(e.target.checked)}
-                  sx={{
-                    color: "rgba(129,140,248,0.4)",
-                    "&.Mui-checked": { color: "#818cf8" },
-                  }}
+                  color="primary"
+                  slotProps={{ input: { "aria-label": "Never split across pay weeks" } }}
                 />
               }
-              label="Never split across pay weeks"
-              sx={{
-                color: "text.secondary",
-                "& .MuiFormControlLabel-label": { fontSize: "0.85rem", fontWeight: 600 },
-              }}
             />
           )}
         />

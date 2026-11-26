@@ -26,6 +26,7 @@ import { describe, it, expect } from "vitest";
 import {
   balancePayWeeks,
   billAmountForMonth,
+  billAmountInView,
   billAmountsByCoord,
   billMonthKey,
   findBillOverride,
@@ -373,6 +374,118 @@ describe("what the screens read (getBillAllocationsForBill)", () => {
   });
 });
 
+// User report, Nov 25 2026: a bill due the 1st had its December payment saved
+// in November's last pay week, which had already started when the temporary
+// amount was set. Optimize never rewrites a started week, so the row keeps the
+// regular amount — and the Overview card and the Plan's target kept showing it.
+describe("rows saved before the temporary amount was set are trimmed to it", () => {
+  // "Storage unit", $90 due the 1st: Dec 1 is planned in November's last pay
+  // week (Nov 25 – Dec 1) as coord 31. December's payment costs $50.
+  const dec50 = [{ billId: "storage", dueMonth: 202612, amount: 50 }];
+  const saved = [{ billId: "storage", monthKey: NOV, weekIndex: 3, amountCents: 9000, occurrenceCoord: 31 }];
+
+  it("a single row shows the temporary amount, not the regular one it was saved at", () => {
+    const allocs = getBillAllocationsForBill("storage", 1, 90, novPeriods, NOV, saved, dec50);
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]).toMatchObject({ amountCents: 5000, periodKey: "P4", isSplit: false, occurrenceCoord: 31, temporaryAmountCents: 5000 });
+    expect(getBillAllocationCentsForPeriod("storage", 1, 90, novPeriods, NOV, saved, "P4", dec50)).toBe(5000);
+    // Without the temporary amount the row is honoured as it is.
+    expect(getBillAllocationsForBill("storage", 1, 90, novPeriods, NOV, saved)[0].amountCents).toBe(9000);
+  });
+
+  it("a split keeps its earliest cents: later slices shrink or drop out", () => {
+    const split = [
+      { billId: "storage", monthKey: NOV, weekIndex: 2, amountCents: 5000, occurrenceCoord: 31 },
+      { billId: "storage", monthKey: NOV, weekIndex: 3, amountCents: 4000, occurrenceCoord: 31 },
+    ];
+    const at = (amount: number) =>
+      getBillAllocationsForBill("storage", 1, 90, novPeriods, NOV, split, [{ billId: "storage", dueMonth: 202612, amount }]);
+    // $80: the first slice stays, the second is cut to the $30 still needed.
+    expect(at(80).map((a) => [a.periodKey, a.amountCents, a.isSplit])).toEqual([["P3", 5000, true], ["P4", 3000, true]]);
+    // $50: the first slice covers it; the second drops out, so it is no longer a split.
+    expect(at(50).map((a) => [a.periodKey, a.amountCents, a.isSplit])).toEqual([["P3", 5000, false]]);
+    // $0: one $0 row is left, so the Overview still shows the payment as not charged.
+    expect(at(0)).toHaveLength(1);
+    expect(at(0)[0]).toMatchObject({ periodKey: "P3", amountCents: 0, isSplit: false, temporaryAmountCents: 0 });
+  });
+
+  it("rows at or under the temporary amount are left exactly as they are", () => {
+    const under = [{ billId: "storage", monthKey: NOV, weekIndex: 3, amountCents: 3000, occurrenceCoord: 31 }];
+    expect(getBillAllocationsForBill("storage", 1, 90, novPeriods, NOV, under, dec50)[0].amountCents).toBe(3000);
+    const exact = [{ billId: "storage", monthKey: NOV, weekIndex: 3, amountCents: 5000, occurrenceCoord: 31 }];
+    expect(getBillAllocationsForBill("storage", 1, 90, novPeriods, NOV, exact, dec50)[0].amountCents).toBe(5000);
+  });
+
+  it("slices saved ahead for next month's first pay week are trimmed the same way", () => {
+    // "Water", $90 due the 4th: Dec 4 is in December's FIRST pay week, so
+    // November saves ahead for it (coord 4 + 30 days = 34).
+    const ahead = [
+      { billId: "water", monthKey: NOV, weekIndex: 1, amountCents: 3000, occurrenceCoord: 34 },
+      { billId: "water", monthKey: NOV, weekIndex: 2, amountCents: 3000, occurrenceCoord: 34 },
+    ];
+    const at = (amount: number) =>
+      getBillAllocationsForBill("water", 4, 90, novPeriods, NOV, ahead, [{ billId: "water", dueMonth: 202612, amount }])
+        .filter((a) => a.isPreSave)
+        .map((a) => [a.periodKey, a.amountCents]);
+    expect(at(40)).toEqual([["P2", 3000], ["P3", 1000]]);
+    expect(at(0)).toEqual([]);
+    // Enough room: untouched.
+    expect(at(70)).toEqual([["P2", 3000], ["P3", 3000]]);
+  });
+
+  it("the Plan asks for the temporary amount, so the extra reads as over-funded and Sync Plan hands it back", () => {
+    const item = { id: "i1", sourceType: "BILL" as const, sourceBillId: "storage" };
+    const inputs = { item, periods: novPeriods, bills: [{ id: "storage", amount: 90, dueDate: 1 }], personals: [], splits: saved, monthKey: NOV, billOverrides: dec50 };
+    expect(resolveAutoAssignAmountForPeriod({ ...inputs, periodKey: "P4" })).toBe(5000);
+    expect(computeExpectedAssignedThroughPeriod({ ...inputs, throughPeriodIdx: 3 })).toBe(5000);
+    // The envelope already holds the regular $90 that was assigned on payday.
+    const sync = evaluatePlanSync({
+      sourceType: "BILL",
+      expectedFullCents: 5000,
+      expectedPreviousFullCents: computeExpectedAssignedThroughPeriod({ ...inputs, throughPeriodIdx: 2 }),
+      graceActivityCents: 0,
+      availableCents: 9000,
+      activityCents: 0,
+      paydayPending: false,
+    });
+    expect(sync.isOverfunded).toBe(true);
+    expect(sync.needsSync).toBe(true);
+    expect(sync.syncDeltaCents).toBe(-4000);
+  });
+});
+
+describe("billAmountInView — the amount on a Plan envelope's label", () => {
+  const dec50 = [{ billId: "storage", dueMonth: 202612, amount: 50 }];
+  const NOV25 = new Date(2026, 10, 25, 12);
+
+  it("a bill due the 1st shows NEXT month's amount: that is the payment this view saves for", () => {
+    expect(billAmountInView("storage", 1, 90, novPeriods, 2026, 10, dec50, NOV25)).toBe(50);
+    expect(billAmountInView("storage", 1, 90, novPeriods, 2026, 10, dec50, TODAY)).toBe(50);
+  });
+
+  it("no temporary amount for the bill is the regular amount", () => {
+    expect(billAmountInView("storage", 1, 90, novPeriods, 2026, 10, [], NOV25)).toBe(90);
+    expect(billAmountInView("storage", 1, 90, novPeriods, 2026, 10, undefined, NOV25)).toBe(90);
+    expect(billAmountInView("storage", 1, 90, novPeriods, 2026, 10, [{ billId: "rent", dueMonth: 202612, amount: 1 }], NOV25)).toBe(90);
+  });
+
+  it("a bill paid inside its own month follows that month", () => {
+    // The loan (due the 20th) is $50 in December and January.
+    expect(billAmountInView("loan", 20, 180, novPeriods, 2026, 10, LOAN_50, NOV25)).toBe(180);
+    expect(billAmountInView("loan", 20, 180, decPeriods, 2026, 11, LOAN_50, NOV25)).toBe(50);
+  });
+
+  it("with two payments in the view it is the next one still to pay", () => {
+    // The gym in December: Dec 3 at the regular $40 and Jan 3 at $10.
+    const jan = [{ billId: "gym", dueMonth: 202701, amount: 10 }];
+    const on = (today: Date) => billAmountInView("gym", 3, 40, decPeriods, 2026, 11, jan, today);
+    expect(on(new Date(2026, 10, 10, 12))).toBe(40); // a month still ahead: its first payment
+    expect(on(new Date(2026, 11, 3, 12))).toBe(40); // due today
+    expect(on(new Date(2026, 11, 4, 12))).toBe(10); // Dec 3 is behind us: saving for Jan 3
+    expect(on(new Date(2027, 1, 10, 12))).toBe(10); // a month that is over: its last payment
+  });
+});
+
 describe("the Plan page with a temporary amount", () => {
   const item = { id: "i1", sourceType: "BILL" as const, sourceBillId: "loan" };
   const bill = { id: "loan", amount: 180, dueDate: 20 };
@@ -482,29 +595,31 @@ describe("editing helpers (bill-overrides.ts)", () => {
     expect(groupBillOverrideRanges(undefined, "loan", 202611)).toEqual([]);
   });
 
-  it("'Add' replaces what the months already hold, in one batch", () => {
+  it("a bill has ONE temporary amount: 'Add' replaces everything it has from this month on, in one batch", () => {
     const existing = [
+      { id: "h", billId: "loan", dueMonth: 202610, amount: 75 }, // before this month: history, kept
       { id: "a", billId: "loan", dueMonth: 202612, amount: 75 },
       { id: "b", billId: "rent", dueMonth: 202612, amount: 1 }, // another bill: untouched
-      { id: "c", billId: "loan", dueMonth: 202703, amount: 75 }, // another month: untouched
+      { id: "c", billId: "loan", dueMonth: 202703, amount: 75 }, // a month outside the new run: replaced too
     ];
-    expect(buildSetBillOverrideOperations({ billId: "loan", months: [202612, 202701], amount: 50, regularAmount: 180, existing })).toEqual([
+    expect(buildSetBillOverrideOperations({ billId: "loan", months: [202612, 202701], amount: 50, regularAmount: 180, fromMonth: 202611, existing })).toEqual([
       { op: "delete", resource: "BillOverride", id: "a" },
+      { op: "delete", resource: "BillOverride", id: "c" },
       { op: "create", resource: "BillOverride", values: { billId: "loan", dueMonth: 202612, amount: 50 } },
       { op: "create", resource: "BillOverride", values: { billId: "loan", dueMonth: 202701, amount: 50 } },
     ]);
   });
 
-  it("$0 is stored; the regular amount is not (those months are only cleared)", () => {
+  it("$0 is stored; the regular amount is not (the bill is only cleared)", () => {
     const existing = [{ id: "a", billId: "loan", dueMonth: 202612, amount: 75 }];
-    expect(buildSetBillOverrideOperations({ billId: "loan", months: [202612], amount: 0, regularAmount: 180, existing })).toEqual([
+    expect(buildSetBillOverrideOperations({ billId: "loan", months: [202612], amount: 0, regularAmount: 180, fromMonth: 202611, existing })).toEqual([
       { op: "delete", resource: "BillOverride", id: "a" },
       { op: "create", resource: "BillOverride", values: { billId: "loan", dueMonth: 202612, amount: 0 } },
     ]);
-    expect(buildSetBillOverrideOperations({ billId: "loan", months: [202612, 202701], amount: 180, regularAmount: 180, existing })).toEqual([
+    expect(buildSetBillOverrideOperations({ billId: "loan", months: [202612, 202701], amount: 180, regularAmount: 180, fromMonth: 202611, existing })).toEqual([
       { op: "delete", resource: "BillOverride", id: "a" },
     ]);
     // Nothing stored and nothing to clear → no request at all.
-    expect(buildSetBillOverrideOperations({ billId: "loan", months: [202701], amount: 180, regularAmount: 180, existing })).toEqual([]);
+    expect(buildSetBillOverrideOperations({ billId: "loan", months: [202701], amount: 180, regularAmount: 180, fromMonth: 202611, existing: [] })).toEqual([]);
   });
 });
