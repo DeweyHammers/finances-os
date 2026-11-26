@@ -88,7 +88,7 @@ Try changes without risking your real data. **Try a sandbox** (Overview toolbar)
 
 ### ⚙️ Income & Auto-Balance Settings
 
-- **Income Sources:** Define one or more income sources, each with its own name, amount, payment cycle (Weekly / Bi-Weekly), pay day (Mon–Fri), and biweekly offset (1st & 3rd vs. 2nd & 4th weeks). The **Primary** income drives the pay-period windows used throughout the Plan and Overview.
+- **Income:** Define one or more income sources on the **Income** page, each with its own name, amount, payment cycle (Weekly / Bi-Weekly), pay day (Mon–Fri), and biweekly offset (1st & 3rd vs. 2nd & 4th weeks). The **Primary** income drives the pay-period windows used throughout the Plan and Overview.
 - **Weekly Surplus Target** — configured inline via the Overview's Surplus Target pill (`AppSettings.wifeWeeklyTargetCents` — DB column name kept for backward compat, default $300). Changing it triggers an auto-balance re-run for the current month.
 
 ## 🧪 Tests

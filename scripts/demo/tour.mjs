@@ -62,7 +62,10 @@ const FREE_MONTH = { bill: "Gym Membership", payment: "Due Nov 5", movedTo: "Fun
 // of the regular $65 (November, December and January). Entered as a temporary
 // amount on the bill, so the plan uses $40 for those three payments and goes
 // back to $65 by itself in February.
-const TEMPORARY_AMOUNT = { bill: "Internet", amount: 40, run: /Nov 2026 – Jan 2027/ };
+// `saved` is text only the amber card shown AFTER Add has ("Back to $65.00 in
+// Feb 2027"); the strip under the fields says "…then back to $65.00…" before
+// it, in lower case, so it cannot be mistaken for the saved state.
+const TEMPORARY_AMOUNT = { bill: "Internet", amount: 40, saved: /Back to \$65\.00 in Feb 2027/ };
 const BILLS = [
   // [name, amount, due day] — the first one is typed into the UI form.
   ["Rent", 1400, 1],
@@ -255,8 +258,9 @@ async function clickPeriodButton(page) {
 
 /**
  * Type into the input matching a CSS selector. For a field `page.fill` cannot
- * tell apart by its label: the Edit Bill dialog has two fields called
- * "Amount" (the bill's own and the temporary one).
+ * reach by its label: the Edit Bill dialog has the bill's own "Amount" field,
+ * and the temporary amount's field (in the card at the bottom) has no
+ * `<label>` at all — only a small caps "AMOUNT" above it and an aria-label.
  */
 async function typeInto(page, selector, value) {
   const ok = await page.evaluate(`(() => {
@@ -536,12 +540,14 @@ try {
   console.log("Step 13 · a lower price for a while");
   // The internet provider gives Alex three months at $40 instead of $65. On
   // the Bills page, the pencil on the bill's row opens Edit Bill; the
-  // "Temporary amount" section at the bottom takes the amount, the month it
-  // starts in and how long it lasts. "Starting" already says Nov 2026
-  // (October's payment was on the 18th, so the next one is November's) and
-  // "For" already says 3 months, so Alex only types the amount and presses
-  // Add. It is saved right away (no "Update Bill") and the app re-plans the
-  // three months by itself.
+  // "Temporary amount" card at the bottom takes the amount, the month it
+  // starts in and how long it lasts. The two steppers already say what Alex
+  // wants — "Starting" ‹ Nov 2026 › (October's payment was on the 18th, so
+  // the next one is November's) and "For" − 3 months + — so Alex only types
+  // the amount (the strip under the fields then spells the change out) and
+  // presses Add. It is saved right away (no "Update Bill"): the fields are
+  // replaced by one amber card with Remove (a bill has one temporary amount
+  // at a time), and the app re-plans the three months by itself.
   await page.goto("/Bill");
   await page.evaluate(`(() => {
     const row = [...document.querySelectorAll(".MuiDataGrid-row")]
@@ -553,7 +559,7 @@ try {
   await typeInto(page, 'input[aria-label="Temporary amount"]', TEMPORARY_AMOUNT.amount);
   await shot(page, "bill-temporary-form");
   await page.clickText("Add", "[role=dialog] button");
-  await waitForText(page, TEMPORARY_AMOUNT.run);
+  await waitForText(page, TEMPORARY_AMOUNT.saved);
   await waitForPlan(page);
   await shot(page, "bill-temporary-added");
   await page.clickText("Cancel", "[role=dialog] button"); // nothing else to save

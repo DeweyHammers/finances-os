@@ -64,9 +64,15 @@ export async function launch({ width = 1440, height = 900 } = {}) {
   // hot-reload EventSource, websockets) never finish, so they're excluded —
   // otherwise every settle() would sit out its full timeout.
   const inflightIds = new Set();
+  // `hot-update`: the first time `next dev` compiles a route (every route, in
+  // a fresh checkout or worktree) the page asks for
+  // /_next/static/webpack/webpack.<hash>.hot-update.js and Chrome never
+  // reports that request as finished or failed. It stayed in the set for the
+  // rest of the run, so every settle() sat out its full 20 s: about a minute
+  // per picture again on Nov 25 2026, in a new worktree.
   const isLongLived = (p) =>
     p.type === "EventSource" || p.type === "WebSocket" ||
-    /webpack-hmr|_next\/static\/development|__nextjs|turbopack-hmr/.test(p.request?.url ?? "");
+    /webpack-hmr|hot-update|_next\/static\/development|__nextjs|turbopack-hmr/.test(p.request?.url ?? "");
   // Only the app's own requests (the UI on localhost, the demo API on
   // 127.0.0.1) count for settle(). The page also makes one request to a
   // third-party host (Refine's telemetry ping); if that host is slow to
@@ -230,6 +236,9 @@ export async function launch({ width = 1440, height = 900 } = {}) {
     },
     sleep,
     async goto(route) {
+      // Requests of the page being left can no longer hold anything up, and
+      // one that never reports back (see isLongLived) must not outlive it.
+      inflightIds.clear();
       await send("Page.navigate", { url: `${BASE_URL}${route}` });
       await sleep(500);
       await settle();
