@@ -5,6 +5,12 @@
  * confirm button. Used by ResourceList for row deletions and anywhere else the
  * app needs a light-weight confirmation before an irreversible action. Caller
  * owns open state and both handlers.
+ *
+ * The dialog's outer box has NO padding of its own (it had `p: 1` until Nov 25
+ * 2026): the title and the button row are full-width bands now (theme override
+ * in app/providers.tsx), and a padded box left a frame of the form colour all
+ * around them. The divider above the buttons went with it — the footer band
+ * draws that line itself.
  */
 
 import { FC, ReactNode } from "react";
@@ -15,7 +21,6 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
-  Divider,
 } from "@mui/material";
 import { CancelButton } from "./CancelButton";
 
@@ -47,7 +52,6 @@ export const ConfirmDeleteDialog: FC<ConfirmDeleteDialogProps> = ({
           borderRadius: 2,
           bgcolor: "background.paper",
           backgroundImage: "none",
-          p: 1,
         },
       },
     }}
@@ -60,8 +64,8 @@ export const ConfirmDeleteDialog: FC<ConfirmDeleteDialogProps> = ({
         {description}
       </DialogContentText>
     </DialogContent>
-    <Divider sx={{ borderColor: "rgba(255,255,255,0.08)" }} />
-    <DialogActions sx={{ p: 2, gap: 1 }}>
+    {/* px 3: the buttons end where the title and the text start (24px). */}
+    <DialogActions sx={{ px: 3, gap: 1 }}>
       <CancelButton onClick={onClose} size="small" />
       <Button
         onClick={onConfirm}

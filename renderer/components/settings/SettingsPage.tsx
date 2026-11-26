@@ -50,6 +50,7 @@ import SyncIcon from "@mui/icons-material/Sync";
 import { useOne, useUpdate } from "@refinedev/core";
 import { useRouter } from "next/navigation";
 import { fromCents, toCents } from "../../lib/cents";
+import { DIALOG_BAND_BG, DIALOG_BAND_BORDER } from "../../lib/constants";
 import {
   apiOrigin,
   cachedBackups,
@@ -461,8 +462,11 @@ export const SettingsPage = ({ tab: active, onTabChange: selectTab, onClose }: S
           sx={{
             width: 240,
             flexShrink: 0,
-            bgcolor: "rgba(15, 23, 42, 0.6)",
-            borderRight: "1px solid rgba(255,255,255,0.06)",
+            // The tab names on the darker band, the open section on the
+            // dialog's lighter surface — the same pair of colours as the
+            // title / button rows of the form dialogs (user request, Nov 25 2026).
+            bgcolor: DIALOG_BAND_BG,
+            borderRight: `1px solid ${DIALOG_BAND_BORDER}`,
             p: 2,
             pt: 3,
             overflowY: "auto",

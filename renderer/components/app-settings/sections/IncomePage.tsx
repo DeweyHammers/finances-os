@@ -1,12 +1,15 @@
 "use client";
 
 /**
- * IncomePage — standalone route wrapper around IncomesSection.
+ * IncomePage — the /Income route: IncomesSection inside the same page panel
+ * as Bills, Personal, Yearly Costs and Payees.
  *
- * The `IncomesSection` component is designed to be embedded (originally on
- * the Settings page). When the /Income route displays it as a full page, it
- * needs a centered, bordered container to give the section visual
- * boundaries. That container is this component's only responsibility.
+ * Those pages get their panel from ResourceList; Income is cards rather than
+ * a table, so it borrows only the surface (shared/page-panel): the same
+ * width (up to 1600px), height, colour, border and padding. Until Nov 25 2026
+ * this page had its own narrower, more rounded and half-transparent card
+ * with extra padding around it, and looked unlike every other page (user
+ * feedback). The header (title + "Add Income") is inside IncomesSection.
  *
  * If you need to change the actual income CRUD UI, edit IncomesSection.tsx
  * (in this same directory) instead.
@@ -14,41 +17,18 @@
 
 import { Box } from "@mui/material";
 import { IncomesSection } from "./IncomesSection";
-import { COLORS } from "../../../lib/constants";
+import { pagePanelOuterSx, pagePanelSx } from "../../shared/page-panel";
 
 export function IncomePage() {
   return (
-    // Outer centering wrapper — keeps the card in the middle of the viewport
-    // and lets it shrink/grow with the window while preserving padding.
-    <Box
-      sx={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        height: "100%",
-        minHeight: 0,
-        p: 4,
-      }}
-    >
-      {/* Card container — matches the standalone-page aesthetic used by
-          Settings sections when they're presented as full pages. */}
-      <Box
-        sx={{
-          width: "100%",
-          maxWidth: 1100,
-          flex: 1,
-          minHeight: 0,
-          overflow: "hidden",
-          backgroundColor: "rgba(30, 41, 59, 0.5)",
-          borderRadius: 4,
-          position: "relative",
-          border: `1px solid ${COLORS.gross}1a`,
-          boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
-        }}
-      >
-        {/* Inner scroll region — required because the card itself is
-            overflow: hidden so its rounded corners clip cleanly. */}
-        <Box sx={{ p: 4, overflowY: "auto", height: "100%" }}>
+    <Box sx={pagePanelOuterSx()}>
+      <Box sx={pagePanelSx}>
+        {/* Scroll region: the panel itself is overflow: hidden (its rounded
+            corners clip cleanly), so a long list of incomes and paycheck
+            tiles scrolls inside it. minHeight 0 lets it shrink within the
+            panel's flex column; the small right padding keeps the scrollbar
+            off the cards. */}
+        <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", pr: 0.5 }}>
           <IncomesSection />
         </Box>
       </Box>

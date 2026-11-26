@@ -82,8 +82,7 @@ import {
   getBillAllocationsForBill,
   getBillOccurrencesInView,
   getBillPeriodKey,
-  billAmountForMonth,
-  billMonthKey,
+  billAmountInView,
   monthKeyOf,
   computeIncomePerPeriodCents,
   withLegacyIncomeFallback,
@@ -255,14 +254,24 @@ export const BudgetPage = () => {
   }));
 
   // The same bills for LABELS only ("Car loan ($50.00 - 5th)"): each at what
-  // it costs in the viewed month, so a month with a temporary amount does not
-  // show the regular one beside a smaller target. Never used for the math —
-  // that needs the regular amount plus the override rows (a view can also hold
-  // next month's payment, which may cost something else again).
-  const viewedBillMonth = billMonthKey(viewYear, viewMonth);
+  // the payment this view is still saving for costs (billAmountInView), so an
+  // envelope collecting for a payment with a temporary amount does not show
+  // the regular one beside a smaller target. That payment can be NEXT month's:
+  // a bill due the 1st is saved for in the previous month's last pay week.
+  // Never used for the math — that needs the regular amount plus the override
+  // rows (a view can hold two payments that cost different amounts).
   const displayBills = clampedBills.map((b: any) => ({
     ...b,
-    amount: billAmountForMonth(String(b.id), Number(b.amount), viewedBillMonth, billOverrides),
+    amount: billAmountInView(
+      String(b.id),
+      Number(b.dueDate),
+      Number(b.amount),
+      periods,
+      viewYear,
+      viewMonth,
+      billOverrides,
+      new Date(),
+    ),
   }));
 
   const monthIso = month.toISOString();

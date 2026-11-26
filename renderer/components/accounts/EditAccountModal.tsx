@@ -183,7 +183,7 @@ export const EditAccountModal = ({
           </Box>
         ) : (
           <Box
-            sx={{ display: "flex", flexDirection: "column", gap: 3, mt: 2 }}
+            sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 0.75 }}
           >
             <Typography
               variant="overline"

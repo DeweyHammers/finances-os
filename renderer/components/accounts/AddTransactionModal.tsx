@@ -159,7 +159,7 @@ export const AddTransactionModal = ({
         New Transaction
       </DialogTitle>
       <DialogContent sx={{ px: 4, pb: 2 }}>
-        <Box sx={{ mt: 2 }}>
+        <Box sx={{ mt: 0.75 }}>
           <TransactionFormFields
             accountId={accountId}
             state={state}
