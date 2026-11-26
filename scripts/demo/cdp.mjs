@@ -67,6 +67,13 @@ export async function launch({ width = 1440, height = 900 } = {}) {
   const isLongLived = (p) =>
     p.type === "EventSource" || p.type === "WebSocket" ||
     /webpack-hmr|_next\/static\/development|__nextjs|turbopack-hmr/.test(p.request?.url ?? "");
+  // Only the app's own requests (the UI on localhost, the demo API on
+  // 127.0.0.1) count for settle(). The page also makes one request to a
+  // third-party host (Refine's telemetry ping); if that host is slow to
+  // answer, every settle() would sit out its full 20 s — which is what a run
+  // on Nov 25 2026 looked like: about a minute per picture, and a 2-second
+  // toast the tour waits for had gone before it looked.
+  const isLocal = (p) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(p.request?.url ?? "");
 
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
@@ -87,7 +94,7 @@ export async function launch({ width = 1440, height = 900 } = {}) {
         }
         break;
       case "Network.requestWillBeSent":
-        if (!isLongLived(p)) inflightIds.add(p.requestId);
+        if (!isLongLived(p) && isLocal(p)) inflightIds.add(p.requestId);
         break;
       case "Network.loadingFinished":
       case "Network.loadingFailed": inflightIds.delete(p.requestId); break;

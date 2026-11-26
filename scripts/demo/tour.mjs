@@ -2,10 +2,13 @@
 // step by step, with a made-up person's finances, taking a 1920×1080
 // screenshot at every step.
 //
-//   node scripts/demo/create-db.mjs          # (re)start from an empty DB
-//   npx tsx scripts/demo/serve.ts            # demo API on prisma/demo/demo.db
-//   (cd renderer && npx next dev -p 8888)    # the app UI
-//   node scripts/demo/tour.mjs               # → docs/img/tour/*.png
+//   node scripts/demo/create-db.mjs                    # (re)start from an empty DB
+//   npx tsx scripts/demo/serve.ts --port 5859          # demo API on prisma/demo/demo.db
+//   NEXT_PUBLIC_API_URL=http://127.0.0.1:5859/api npx next dev -p 8888 renderer   # the app UI
+//   DEMO_API_PORT=5859 node scripts/demo/tour.mjs      # → docs/img/tour/*.png
+//
+// Use 5859, not the default 5858: that is the INSTALLED app's port, and this
+// script writes straight to the API (see assertDemoApi below).
 //
 // EVERYTHING here is fictional ("Alex", round numbers, generic payees). The
 // repo is public: never put real names, amounts or employers in this file.
@@ -55,6 +58,11 @@ const SHORT_WEEK = { hours: 32, paycheck: "Nov 13 – Nov 19" };
 // Plan saves for out of October's pay weeks). Alex spends that $35 on
 // something else and marks the payment as not charged.
 const FREE_MONTH = { bill: "Gym Membership", payment: "Due Nov 5", movedTo: "Fun Money", cents: 3500 };
+// The lower price: Alex's internet provider gives three months at $40 instead
+// of the regular $65 (November, December and January). Entered as a temporary
+// amount on the bill, so the plan uses $40 for those three payments and goes
+// back to $65 by itself in February.
+const TEMPORARY_AMOUNT = { bill: "Internet", amount: 40, run: /Nov 2026 – Jan 2027/ };
 const BILLS = [
   // [name, amount, due day] — the first one is typed into the UI form.
   ["Rent", 1400, 1],
@@ -88,7 +96,36 @@ const YEARLY = [
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────
+/**
+ * Refuse to write to anything but the demo database.
+ *
+ * The tour posts most of its made-up rows straight to the API. On the default
+ * port that is the INSTALLED app's port too: on Nov 25 2026 the installed app
+ * was started in the middle of a run, the demo server on 5858 went away, the
+ * app took the port — and the tour's next posts (fake bills, personals and
+ * yearly costs) landed in the real database. So before every write the tour
+ * asks the server which database it has open (`GET /api/meta` reports the
+ * real file even in a sandbox or while synced) and stops unless it is
+ * prisma/demo/demo.db. Run the tour on 5859 anyway (see CLAUDE.md → "Demo
+ * tour"): the installed app never listens there.
+ */
+async function assertDemoApi() {
+  let databasePath = "";
+  try {
+    databasePath = String((await (await fetch(`${API}/meta`)).json()).databasePath ?? "");
+  } catch (e) {
+    throw new Error(`the demo API at ${API} does not answer (${e.message})`);
+  }
+  if (!databasePath.replace(/\\/g, "/").endsWith("/prisma/demo/demo.db")) {
+    throw new Error(
+      `REFUSING to write: ${API} is not the demo API (its database is "${databasePath}"). ` +
+        "Start scripts/demo/serve.ts on another port and pass DEMO_API_PORT.",
+    );
+  }
+}
+
 async function api(method, resource, body) {
+  if (method !== "GET") await assertDemoApi();
   const res = await fetch(`${API}/${resource}`, {
     method,
     headers: { "Content-Type": "application/json" },
@@ -214,6 +251,24 @@ async function clickPeriodButton(page) {
   await page.sleep(800);
   await page.settle();
   await page.sleep(500);
+}
+
+/**
+ * Type into the input matching a CSS selector. For a field `page.fill` cannot
+ * tell apart by its label: the Edit Bill dialog has two fields called
+ * "Amount" (the bill's own and the temporary one).
+ */
+async function typeInto(page, selector, value) {
+  const ok = await page.evaluate(`(() => {
+    const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find(e => e.offsetParent !== null);
+    if (!el) return false;
+    el.focus();
+    el.select?.();
+    return true;
+  })()`);
+  if (!ok) throw new Error(`typeInto: nothing matching ${selector}`);
+  await page.send("Input.insertText", { text: String(value) });
+  await page.sleep(150);
 }
 
 /** Start the sync mock in its own process and wait until it answers. */
@@ -478,7 +533,43 @@ try {
   await page.sleep(800);
   await shot(page, "plan-not-charged");
 
-  console.log("Step 13 · what if? (sandbox)");
+  console.log("Step 13 · a lower price for a while");
+  // The internet provider gives Alex three months at $40 instead of $65. On
+  // the Bills page, the pencil on the bill's row opens Edit Bill; the
+  // "Temporary amount" section at the bottom takes the amount, the month it
+  // starts in and how long it lasts. "Starting" already says Nov 2026
+  // (October's payment was on the 18th, so the next one is November's) and
+  // "For" already says 3 months, so Alex only types the amount and presses
+  // Add. It is saved right away (no "Update Bill") and the app re-plans the
+  // three months by itself.
+  await page.goto("/Bill");
+  await page.evaluate(`(() => {
+    const row = [...document.querySelectorAll(".MuiDataGrid-row")]
+      .find(r => r.innerText.includes(${JSON.stringify(TEMPORARY_AMOUNT.bill)}));
+    row.querySelector('button:has(svg[data-testid="EditIcon"])').click();
+  })()`);
+  await waitForText(page, /TEMPORARY AMOUNT/);
+  await page.sleep(500);
+  await typeInto(page, 'input[aria-label="Temporary amount"]', TEMPORARY_AMOUNT.amount);
+  await shot(page, "bill-temporary-form");
+  await page.clickText("Add", "[role=dialog] button");
+  await waitForText(page, TEMPORARY_AMOUNT.run);
+  await waitForPlan(page);
+  await shot(page, "bill-temporary-added");
+  await page.clickText("Cancel", "[role=dialog] button"); // nothing else to save
+  // November is the first month at the lower price: the bill's card shows $40
+  // with "Usually $65.00" under the due date, and the Bills total at the top
+  // of the page is $25 lower than in step 11.
+  await page.goto("/Overview");
+  await page.click('button:has(svg[data-testid="NavigateNextIcon"])');
+  await page.sleep(800);
+  await page.settle();
+  // A small scroll: the Bills total stays in the picture at the top and the
+  // bill cards of all four pay weeks come into it at the bottom.
+  await scrollMain(page, 140);
+  await shot(page, "overview-temporary-amount");
+
+  console.log("Step 14 · what if? (sandbox)");
   // Alex wonders what cancelling the gym would do to next month. Try it on a
   // COPY of the data: "Try a sandbox" (Settings -> Data) copies the database
   // and reloads the page with the amber banner; the real data is untouched
@@ -513,14 +604,14 @@ try {
   await page.goto("/Overview");
   await waitForNoText(page, /You're working on a copy/);
 
-  console.log("Step 14 · look back");
+  console.log("Step 15 · look back");
   await page.goto("/Statistics");
   await page.clickText("Month-to-Month");
   await shot(page, "statistics-month");
   await page.clickText("Yearly Overview");
   await shot(page, "statistics-year");
 
-  console.log("Step 15 · sync across devices");
+  console.log("Step 16 · sync across devices");
   // The Settings form, filled with a made-up Turso URL and token (not
   // submitted: the picture is what matters).
   await page.goto("/Settings?tab=sync");
